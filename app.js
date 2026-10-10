@@ -2815,6 +2815,8 @@ function playCurrentTrack() {
     isCurrentSox = false;
     currentDsdOffset = 0;
     currentSoxOffset = 0;
+    state.dlnaCurrentSec = 0;
+    state.dlnaTotalSec = track.duration || 0;
     stopVirtualProgress();
     stopDemoSynth();
     nativeAudio.pause();
@@ -2822,9 +2824,20 @@ function playCurrentTrack() {
     if (track.isDemo || !track.filePath) {
       showToast('⚠️ 示範音訊為合成示範曲，請選取本機音樂庫檔案進行 DLNA 串流播放');
       state.isPlaying = false;
-      btnPlayPause.textContent = '▶';
+      updatePlayPauseBtnUI();
       updateQueueActiveItem();
       return;
+    }
+
+    // Attempt to load duration if missing
+    if ((!track.duration || track.duration <= 0) && window.electronAPI && window.electronAPI.getAudioDuration && track.filePath) {
+      window.electronAPI.getAudioDuration(track.filePath).then(d => {
+        if (d && d > 0) {
+          track.duration = Math.round(d);
+          state.dlnaTotalSec = track.duration;
+          totalTimeLabel.textContent = formatDuration(track.duration);
+        }
+      }).catch(() => {});
     }
 
     if (window.electronAPI && window.electronAPI.playDlnaTrack) {
@@ -2838,23 +2851,25 @@ function playCurrentTrack() {
       window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, 0, dspOptions).then(res => {
         if (res && res.success) {
           state.isPlaying = true;
-          btnPlayPause.textContent = '⏸';
+          updatePlayPauseBtnUI();
           const dur = track.duration || 0;
           totalTimeLabel.textContent = formatDuration(dur);
           currentTimeLabel.textContent = '0:00';
           scrubberFill.style.width = '0%';
           showToast(`📡 正在串流至 ${state.activeDlnaDevice.name}: ${track.title}`);
+        } else if (res && res.cancelled) {
+          console.log('[DLNA] Play superseded by newer track selection');
         } else {
           console.error('DLNA playTrack error:', res);
           showToast(`❌ DLNA 播放失敗: ${res ? res.error : '未知錯誤'}`);
           state.isPlaying = false;
-          btnPlayPause.textContent = '▶';
+          updatePlayPauseBtnUI();
         }
       }).catch(err => {
         console.error('DLNA play error:', err);
         showToast(`❌ 串流發送失敗: ${err.message}`);
         state.isPlaying = false;
-        btnPlayPause.textContent = '▶';
+        updatePlayPauseBtnUI();
       });
     }
 
@@ -3762,17 +3777,29 @@ function togglePlayPause() {
   // If active audio zone is DLNA
   if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
     if (state.isPlaying) {
-      if (window.electronAPI && window.electronAPI.pauseDlna) {
-        window.electronAPI.pauseDlna(state.activeDlnaDevice.id);
-      }
       state.isPlaying = false;
       updatePlayPauseBtnUI();
-    } else {
-      if (window.electronAPI && window.electronAPI.resumeDlna) {
-        window.electronAPI.resumeDlna(state.activeDlnaDevice.id);
+      if (window.electronAPI && window.electronAPI.pauseDlna) {
+        window.electronAPI.pauseDlna(state.activeDlnaDevice.id).catch(err => {
+          console.warn('DLNA pause error:', err);
+        });
       }
-      state.isPlaying = true;
-      updatePlayPauseBtnUI();
+    } else {
+      // If we were paused and have progress > 0, attempt resume first
+      if (state.dlnaCurrentSec && state.dlnaCurrentSec > 0 && window.electronAPI && window.electronAPI.resumeDlna) {
+        window.electronAPI.resumeDlna(state.activeDlnaDevice.id)
+          .then(() => {
+            state.isPlaying = true;
+            updatePlayPauseBtnUI();
+          })
+          .catch(err => {
+            console.warn('DLNA resume failed, restarting track:', err);
+            playCurrentTrack();
+          });
+      } else {
+        // If not playing or starting from 0, properly initiate playback with URI
+        playCurrentTrack();
+      }
     }
     return;
   }
@@ -3949,19 +3976,41 @@ function playNextTrack(fromAutoEnd = false) {
 function playPrevTrack() {
   if (!state.queue.length) return;
 
-  // If user is more than 3 seconds into the track, replay the current track
   const track = state.queue[state.currentTrackIndex];
   const isLocalFile = track && !track.isDemo && track.filePath;
   const currentSec = getCurrentPlaybackTime();
 
-  if (currentSec > 3) {
-    if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
-      if (window.electronAPI && window.electronAPI.seekDlna) {
-        window.electronAPI.seekDlna(state.activeDlnaDevice.id, 0);
+  // If active audio zone is DLNA: replay or switch via playCurrentTrack
+  if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+    if (currentSec > 3) {
+      playCurrentTrack();
+    } else {
+      if (state.isShuffle) {
+        if (!state.shuffleOrder.length || state.shuffleOrder.length !== state.queue.length) {
+          generateShuffleOrder(state.currentTrackIndex);
+        }
+        if (state.shufflePointer > 0) {
+          state.shufflePointer--;
+          state.currentTrackIndex = state.shuffleOrder[state.shufflePointer];
+          playCurrentTrack();
+        } else if (state.repeatMode === 'all') {
+          state.shufflePointer = state.shuffleOrder.length - 1;
+          state.currentTrackIndex = state.shuffleOrder[state.shufflePointer];
+          playCurrentTrack();
+        } else {
+          playCurrentTrack();
+        }
+      } else {
+        state.currentTrackIndex = (state.currentTrackIndex - 1 + state.queue.length) % state.queue.length;
+        playCurrentTrack();
       }
-      currentTimeLabel.textContent = formatDuration(0);
-      scrubberFill.style.width = '0%';
-    } else if (isCurrentDsd) {
+    }
+    return;
+  }
+
+  // Non-DLNA local playback
+  if (currentSec > 3) {
+    if (isCurrentDsd) {
       playDsdTrack(track, 0);
     } else if (isCurrentSox) {
       playSoxTrack(track, 0);
@@ -3991,13 +4040,7 @@ function playPrevTrack() {
         state.currentTrackIndex = state.shuffleOrder[state.shufflePointer];
         playCurrentTrack();
       } else {
-        if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
-          if (window.electronAPI && window.electronAPI.seekDlna) {
-            window.electronAPI.seekDlna(state.activeDlnaDevice.id, 0);
-          }
-          currentTimeLabel.textContent = formatDuration(0);
-          scrubberFill.style.width = '0%';
-        } else if (isCurrentDsd) {
+        if (isCurrentDsd) {
           playDsdTrack(track, 0);
         } else if (isCurrentSox) {
           playSoxTrack(track, 0);

@@ -29,7 +29,11 @@ class DlnaManager extends EventEmitter {
     this.currentDurationSec = 0;
     this.trackPlayTimestamp = 0;
     this.hasStartedPlaying = false;
+    this.currentDspOptions = null;
     this.coverCache = new Map(); // filePath -> { mimeType, buffer }
+    this._playOpCounter = 0;
+    this._activePlayPromise = null;
+    this._pollSessionCounter = 0;
   }
 
   // Determine machine's local LAN IPv4 address
@@ -58,7 +62,7 @@ class DlnaManager extends EventEmitter {
         const reqUrl = new URL(req.url, 'http://127.0.0.1');
         const pathname = reqUrl.pathname;
 
-        if (pathname === '/stream') {
+        if (pathname === '/stream' || pathname.startsWith('/stream/')) {
           const filePath = reqUrl.searchParams.get('file');
           if (!filePath || !fs.existsSync(filePath)) {
             res.writeHead(404);
@@ -66,7 +70,7 @@ class DlnaManager extends EventEmitter {
             return;
           }
           this.handleLocalAudioStream(req, res, filePath);
-        } else if (pathname === '/dsd-stream') {
+        } else if (pathname === '/dsd-stream' || pathname.startsWith('/dsd-stream/')) {
           const filePath = reqUrl.searchParams.get('file');
           const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
           if (!filePath || !fs.existsSync(filePath)) {
@@ -75,7 +79,7 @@ class DlnaManager extends EventEmitter {
             return;
           }
           this.handleDsdTranscodeStream(req, res, filePath, startSec);
-        } else if (pathname === '/sox-stream') {
+        } else if (pathname === '/sox-stream' || pathname.startsWith('/sox-stream/')) {
           const filePath = reqUrl.searchParams.get('file');
           const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
           const sampleRate = parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
@@ -87,7 +91,7 @@ class DlnaManager extends EventEmitter {
             return;
           }
           this.handleSoxTranscodeStream(req, res, filePath, startSec, sampleRate, precision, dsdMode);
-        } else if (pathname === '/cover') {
+        } else if (pathname === '/cover' || pathname.startsWith('/cover/')) {
           const filePath = reqUrl.searchParams.get('file');
           if (!filePath || !fs.existsSync(filePath)) {
             res.writeHead(404);
@@ -746,10 +750,34 @@ class DlnaManager extends EventEmitter {
     }
   }
 
-  // Play a track on a DLNA renderer
+  // Play a track on a DLNA renderer with concurrency serialization & queue protection
   async playTrack(deviceId, track, startSec = 0, dspOptions = null) {
+    const opId = ++this._playOpCounter;
+    this.stopPositionPolling(); // Immediately cancel any active polling timer
+
+    // Chain onto the active play promise to prevent interleaved SOAP commands
+    const prevPromise = this._activePlayPromise || Promise.resolve();
+    let releaseLock;
+    this._activePlayPromise = new Promise(resolve => { releaseLock = resolve; });
+
+    try {
+      await prevPromise.catch(() => {});
+      if (opId !== this._playOpCounter) {
+        // A newer track selection superseded this one while waiting for previous SOAP call to finish
+        return { success: false, cancelled: true };
+      }
+      return await this._doPlayTrack(deviceId, track, startSec, dspOptions, opId);
+    } catch (err) {
+      console.error('[DLNA] PlayTrack error:', err);
+      return { success: false, error: err.message };
+    } finally {
+      releaseLock();
+    }
+  }
+
+  async _doPlayTrack(deviceId, track, startSec, dspOptions, opId) {
     const dev = this.devices.get(deviceId);
-    if (!dev) throw new Error('DLNA Device not found');
+    if (!dev) return { success: false, error: 'DLNA Device not found' };
 
     // 1. Immediately cancel any prior polling and kill any active transcode process
     this.stopPositionPolling();
@@ -759,11 +787,12 @@ class DlnaManager extends EventEmitter {
     }
 
     this.currentTrack = track;
+    this.currentDspOptions = dspOptions;
     this.trackPlayTimestamp = Date.now();
     this.hasStartedPlaying = false;
     this.playbackState = 'PLAYING';
 
-    // 2. Explicitly send Stop to renderer and allow 200ms to clear previous media state
+    // 2. Explicitly send Stop to renderer and allow 150ms to clear previous media state
     // This resolves UPnP SOAP Fault 705 (TRANSITION_NOT_AVAILABLE) on track change
     try {
       await this.sendSoapRequest(
@@ -772,9 +801,13 @@ class DlnaManager extends EventEmitter {
         'Stop',
         `<InstanceID>0</InstanceID>`
       );
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 150));
     } catch (e) {
       // Ignore if device was already stopped
+    }
+
+    if (opId !== this._playOpCounter) {
+      return { success: false, cancelled: true };
     }
 
     const localIp = this.getLocalIp();
@@ -786,17 +819,17 @@ class DlnaManager extends EventEmitter {
     let mimeType = 'audio/flac';
 
     if (isDsd) {
-      streamUrl = `http://${localIp}:${this.streamingPort}/dsd-stream?file=${encodeURIComponent(track.filePath)}&start=${startSec}&${timestampNonce}`;
+      streamUrl = `http://${localIp}:${this.streamingPort}/dsd-stream/audio.flac?file=${encodeURIComponent(track.filePath)}&start=${startSec}&${timestampNonce}`;
       mimeType = 'audio/flac';
     } else if (dspOptions && dspOptions.enabled) {
       const targetRate = dspOptions.sampleRate || 192000;
       const precision = dspOptions.precision || 28;
       const dsdParam = dspOptions.dsdMode ? `&dsd=${encodeURIComponent(dspOptions.dsdMode)}` : '';
-      streamUrl = `http://${localIp}:${this.streamingPort}/sox-stream?file=${encodeURIComponent(track.filePath)}&start=${startSec}&rate=${targetRate}&precision=${precision}${dsdParam}&${timestampNonce}`;
+      streamUrl = `http://${localIp}:${this.streamingPort}/sox-stream/audio.flac?file=${encodeURIComponent(track.filePath)}&start=${startSec}&rate=${targetRate}&precision=${precision}${dsdParam}&${timestampNonce}`;
       mimeType = 'audio/flac';
     } else {
-      streamUrl = `http://${localIp}:${this.streamingPort}/stream?file=${encodeURIComponent(track.filePath)}&${timestampNonce}`;
-      const fileExt = path.extname(track.filePath).toLowerCase();
+      const fileExt = path.extname(track.filePath).toLowerCase() || '.flac';
+      streamUrl = `http://${localIp}:${this.streamingPort}/stream/track${fileExt}?file=${encodeURIComponent(track.filePath)}&${timestampNonce}`;
       if (fileExt === '.mp3') mimeType = 'audio/mpeg';
       else if (fileExt === '.wav') mimeType = 'audio/wav';
       else if (fileExt === '.m4a' || fileExt === '.aac') mimeType = 'audio/mp4';
@@ -813,7 +846,7 @@ class DlnaManager extends EventEmitter {
       }
     }
 
-    const coverUrl = `http://${localIp}:${this.streamingPort}/cover?file=${encodeURIComponent(track.filePath)}`;
+    const coverUrl = `http://${localIp}:${this.streamingPort}/cover/artwork.jpg?file=${encodeURIComponent(track.filePath)}`;
 
     // Build DIDL-Lite metadata with multi-profile UPnP album artwork
     const coverXml = `
@@ -836,35 +869,42 @@ class DlnaManager extends EventEmitter {
 
     const escapedDidl = escapeXml(didl);
 
-    // 3. SetAVTransportURI with retry loop
+    // 3. SetAVTransportURI with retry loop and metadata fallback
     let uriSuccess = false;
     let lastUriError = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
+      if (opId !== this._playOpCounter) return { success: false, cancelled: true };
       try {
+        const metaPayload = (attempt === 3) ? '' : escapedDidl;
         await this.sendSoapRequest(
           dev.avControlUrl,
           'urn:schemas-upnp-org:service:AVTransport:1',
           'SetAVTransportURI',
           `<InstanceID>0</InstanceID>
            <CurrentURI>${escapeXml(streamUrl)}</CurrentURI>
-           <CurrentURIMetaData>${escapedDidl}</CurrentURIMetaData>`
+           <CurrentURIMetaData>${metaPayload}</CurrentURIMetaData>`
         );
         uriSuccess = true;
         break;
       } catch (err) {
         lastUriError = err;
         console.warn(`[DLNA] SetAVTransportURI attempt ${attempt} failed:`, err.message);
-        await new Promise(r => setTimeout(r, 250));
+        await new Promise(r => setTimeout(r, 200));
       }
     }
     if (!uriSuccess) {
       throw lastUriError || new Error('SetAVTransportURI failed after 3 attempts');
     }
 
+    if (opId !== this._playOpCounter) {
+      return { success: false, cancelled: true };
+    }
+
     // 4. Play with retry loop
     let playSuccess = false;
     let lastPlayError = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
+      if (opId !== this._playOpCounter) return { success: false, cancelled: true };
       try {
         await this.sendSoapRequest(
           dev.avControlUrl,
@@ -878,11 +918,15 @@ class DlnaManager extends EventEmitter {
       } catch (err) {
         lastPlayError = err;
         console.warn(`[DLNA] Play action attempt ${attempt} failed:`, err.message);
-        await new Promise(r => setTimeout(r, 250));
+        await new Promise(r => setTimeout(r, 200));
       }
     }
     if (!playSuccess) {
       throw lastPlayError || new Error('Play action failed after 3 attempts');
+    }
+
+    if (opId !== this._playOpCounter) {
+      return { success: false, cancelled: true };
     }
 
     // 5. If seeking needed on non-DSD/non-DSP file (since DSD & SoX stream handle -ss directly in FFmpeg)
@@ -908,6 +952,9 @@ class DlnaManager extends EventEmitter {
       `<InstanceID>0</InstanceID><Speed>1</Speed>`
     );
     this.playbackState = 'PLAYING';
+    if (!this.positionTimer) {
+      this.startPositionPolling(dev);
+    }
   }
 
   // Pause playback on DLNA renderer
@@ -946,31 +993,50 @@ class DlnaManager extends EventEmitter {
     const dev = this.devices.get(deviceId);
     if (!dev) return;
 
+    // For transcoded streams (DSD or SoX Resampler), UPnP Seek does not work on chunked stream;
+    // restart transcoding from the target offset instead.
+    if (this.currentTrack) {
+      const ext = (this.currentTrack.formatName || '').toUpperCase();
+      const isDsd = ext === 'DSF' || ext === 'DFF' || (this.currentTrack.filePath && /\.(dsf|dff)$/i.test(this.currentTrack.filePath));
+      if (isDsd || (this.currentDspOptions && this.currentDspOptions.enabled)) {
+        return await this.playTrack(deviceId, this.currentTrack, seconds, this.currentDspOptions);
+      }
+    }
+
     const timeStr = formatHms(seconds);
-    await this.sendSoapRequest(
-      dev.avControlUrl,
-      'urn:schemas-upnp-org:service:AVTransport:1',
-      'Seek',
-      `<InstanceID>0</InstanceID>
-       <Unit>REL_TIME</Unit>
-       <Target>${timeStr}</Target>`
-    );
+    try {
+      await this.sendSoapRequest(
+        dev.avControlUrl,
+        'urn:schemas-upnp-org:service:AVTransport:1',
+        'Seek',
+        `<InstanceID>0</InstanceID>
+         <Unit>REL_TIME</Unit>
+         <Target>${timeStr}</Target>`
+      );
+    } catch (err) {
+      console.warn('[DLNA] Direct Seek failed on device:', err.message);
+    }
   }
 
-  // Set Volume on DLNA renderer (0.0 to 1.0)
+  // Set Volume on DLNA renderer (handles 0.0 to 1.0 or 0 to 100)
   async setVolume(deviceId, volFloat) {
     const dev = this.devices.get(deviceId);
     if (!dev || !dev.renderingControlUrl) return;
 
-    const vol100 = Math.round(Math.max(0, Math.min(100, volFloat * 100)));
-    await this.sendSoapRequest(
-      dev.renderingControlUrl,
-      'urn:schemas-upnp-org:service:RenderingControl:1',
-      'SetVolume',
-      `<InstanceID>0</InstanceID>
-       <Channel>Master</Channel>
-       <DesiredVolume>${vol100}</DesiredVolume>`
-    );
+    const normalized = (volFloat > 1) ? volFloat : (volFloat * 100);
+    const vol100 = Math.round(Math.max(0, Math.min(100, normalized)));
+    try {
+      await this.sendSoapRequest(
+        dev.renderingControlUrl,
+        'urn:schemas-upnp-org:service:RenderingControl:1',
+        'SetVolume',
+        `<InstanceID>0</InstanceID>
+         <Channel>Master</Channel>
+         <DesiredVolume>${vol100}</DesiredVolume>`
+      );
+    } catch (err) {
+      console.warn('[DLNA] SetVolume failed:', err.message);
+    }
   }
 
   // Query PositionInfo from DLNA renderer
@@ -999,12 +1065,20 @@ class DlnaManager extends EventEmitter {
     };
   }
 
-  // Start polling playback progress from DLNA device
+  // Start polling playback progress from DLNA device with session guard
   startPositionPolling(dev) {
     this.stopPositionPolling();
+    const sessionId = ++this._pollSessionCounter;
+
     this.positionTimer = setInterval(async () => {
+      if (sessionId !== this._pollSessionCounter) {
+        clearInterval(this.positionTimer);
+        return;
+      }
       try {
         const info = await this.getPositionInfo(dev);
+        if (sessionId !== this._pollSessionCounter) return;
+
         this.currentPositionSec = info.currentSec;
         if (info.durationSec > 0) this.currentDurationSec = info.durationSec;
 
@@ -1039,6 +1113,7 @@ class DlnaManager extends EventEmitter {
   }
 
   stopPositionPolling() {
+    this._pollSessionCounter++;
     if (this.positionTimer) {
       clearInterval(this.positionTimer);
       this.positionTimer = null;
