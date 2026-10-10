@@ -1629,6 +1629,33 @@ body {
   box-shadow: 0 0 8px rgba(139, 92, 246, 0.3);
 }
 
+.dsp-pill.pill-dsd {
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+
+.dsp-pill.pill-dsd:hover {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fef08a;
+  border-color: rgba(245, 158, 11, 0.6);
+}
+
+.dsp-pill.pill-dsd.active {
+  background: rgba(245, 158, 11, 0.28);
+  color: #fef08a;
+  border-color: #f59e0b;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.45);
+}
+
+.dsd-badge-color {
+  color: #fbbf24 !important;
+}
+
+.signal-dot.dsd-gold {
+  background: #f59e0b;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.8);
+}
+
 .dsp-info-footer {
   display: flex;
   flex-wrap: wrap;
@@ -1672,6 +1699,21 @@ body {
   background: rgba(139, 92, 246, 0.18);
   color: #7c3aed;
   border-color: #8b5cf6;
+}
+[data-theme="light"] .dsp-pill.pill-dsd {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #b45309;
+}
+[data-theme="light"] .dsp-pill.pill-dsd:hover {
+  background: rgba(245, 158, 11, 0.16);
+  color: #92400e;
+}
+[data-theme="light"] .dsp-pill.pill-dsd.active {
+  background: rgba(245, 158, 11, 0.22);
+  color: #92400e;
+  border-color: #d97706;
+  box-shadow: 0 0 8px rgba(217, 119, 6, 0.3);
 }
 [data-theme="light"] .slider-round {
   background-color: rgba(0, 0, 0, 0.18);

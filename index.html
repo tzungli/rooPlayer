@@ -782,10 +782,10 @@
         </div>
 
         <div class="dsp-sox-body" id="dspSoxBody">
-          <!-- Target Sample Rate Selection -->
+          <!-- Target Sample Rate Selection (PCM) -->
           <div class="dsp-option-group">
             <div class="dsp-option-label">
-              <span>目標升頻規格 (Target Sample Rate)</span>
+              <span>PCM 升頻取樣規格 (PCM Upsampling)</span>
               <span class="dsp-hint-badge" id="dspActiveRateHint">4x 整數倍頻</span>
             </div>
             <div class="dsp-pill-selector" id="dspRateSelector">
@@ -797,10 +797,24 @@
             </div>
           </div>
 
+          <!-- Target DSD Modulation Selection -->
+          <div class="dsp-option-group">
+            <div class="dsp-option-label">
+              <span>1-bit DSD 調變升頻 (PCM ➔ 1-bit DSD SDM Modulator)</span>
+              <span class="dsp-hint-badge dsd-badge-color" id="dspActiveDsdHint">可選 DSD 格式</span>
+            </div>
+            <div class="dsp-pill-selector" id="dspDsdRateSelector">
+              <button class="dsp-pill pill-dsd" data-rate-mode="dsd64" title="PCM ➔ DSD64 (1-bit / 2.8224 MHz 或 3.072 MHz 超高頻噪聲整形調變)">DSD64 (2.8 MHz)</button>
+              <button class="dsp-pill pill-dsd" data-rate-mode="dsd128" title="PCM ➔ DSD128 (1-bit / 5.6448 MHz 或 6.144 MHz 雙倍 DSD 調變)">DSD128 (5.6 MHz)</button>
+              <button class="dsp-pill pill-dsd" data-rate-mode="dsd256" title="PCM ➔ DSD256 (1-bit / 11.2896 MHz 或 12.288 MHz 四倍 DSD 調變)">DSD256 (11.2 MHz)</button>
+              <button class="dsp-pill pill-dsd" data-rate-mode="dsd512" title="PCM ➔ DSD512 (1-bit / 22.5792 MHz 或 24.576 MHz 極限發燒 DSD 調變)">DSD512 (22.5 MHz)</button>
+            </div>
+          </div>
+
           <!-- Filter Precision Selection -->
           <div class="dsp-option-group">
             <div class="dsp-option-label">
-              <span>濾波精度 (Filter Precision)</span>
+              <span>濾波精度與噪聲整形 (Filter Precision / Noise Shaping)</span>
               <span class="dsp-hint-badge" id="dspActivePrecisionHint">28-bit VHQ</span>
             </div>
             <div class="dsp-pill-selector" id="dspPrecisionSelector">
@@ -813,7 +827,8 @@
           <!-- Feature Note -->
           <div class="dsp-info-footer">
             <span class="dsp-info-tag">✓ Chebyshev 等波紋通帶</span>
-            <span class="dsp-info-tag">✓ 24-bit Hi-Res FLAC 串流</span>
+            <span class="dsp-info-tag">✓ 1-bit Delta-Sigma 超高頻調變</span>
+            <span class="dsp-info-tag">✓ 5th/7th-Order 噪聲整形</span>
             <span class="dsp-info-tag">✓ 零相位失真還原</span>
           </div>
         </div>

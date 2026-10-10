@@ -2831,7 +2831,8 @@ function playCurrentTrack() {
       const dspOptions = state.dsp && state.dsp.enabled ? {
         enabled: true,
         sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-        precision: state.dsp.precision || 28
+        precision: state.dsp.precision || 28,
+        dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : ''
       } : null;
 
       window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, 0, dspOptions).then(res => {
@@ -2961,8 +2962,29 @@ async function playDsdTrack(track, startSec = 0) {
 let isCurrentSox = false;
 let currentSoxOffset = 0;
 
+function isDsdRateMode(mode) {
+  return ['dsd64', 'dsd128', 'dsd256', 'dsd512'].includes(mode);
+}
+
+function getDsdMhz(mode, srcRate = 44100) {
+  const is48kFamily = (Number(srcRate) % 48000 === 0);
+  switch (mode) {
+    case 'dsd64': return is48kFamily ? '3.072 MHz' : '2.8224 MHz';
+    case 'dsd128': return is48kFamily ? '6.144 MHz' : '5.6448 MHz';
+    case 'dsd256': return is48kFamily ? '12.288 MHz' : '11.2896 MHz';
+    case 'dsd512': return is48kFamily ? '24.576 MHz' : '22.5792 MHz';
+    default: return '2.8224 MHz';
+  }
+}
+
 function calculateTargetSampleRate(sourceRate = 44100, rateMode = '4x') {
   const src = Number(sourceRate) || 44100;
+  if (rateMode === 'dsd64') {
+    return (src % 48000 === 0) ? 192000 : 176400;
+  }
+  if (['dsd128', 'dsd256', 'dsd512'].includes(rateMode)) {
+    return (src % 48000 === 0) ? 384000 : 352800;
+  }
   if (rateMode === '192k') return 192000;
   if (rateMode === '384k') return 384000;
   if (rateMode === '96k') return 96000;
@@ -3002,8 +3024,10 @@ async function playSoxTrack(track, startSec = 0) {
 
     const targetRate = calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode);
     const precision = state.dsp.precision || 28;
+    const isDsd = isDsdRateMode(state.dsp.rateMode);
+    const dsdMode = isDsd ? state.dsp.rateMode : '';
 
-    const streamUrl = await window.electronAPI.getSoxStreamUrl(track.filePath, startSec, targetRate, precision);
+    const streamUrl = await window.electronAPI.getSoxStreamUrl(track.filePath, startSec, targetRate, precision, dsdMode);
     if (!streamUrl) {
       playerArtist.textContent = '無法建立 SoX 升頻串流服務';
       return;
@@ -3013,7 +3037,12 @@ async function playSoxTrack(track, startSec = 0) {
     nativeAudio.play().then(() => {
       state.isPlaying = true;
       btnPlayPause.textContent = '⏸';
-      showToast(`🎛️ SoX 升頻啟用: ${formatKhz(track.sampleRate || 44100)} ➔ ${formatKhz(targetRate)} (24-bit Hi-Res FLAC)`);
+      if (isDsd) {
+        const mhz = getDsdMhz(state.dsp.rateMode, track.sampleRate || 44100);
+        showToast(`⚡ 1-bit DSD 調變啟用: PCM ➔ ${state.dsp.rateMode.toUpperCase()} (1-bit / ${mhz})`);
+      } else {
+        showToast(`🎛️ SoX 升頻啟用: ${formatKhz(track.sampleRate || 44100)} ➔ ${formatKhz(targetRate)} (24-bit Hi-Res FLAC)`);
+      }
     }).catch(err => {
       console.error('SoX play error:', err);
       playerArtist.textContent = `SoX 播放異常，正在切換原生播放...`;
@@ -3063,6 +3092,7 @@ function updateSignalPathUI(track = null) {
   const toggleSoxDsp = document.getElementById('toggleSoxDsp');
   const dspSoxCard = document.querySelector('.dsp-sox-card');
   const dspActiveRateHint = document.getElementById('dspActiveRateHint');
+  const dspActiveDsdHint = document.getElementById('dspActiveDsdHint');
   const dspActivePrecisionHint = document.getElementById('dspActivePrecisionHint');
 
   if (toggleSoxDsp) toggleSoxDsp.checked = !!(state.dsp && state.dsp.enabled);
@@ -3071,11 +3101,23 @@ function updateSignalPathUI(track = null) {
   const curRateMode = (state.dsp && state.dsp.rateMode) || '4x';
   const curPrecision = (state.dsp && state.dsp.precision) || 28;
 
-  const ratePill = document.querySelector(`#dspRateSelector .dsp-pill[data-rate-mode="${curRateMode}"]`);
-  if (ratePill) {
-    document.querySelectorAll('#dspRateSelector .dsp-pill').forEach(p => p.classList.remove('active'));
-    ratePill.classList.add('active');
-    if (dspActiveRateHint) dspActiveRateHint.textContent = ratePill.textContent;
+  // Clear pill active classes
+  document.querySelectorAll('#dspRateSelector .dsp-pill, #dspDsdRateSelector .dsp-pill').forEach(p => p.classList.remove('active'));
+
+  if (isDsdRateMode(curRateMode)) {
+    const dsdPill = document.querySelector(`#dspDsdRateSelector .dsp-pill[data-rate-mode="${curRateMode}"]`);
+    if (dsdPill) {
+      dsdPill.classList.add('active');
+      if (dspActiveDsdHint) dspActiveDsdHint.textContent = `${dsdPill.textContent} (已生效)`;
+      if (dspActiveRateHint) dspActiveRateHint.textContent = '使用 DSD 調變中';
+    }
+  } else {
+    const ratePill = document.querySelector(`#dspRateSelector .dsp-pill[data-rate-mode="${curRateMode}"]`);
+    if (ratePill) {
+      ratePill.classList.add('active');
+      if (dspActiveRateHint) dspActiveRateHint.textContent = ratePill.textContent;
+      if (dspActiveDsdHint) dspActiveDsdHint.textContent = '可選 DSD 格式';
+    }
   }
 
   const precPill = document.querySelector(`#dspPrecisionSelector .dsp-pill[data-precision="${curPrecision}"]`);
@@ -3088,7 +3130,7 @@ function updateSignalPathUI(track = null) {
   if (!track) return;
 
   const ext = (track.formatName || '').toUpperCase();
-  const isDsd = ext === 'DSF' || ext === 'DFF' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
+  const isNativeDsd = ext === 'DSF' || ext === 'DFF' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
   const isDspActive = !track.isDemo && state.dsp && state.dsp.enabled;
 
   if (isDspActive) {
@@ -3097,20 +3139,39 @@ function updateSignalPathUI(track = null) {
     const srcKhz = formatKhz(srcRate);
     const targetKhz = formatKhz(targetRate);
 
-    if (signalPathBadge) signalPathBadge.textContent = `DSP (${state.dsp.rateMode.toUpperCase()}) | 24/${targetKhz} ⚡`;
-    if (statusPill) statusPill.textContent = 'DSP ENHANCED (SOX RESAMPLER)';
-    if (sourceTitle) sourceTitle.textContent = `${track.formatName || 'PCM'} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
-    if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless Input)';
+    if (isDsdRateMode(state.dsp.rateMode)) {
+      const mhz = getDsdMhz(state.dsp.rateMode, srcRate);
+      const modeUpper = state.dsp.rateMode.toUpperCase();
 
-    if (signalSoxArrow) signalSoxArrow.style.display = 'block';
-    if (signalSoxStage) signalSoxStage.style.display = 'flex';
-    if (signalSoxTitle) signalSoxTitle.textContent = 'SoX Resampler (libsoxr VHQ)';
-    if (signalSoxDesc) signalSoxDesc.textContent = `${state.dsp.precision}-bit VHQ 浮點升頻：${srcKhz} ➔ ${targetKhz} (24-bit Hi-Res FLAC)`;
+      if (signalPathBadge) signalPathBadge.textContent = `DSP (${modeUpper}) | 1-bit / ${mhz} ⚡`;
+      if (statusPill) statusPill.textContent = `DSP ENHANCED (PCM ➔ ${modeUpper})`;
+      if (sourceTitle) sourceTitle.textContent = `${track.formatName || 'PCM'} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
+      if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless Input)';
 
-    if (engineTitle) engineTitle.textContent = 'rooPlayer Core Audio Engine';
-    if (engineDesc) engineDesc.textContent = `64-bit 浮點即時超取樣升頻核心 ➔ 輸出至 24-bit ${targetKhz}`;
-    if (signalPathDot) signalPathDot.className = 'signal-dot purple';
-  } else if (isDsd) {
+      if (signalSoxArrow) signalSoxArrow.style.display = 'block';
+      if (signalSoxStage) signalSoxStage.style.display = 'flex';
+      if (signalSoxTitle) signalSoxTitle.textContent = 'SoX Resampler & 1-bit DSD Modulator (SDM)';
+      if (signalSoxDesc) signalSoxDesc.textContent = `${state.dsp.precision}-bit VHQ 升頻調變：PCM ${srcKhz} ➔ ${modeUpper} (1-bit / ${mhz}) 噪聲整形`;
+
+      if (engineTitle) engineTitle.textContent = 'rooPlayer 1-bit DSD Modulator Engine';
+      if (engineDesc) engineDesc.textContent = '超寬頻 64-bit 浮點調變碼流，高頻噪聲上移至 100 kHz 射頻頻段，維持音訊帶平坦模擬聽感';
+      if (signalPathDot) signalPathDot.className = 'signal-dot dsd-gold';
+    } else {
+      if (signalPathBadge) signalPathBadge.textContent = `DSP (${state.dsp.rateMode.toUpperCase()}) | 24/${targetKhz} ⚡`;
+      if (statusPill) statusPill.textContent = 'DSP ENHANCED (SOX RESAMPLER)';
+      if (sourceTitle) sourceTitle.textContent = `${track.formatName || 'PCM'} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
+      if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless Input)';
+
+      if (signalSoxArrow) signalSoxArrow.style.display = 'block';
+      if (signalSoxStage) signalSoxStage.style.display = 'flex';
+      if (signalSoxTitle) signalSoxTitle.textContent = 'SoX Resampler (libsoxr VHQ)';
+      if (signalSoxDesc) signalSoxDesc.textContent = `${state.dsp.precision}-bit VHQ 浮點升頻：${srcKhz} ➔ ${targetKhz} (24-bit Hi-Res FLAC)`;
+
+      if (engineTitle) engineTitle.textContent = 'rooPlayer Core Audio Engine';
+      if (engineDesc) engineDesc.textContent = `64-bit 浮點即時超取樣升頻核心 ➔ 輸出至 24-bit ${targetKhz}`;
+      if (signalPathDot) signalPathDot.className = 'signal-dot purple';
+    }
+  } else if (isNativeDsd) {
     const dsdRate = track.sampleRate ? `${(track.sampleRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
     if (signalPathBadge) signalPathBadge.textContent = `ENHANCED | DSD ➔ 24/88.2kHz FLAC`;
     if (sourceTitle) sourceTitle.textContent = `DSD (1-bit / ${dsdRate}) — ${track.title}`;
@@ -3146,9 +3207,32 @@ function initDspControls() {
   const toggleSoxDsp = document.getElementById('toggleSoxDsp');
   const dspSoxCard = document.querySelector('.dsp-sox-card');
   const dspRateSelector = document.getElementById('dspRateSelector');
+  const dspDsdRateSelector = document.getElementById('dspDsdRateSelector');
   const dspPrecisionSelector = document.getElementById('dspPrecisionSelector');
   const dspActiveRateHint = document.getElementById('dspActiveRateHint');
+  const dspActiveDsdHint = document.getElementById('dspActiveDsdHint');
   const dspActivePrecisionHint = document.getElementById('dspActivePrecisionHint');
+
+  const triggerLiveDspUpdate = () => {
+    updateSignalPathUI();
+    if (state.dsp.enabled && state.isPlaying) {
+      const track = state.queue[state.currentTrackIndex];
+      if (track && !track.isDemo && track.filePath) {
+        const curSec = getCurrentPlaybackTime();
+        if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+          const dspOptions = {
+            enabled: true,
+            sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
+            precision: state.dsp.precision,
+            dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : ''
+          };
+          window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, Math.floor(curSec), dspOptions);
+        } else {
+          playSoxTrack(track, Math.floor(curSec));
+        }
+      }
+    }
+  };
 
   if (toggleSoxDsp) {
     toggleSoxDsp.checked = state.dsp.enabled;
@@ -3168,7 +3252,8 @@ function initDspControls() {
           const dspOptions = state.dsp.enabled ? {
             enabled: true,
             sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-            precision: state.dsp.precision
+            precision: state.dsp.precision,
+            dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : ''
           } : null;
           window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, Math.floor(curSec), dspOptions);
         } else {
@@ -3190,10 +3275,11 @@ function initDspControls() {
           }
         }
       }
-      showToast(state.dsp.enabled ? '⚡ 已啟用 SoX Resampler 發燒升頻引擎' : '已關閉 DSP 升頻，恢復 Bit-Perfect 直通');
+      showToast(state.dsp.enabled ? '⚡ 已啟用 SoX Resampler / DSD 升頻引擎' : '已關閉 DSP 升頻，恢復 Bit-Perfect 直通');
     });
   }
 
+  // PCM rate selection handler
   if (dspRateSelector) {
     dspRateSelector.addEventListener('click', (e) => {
       const btn = e.target.closest('.dsp-pill');
@@ -3201,33 +3287,37 @@ function initDspControls() {
       const rateMode = btn.getAttribute('data-rate-mode');
       if (!rateMode) return;
 
-      dspRateSelector.querySelectorAll('.dsp-pill').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('#dspRateSelector .dsp-pill, #dspDsdRateSelector .dsp-pill').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
 
       state.dsp.rateMode = rateMode;
       localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
       if (dspActiveRateHint) dspActiveRateHint.textContent = btn.textContent;
-      updateSignalPathUI();
-
-      if (state.dsp.enabled && state.isPlaying) {
-        const track = state.queue[state.currentTrackIndex];
-        if (track && !track.isDemo && track.filePath) {
-          const curSec = getCurrentPlaybackTime();
-          if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
-            const dspOptions = {
-              enabled: true,
-              sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-              precision: state.dsp.precision
-            };
-            window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, Math.floor(curSec), dspOptions);
-          } else {
-            playSoxTrack(track, Math.floor(curSec));
-          }
-        }
-      }
+      if (dspActiveDsdHint) dspActiveDsdHint.textContent = '可選 DSD 格式';
+      triggerLiveDspUpdate();
     });
   }
 
+  // 1-bit DSD modulation rate selection handler
+  if (dspDsdRateSelector) {
+    dspDsdRateSelector.addEventListener('click', (e) => {
+      const btn = e.target.closest('.dsp-pill');
+      if (!btn) return;
+      const rateMode = btn.getAttribute('data-rate-mode');
+      if (!rateMode) return;
+
+      document.querySelectorAll('#dspRateSelector .dsp-pill, #dspDsdRateSelector .dsp-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+
+      state.dsp.rateMode = rateMode;
+      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+      if (dspActiveDsdHint) dspActiveDsdHint.textContent = `${btn.textContent} (已生效)`;
+      if (dspActiveRateHint) dspActiveRateHint.textContent = '使用 DSD 調變中';
+      triggerLiveDspUpdate();
+    });
+  }
+
+  // Precision selection handler
   if (dspPrecisionSelector) {
     dspPrecisionSelector.addEventListener('click', (e) => {
       const btn = e.target.closest('.dsp-pill');
@@ -3241,24 +3331,7 @@ function initDspControls() {
       state.dsp.precision = prec;
       localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
       if (dspActivePrecisionHint) dspActivePrecisionHint.textContent = `${prec}-bit VHQ`;
-      updateSignalPathUI();
-
-      if (state.dsp.enabled && state.isPlaying) {
-        const track = state.queue[state.currentTrackIndex];
-        if (track && !track.isDemo && track.filePath) {
-          const curSec = getCurrentPlaybackTime();
-          if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
-            const dspOptions = {
-              enabled: true,
-              sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-              precision: state.dsp.precision
-            };
-            window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, Math.floor(curSec), dspOptions);
-          } else {
-            playSoxTrack(track, Math.floor(curSec));
-          }
-        }
-      }
+      triggerLiveDspUpdate();
     });
   }
 }

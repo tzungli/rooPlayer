@@ -145,6 +145,7 @@ function startDsdStreamingServer() {
         const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
         const sampleRate = parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
         const precision = parseInt(reqUrl.searchParams.get('precision') || '28', 10);
+        const dsdMode = reqUrl.searchParams.get('dsd') || '';
 
         if (!filePath || !fs.existsSync(filePath)) {
           res.writeHead(404);
@@ -152,13 +153,27 @@ function startDsdStreamingServer() {
           return;
         }
 
+        if (req.method === 'HEAD') {
+          res.writeHead(200, {
+            'Content-Type': 'audio/flac',
+            'Access-Control-Allow-Origin': '*',
+            'Transfer-Encoding': 'chunked'
+          });
+          res.end();
+          return;
+        }
+
+        const afFilter = dsdMode
+          ? `aresample=resampler=soxr:precision=${precision}:cheby=1:dither_method=triangular_hp:osr=${sampleRate}`
+          : `aresample=resampler=soxr:precision=${precision}:cheby=1:osr=${sampleRate}`;
+
         const ffmpegArgs = [];
         if (startSec > 0) {
           ffmpegArgs.push('-ss', startSec.toString());
         }
         ffmpegArgs.push(
           '-i', filePath,
-          '-af', `aresample=resampler=soxr:precision=${precision}:cheby=1:osr=${sampleRate}`,
+          '-af', afFilter,
           '-c:a', 'flac',
           '-sample_fmt', 's32',
           '-ar', sampleRate.toString(),
@@ -204,6 +219,16 @@ function startDsdStreamingServer() {
       if (!filePath || !fs.existsSync(filePath)) {
         res.writeHead(404);
         res.end('File not found');
+        return;
+      }
+
+      if (req.method === 'HEAD') {
+        res.writeHead(200, {
+          'Content-Type': 'audio/flac',
+          'Access-Control-Allow-Origin': '*',
+          'Transfer-Encoding': 'chunked'
+        });
+        res.end();
         return;
       }
 
@@ -289,13 +314,14 @@ ipcMain.handle('audio:getDsdStreamUrl', (event, filePath, startSec = 0) => {
 });
 
 // SoX Resampler Stream URL helper IPC
-ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, precision = 28) => {
+ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, precision = 28, dsdMode = '') => {
   if (!dsdStreamPort) return '';
   const params = new URLSearchParams();
   params.set('file', filePath);
   if (startSec > 0) params.set('start', startSec.toString());
   params.set('rate', sampleRate.toString());
   params.set('precision', precision.toString());
+  if (dsdMode) params.set('dsd', dsdMode);
   return `http://127.0.0.1:${dsdStreamPort}/sox-stream?${params.toString()}`;
 });
 
