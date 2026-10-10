@@ -78,6 +78,15 @@
       </div>
 
       <div class="nav-group">
+        <div class="nav-title">線上串流 STREAMING</div>
+        <button class="nav-item" data-view="kkbox">
+          <span class="nav-icon" style="color: #25d5ff;">🎧</span>
+          <span class="nav-label">KKBOX</span>
+          <span class="badge" id="kkboxStatusBadge" style="background: rgba(37, 213, 255, 0.15); color: #25d5ff; border: 1px solid rgba(37, 213, 255, 0.35);">在線</span>
+        </button>
+      </div>
+
+      <div class="nav-group">
         <div class="nav-title">我的最愛 FAVORITES</div>
         <button class="nav-item" data-view="favAlbums">
           <span class="nav-icon">❤️</span>
@@ -527,9 +536,136 @@
           <div style="font-size: 36px; margin-bottom: 12px;">⭐</div>
           <div style="font-size: 15px; font-weight: 600; color: var(--text-main);">尚未收藏任何最愛演出者</div>
           <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">在演出者介紹頁面或演出者卡片上點擊 ⭐ 即可加入最愛演出者。</div>
+      <!-- 10. KKBOX STREAMING VIEW -->
+      <section id="viewKkbox" class="content-view">
+        <div class="kkbox-view-container">
+          <!-- KKBOX Top Navigation Toolbar -->
+          <div class="kkbox-header-bar">
+            <div class="kkbox-header-left">
+              <div class="kkbox-brand-badge">
+                <span class="kkbox-badge-dot"></span>
+                <span class="kkbox-badge-name">KKBOX</span>
+                <span class="kkbox-badge-tag">ONLINE STREAMING</span>
+              </div>
+              <div class="kkbox-view-switcher">
+                <button class="kkbox-switch-btn active" id="btnKkboxTabPlayer" title="切換至 KKBOX 完整線上播放器">
+                  🎧 線上播放器
+                </button>
+                <button class="kkbox-switch-btn" id="btnKkboxTabCharts" title="瀏覽 KKBOX 即時熱門排行榜">
+                  🏆 即時排行榜
+                </button>
+                <button class="kkbox-switch-btn" id="btnKkboxTabFeatured" title="探索 KKBOX 官方精選推薦歌單">
+                  ✨ 精選推薦
+                </button>
+              </div>
+            </div>
+
+            <div class="kkbox-header-right">
+              <button class="btn btn-sm btn-kkbox-login" id="btnOpenKkboxLoginModal" title="輸入帳號密碼登入 KKBOX">
+                🔑 輸入帳號密碼登入
+              </button>
+              <div class="kkbox-nav-arrows">
+                <button class="icon-btn kkbox-icon-btn" id="btnKkboxWebBack" title="上一頁">❮</button>
+                <button class="icon-btn kkbox-icon-btn" id="btnKkboxWebForward" title="下一頁">❯</button>
+                <button class="icon-btn kkbox-icon-btn" id="btnKkboxWebReload" title="重新載入播放器">🔄</button>
+                <button class="icon-btn kkbox-icon-btn" id="btnKkboxWebHome" title="返回 KKBOX 首頁">🏠</button>
+                <button class="icon-btn kkbox-icon-btn" id="btnKkboxOpenBrowser" title="以系統瀏覽器開啟">↗</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- KKBOX Status Banner -->
+          <div class="kkbox-info-banner" id="kkboxInfoBanner">
+            <span class="banner-icon">ℹ️</span>
+            <span class="banner-text" id="kkboxBannerText">歡迎使用 KKBOX 線上串流。輸入帳號密碼登入後，即可暢享高解析音樂、個人收藏曲目與完整播放清單。</span>
+            <button class="banner-close-btn" id="btnCloseKkboxBanner">✕</button>
+          </div>
+
+          <!-- Pane 1: Full-screen Embedded Web Player -->
+          <div class="kkbox-content-pane active" id="kkboxPanePlayer">
+            <div class="kkbox-webview-wrapper">
+              <webview id="kkboxWebview"
+                       src="https://play.kkbox.com/"
+                       partition="persist:kkbox"
+                       useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+                       allowpopups
+                       style="width: 100%; height: 100%; border: none;">
+              </webview>
+            </div>
+          </div>
+
+          <!-- Pane 2: Live Charts Explorer (Powered by KKBOX Open API) -->
+          <div class="kkbox-content-pane" id="kkboxPaneCharts" style="display: none;">
+            <div class="kkbox-api-view-inner">
+              <div class="kkbox-section-title-wrap">
+                <h2>🏆 KKBOX 即時排行榜</h2>
+                <span class="kkbox-sub-desc">資料由 KKBOX Open API 即時連線提供 • 支援直接點播與試聽</span>
+              </div>
+              <div class="kkbox-charts-category-bar" id="kkboxChartCategories">
+                <!-- Category buttons injected by JS -->
+              </div>
+              <div class="kkbox-track-list" id="kkboxChartTracksList">
+                <div class="kkbox-loading-indicator">⏳ 正在載入 KKBOX 即時排行榜...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pane 3: Featured Playlists Explorer (Powered by KKBOX Open API) -->
+          <div class="kkbox-content-pane" id="kkboxPaneFeatured" style="display: none;">
+            <div class="kkbox-api-view-inner">
+              <div class="kkbox-section-title-wrap">
+                <h2>✨ KKBOX 官方精選歌單</h2>
+                <span class="kkbox-sub-desc">官方主題選品、新歌推薦與曲風合輯</span>
+              </div>
+              <div class="kkbox-playlists-grid" id="kkboxFeaturedGrid">
+                <div class="kkbox-loading-indicator">⏳ 正在載入 KKBOX 精選歌單...</div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- KKBOX Account/Password Login Modal -->
+  <div id="kkboxLoginModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card kkbox-login-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap" style="display: flex; align-items: center;">
+          <span style="background: #25d5ff; color: #0a0b0e; font-weight: 800; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-right: 10px; letter-spacing: 0.5px;">KKBOX</span>
+          <h3 style="margin: 0; font-size: 16px; font-weight: 600;">登入 KKBOX 會員帳號</h3>
+        </div>
+        <button class="icon-btn" id="btnCloseKkboxLogin">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <p style="color: var(--text-muted); font-size: 13px; line-height: 1.6; margin-top: 0; margin-bottom: 20px;">
+          請輸入您的 KKBOX 帳號與密碼。登入後可聆聽 KKBOX 完整音樂曲庫、個人最愛與播放清單，享受高音質串流。
+        </p>
+        
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label style="display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;" for="kkboxInputAccount">
+            KKBOX 帳號 (Email 或 手機號碼)
+          </label>
+          <input type="text" id="kkboxInputAccount" class="form-control" placeholder="example@email.com" autocomplete="username" style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: #fff; font-size: 14px;">
+        </div>
+
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label style="display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;" for="kkboxInputPassword">
+            密碼
+          </label>
+          <input type="password" id="kkboxInputPassword" class="form-control" placeholder="請輸入 KKBOX 密碼" autocomplete="current-password" style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: #fff; font-size: 14px;">
+        </div>
+
+        <div style="background: rgba(37, 213, 255, 0.08); border: 1px solid rgba(37, 213, 255, 0.25); border-radius: 8px; padding: 12px 14px; font-size: 12px; color: #a0d8ef; line-height: 1.6;">
+          🔒 <strong>安全連線提示</strong>：<br>
+          點擊「確認登入」後，系統將自動開啟 KKBOX 官方安全身分驗證頁面並自動帶入您的帳號密碼進行驗證。登入認證狀態將安全保存在本機隔離環境中，日後啟動 rooPlayer 免重複輸入。
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 16px 24px; display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid rgba(255,255,255,0.08);">
+        <button class="btn btn-secondary" id="btnCancelKkboxLogin">取消</button>
+        <button class="btn btn-primary" id="btnSubmitKkboxLogin" style="background: #25d5ff; color: #000; font-weight: 600; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer;">確認登入 KKBOX</button>
+      </div>
+    </div>
   </div>
 
   <!-- Album Detail Overlay Modal (Roon Style) -->

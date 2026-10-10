@@ -4173,4 +4173,451 @@ body {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
 }
 
+/* ============================================================
+   KKBOX Online Streaming View & Components Styling
+   ============================================================ */
+
+#viewKkbox {
+  height: calc(100vh - 60px - 90px);
+  padding: 0;
+  overflow: hidden;
+  display: none;
+}
+
+#viewKkbox.active {
+  display: flex;
+  flex-direction: column;
+}
+
+.kkbox-view-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: #0f1013;
+  overflow: hidden;
+}
+
+/* KKBOX Top Header Bar */
+.kkbox-header-bar {
+  flex-shrink: 0;
+  height: 52px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 16px;
+  background: rgba(18, 21, 28, 0.95);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+  z-index: 10;
+}
+
+.kkbox-header-left,
+.kkbox-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.kkbox-brand-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 8px;
+}
+
+.kkbox-badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #25d5ff;
+  box-shadow: 0 0 8px #25d5ff;
+}
+
+.kkbox-badge-name {
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.5px;
+  color: #fff;
+}
+
+.kkbox-badge-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: #25d5ff;
+  background: rgba(37, 213, 255, 0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(37, 213, 255, 0.25);
+  letter-spacing: 0.5px;
+}
+
+.kkbox-view-switcher {
+  display: inline-flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.kkbox-switch-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.kkbox-switch-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.kkbox-switch-btn.active {
+  color: #0a0b0e;
+  background: #25d5ff;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(37, 213, 255, 0.35);
+}
+
+.btn-kkbox-login {
+  background: rgba(37, 213, 255, 0.12);
+  color: #25d5ff;
+  border: 1px solid rgba(37, 213, 255, 0.35);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-kkbox-login:hover {
+  background: #25d5ff;
+  color: #0a0b0e;
+  box-shadow: 0 0 10px rgba(37, 213, 255, 0.4);
+}
+
+.btn-kkbox-login.logged-in {
+  background: rgba(46, 204, 113, 0.15);
+  color: #2ecc71;
+  border-color: rgba(46, 204, 113, 0.4);
+}
+
+.kkbox-nav-arrows {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kkbox-icon-btn {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.kkbox-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Info Banner */
+.kkbox-info-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  background: rgba(37, 213, 255, 0.06);
+  border-bottom: 1px solid rgba(37, 213, 255, 0.12);
+  font-size: 12px;
+  color: #a0e0f8;
+}
+
+.kkbox-info-banner .banner-icon {
+  font-size: 14px;
+}
+
+.kkbox-info-banner .banner-text {
+  flex: 1;
+}
+
+.kkbox-info-banner .banner-close-btn {
+  background: transparent;
+  border: none;
+  color: #a0e0f8;
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.kkbox-info-banner .banner-close-btn:hover {
+  opacity: 1;
+}
+
+/* Panes */
+.kkbox-content-pane {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  display: none;
+  overflow: hidden;
+  position: relative;
+}
+
+.kkbox-content-pane.active {
+  display: block;
+}
+
+.kkbox-webview-wrapper {
+  width: 100%;
+  height: 100%;
+  background: #111;
+  overflow: hidden;
+}
+
+/* KKBOX Open API Views */
+.kkbox-api-view-inner {
+  padding: 24px 32px;
+  overflow-y: auto;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.kkbox-section-title-wrap {
+  margin-bottom: 18px;
+}
+
+.kkbox-section-title-wrap h2 {
+  margin: 0 0 6px 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.kkbox-sub-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.kkbox-charts-category-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.kkbox-cat-chip {
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.kkbox-cat-chip:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.kkbox-cat-chip.active {
+  background: #25d5ff;
+  color: #0a0b0e;
+  font-weight: 700;
+  border-color: #25d5ff;
+  box-shadow: 0 2px 8px rgba(37, 213, 255, 0.3);
+}
+
+.kkbox-track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 30px;
+}
+
+.kkbox-track-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.kkbox-track-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(37, 213, 255, 0.3);
+}
+
+.kkbox-track-row-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.kkbox-track-rank {
+  font-size: 14px;
+  font-weight: 700;
+  width: 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.kkbox-track-row:nth-child(1) .kkbox-track-rank { color: #f59e0b; font-size: 16px; }
+.kkbox-track-row:nth-child(2) .kkbox-track-rank { color: #94a3b8; font-size: 15px; }
+.kkbox-track-row:nth-child(3) .kkbox-track-rank { color: #d97706; font-size: 15px; }
+
+.kkbox-track-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #1e222b;
+}
+
+.kkbox-track-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.kkbox-track-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kkbox-track-artist {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kkbox-track-row-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.kkbox-btn-play-now {
+  background: rgba(37, 213, 255, 0.15);
+  color: #25d5ff;
+  border: 1px solid rgba(37, 213, 255, 0.3);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kkbox-btn-play-now:hover {
+  background: #25d5ff;
+  color: #000;
+  box-shadow: 0 0 10px rgba(37, 213, 255, 0.4);
+}
+
+.kkbox-playlists-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 18px;
+  margin-bottom: 30px;
+}
+
+.kkbox-playlist-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 12px;
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.kkbox-playlist-card:hover {
+  transform: translateY(-4px);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(37, 213, 255, 0.35);
+}
+
+.kkbox-playlist-cover {
+  width: 100%;
+  aspect-ratio: 1/1;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #1e222b;
+  margin-bottom: 10px;
+}
+
+.kkbox-playlist-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.4;
+  margin-bottom: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.kkbox-playlist-owner {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.kkbox-loading-indicator {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.kkbox-login-modal-card {
+  width: 440px;
+  max-width: 90vw;
+  background: #14171f;
+  border: 1px solid rgba(37, 213, 255, 0.3);
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(37, 213, 255, 0.15);
+  overflow: hidden;
+}
+
+
 

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -51,10 +51,20 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false // allow streaming local media
+      webSecurity: false, // allow streaming local media
+      webviewTag: true
     },
     show: false
   });
+
+  // Configure KKBOX webview session to ensure Chrome User-Agent and smooth streaming
+  try {
+    const kkboxSession = session.fromPartition('persist:kkbox');
+    const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+    kkboxSession.setUserAgent(chromeUA);
+  } catch (e) {
+    console.warn('Failed to configure kkboxSession:', e);
+  }
 
   mainWindow.loadFile('index.html');
 
@@ -72,6 +82,14 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  app.on('web-contents-created', (event, contents) => {
+    if (contents.getType() === 'webview') {
+      contents.setWindowOpenHandler(({ url }) => {
+        return { action: 'allow' };
+      });
+    }
+  });
+
   // Handle local media streaming protocol
   protocol.handle('media', (request) => {
     try {

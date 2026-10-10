@@ -356,6 +356,7 @@ async function initApp() {
   setupCoverSizeControls();
   initAudioZones();
   initDspControls();
+  initKkboxStreaming();
 
   // Load saved library or fall back to showcase demo data
   let saved = null;
@@ -4429,6 +4430,8 @@ function applyView(viewId, updateNav = true) {
     renderFavTracks();
   } else if (viewId === 'favArtists') {
     renderFavArtists();
+  } else if (viewId === 'kkbox') {
+    onOpenKkboxView();
   }
 
   if (updateNav) {
@@ -4750,6 +4753,23 @@ function openStreamingPlatform(platformId, query, customUrl = null) {
     } else if (platformId === 'spotify') {
       url = `https://open.spotify.com/search/${encodeURIComponent(query)}`;
     }
+  }
+
+  if (platformId === 'kkbox') {
+    const searchUrl = url || `https://play.kkbox.com/search?q=${encodeURIComponent(query)}`;
+    navigateTo('kkbox');
+    const webview = document.getElementById('kkboxWebview');
+    if (webview) {
+      try {
+        webview.loadURL(searchUrl);
+      } catch (e) {
+        webview.src = searchUrl;
+      }
+      const tabPlayer = document.getElementById('btnKkboxTabPlayer');
+      if (tabPlayer) tabPlayer.click();
+    }
+    showToast(`已在 KKBOX 線上串流搜尋「${query}」`);
+    return;
   }
 
   // Copy query to clipboard
@@ -5645,5 +5665,470 @@ function formatDuration(sec) {
   return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
 
+// ============================================================
+// KKBOX Online Streaming & Open API Subsystem
+// ============================================================
+
+class KKBoxService {
+  constructor() {
+    this.clientId = 'e23a2fc7882033ef9cb60286769deada';
+    this.clientSecret = '06ee6dfd7c6f0052022076f921ecd765';
+    this.territory = 'TW';
+    this.accessToken = null;
+    this.tokenExpiresAt = 0;
+    this.chartsCache = null;
+    this.featuredCache = null;
+  }
+
+  async getAccessToken() {
+    if (this.accessToken && Date.now() < this.tokenExpiresAt - 60000) {
+      return this.accessToken;
+    }
+    const res = await fetch('https://account.kkbox.com/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: this.clientId,
+        client_secret: this.clientSecret
+      })
+    });
+    if (!res.ok) {
+      throw new Error(`KKBOX Auth HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    this.accessToken = data.access_token;
+    this.tokenExpiresAt = Date.now() + ((data.expires_in || 2592000) * 1000);
+    return this.accessToken;
+  }
+
+  async fetchApi(endpoint) {
+    const token = await this.getAccessToken();
+    const url = endpoint.startsWith('http') ? endpoint : `https://api.kkbox.com/v1.1${endpoint}`;
+    const res = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    if (!res.ok) {
+      throw new Error(`KKBOX API HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getCharts() {
+    if (this.chartsCache) return this.chartsCache;
+    const json = await this.fetchApi(`/charts?territory=${this.territory}`);
+    this.chartsCache = json.data || [];
+    return this.chartsCache;
+  }
+
+  async getChartTracks(playlistId) {
+    const json = await this.fetchApi(`/charts/${playlistId}/tracks?territory=${this.territory}`);
+    return json.data || [];
+  }
+
+  async getFeaturedPlaylists() {
+    if (this.featuredCache) return this.featuredCache;
+    const json = await this.fetchApi(`/featured-playlists?territory=${this.territory}`);
+    this.featuredCache = json.data || [];
+    return this.featuredCache;
+  }
+
+  async search(query, types = ['track', 'album', 'artist']) {
+    const params = new URLSearchParams({
+      q: query,
+      type: types.join(','),
+      territory: this.territory,
+      limit: '15'
+    });
+    return await this.fetchApi(`/search?${params.toString()}`);
+  }
+}
+
+const kkboxService = new KKBoxService();
+
+function onOpenKkboxView() {
+  // If local audio is currently playing, pause it so user can listen to KKBOX
+  if (state.isPlaying) {
+    togglePlayPause();
+    showToast('已為您暫停本機音樂播放，切換至 KKBOX 線上串流');
+  }
+}
+
+function initKkboxStreaming() {
+  const webview = document.getElementById('kkboxWebview');
+  const tabPlayer = document.getElementById('btnKkboxTabPlayer');
+  const tabCharts = document.getElementById('btnKkboxTabCharts');
+  const tabFeatured = document.getElementById('btnKkboxTabFeatured');
+
+  const panePlayer = document.getElementById('kkboxPanePlayer');
+  const paneCharts = document.getElementById('kkboxPaneCharts');
+  const paneFeatured = document.getElementById('kkboxPaneFeatured');
+
+  const btnOpenLogin = document.getElementById('btnOpenKkboxLoginModal');
+  const loginModal = document.getElementById('kkboxLoginModal');
+  const btnCloseLogin = document.getElementById('btnCloseKkboxLogin');
+  const btnCancelLogin = document.getElementById('btnCancelKkboxLogin');
+  const btnSubmitLogin = document.getElementById('btnSubmitKkboxLogin');
+  const inputAccount = document.getElementById('kkboxInputAccount');
+  const inputPassword = document.getElementById('kkboxInputPassword');
+  const statusBadge = document.getElementById('kkboxStatusBadge');
+
+  const btnWebBack = document.getElementById('btnKkboxWebBack');
+  const btnWebForward = document.getElementById('btnKkboxWebForward');
+  const btnWebReload = document.getElementById('btnKkboxWebReload');
+  const btnWebHome = document.getElementById('btnKkboxWebHome');
+  const btnWebOpenBrowser = document.getElementById('btnKkboxOpenBrowser');
+  const btnCloseBanner = document.getElementById('btnCloseKkboxBanner');
+  const infoBanner = document.getElementById('kkboxInfoBanner');
+
+  // Check saved account
+  const savedAccount = localStorage.getItem('rooplayer_kkbox_account');
+  if (savedAccount) {
+    if (inputAccount) inputAccount.value = savedAccount;
+    if (btnOpenLogin) {
+      btnOpenLogin.innerHTML = `👤 已連線 (${escapeXml(savedAccount)})`;
+      btnOpenLogin.classList.add('logged-in');
+    }
+    if (statusBadge) {
+      statusBadge.textContent = '已登入';
+      statusBadge.style.color = '#2ecc71';
+      statusBadge.style.borderColor = 'rgba(46, 204, 113, 0.4)';
+      statusBadge.style.background = 'rgba(46, 204, 113, 0.15)';
+    }
+  }
+
+  // Banner close
+  if (btnCloseBanner && infoBanner) {
+    btnCloseBanner.addEventListener('click', () => {
+      infoBanner.style.display = 'none';
+    });
+  }
+
+  // Tab switching
+  function switchTab(targetTab) {
+    [tabPlayer, tabCharts, tabFeatured].forEach(t => t && t.classList.remove('active'));
+    [panePlayer, paneCharts, paneFeatured].forEach(p => {
+      if (p) {
+        p.classList.remove('active');
+        p.style.display = 'none';
+      }
+    });
+
+    if (targetTab === 'player') {
+      if (tabPlayer) tabPlayer.classList.add('active');
+      if (panePlayer) {
+        panePlayer.classList.add('active');
+        panePlayer.style.display = 'block';
+      }
+    } else if (targetTab === 'charts') {
+      if (tabCharts) tabCharts.classList.add('active');
+      if (paneCharts) {
+        paneCharts.classList.add('active');
+        paneCharts.style.display = 'block';
+      }
+      loadKkboxCharts();
+    } else if (targetTab === 'featured') {
+      if (tabFeatured) tabFeatured.classList.add('active');
+      if (paneFeatured) {
+        paneFeatured.classList.add('active');
+        paneFeatured.style.display = 'block';
+      }
+      loadKkboxFeatured();
+    }
+  }
+
+  if (tabPlayer) tabPlayer.addEventListener('click', () => switchTab('player'));
+  if (tabCharts) tabCharts.addEventListener('click', () => switchTab('charts'));
+  if (tabFeatured) tabFeatured.addEventListener('click', () => switchTab('featured'));
+
+  // Webview controls
+  if (webview) {
+    if (btnWebBack) {
+      btnWebBack.addEventListener('click', () => {
+        if (webview.canGoBack && webview.canGoBack()) webview.goBack();
+      });
+    }
+    if (btnWebForward) {
+      btnWebForward.addEventListener('click', () => {
+        if (webview.canGoForward && webview.canGoForward()) webview.goForward();
+      });
+    }
+    if (btnWebReload) {
+      btnWebReload.addEventListener('click', () => {
+        webview.reload();
+        showToast('正在重新載入 KKBOX 播放器...');
+      });
+    }
+    if (btnWebHome) {
+      btnWebHome.addEventListener('click', () => {
+        switchTab('player');
+        webview.loadURL('https://play.kkbox.com/');
+      });
+    }
+    if (btnWebOpenBrowser) {
+      btnWebOpenBrowser.addEventListener('click', () => {
+        let currentUrl = 'https://play.kkbox.com/';
+        try {
+          if (webview.getURL) currentUrl = webview.getURL() || currentUrl;
+        } catch (e) {}
+        if (window.electronAPI && window.electronAPI.openExternal) {
+          window.electronAPI.openExternal(currentUrl);
+        } else {
+          window.open(currentUrl, '_blank');
+        }
+      });
+    }
+
+    // Auto pause local music when webview starts playing media
+    webview.addEventListener('media-started-playing', () => {
+      if (state.isPlaying) {
+        togglePlayPause();
+      }
+    });
+  }
+
+  // Login modal
+  if (btnOpenLogin) {
+    btnOpenLogin.addEventListener('click', () => {
+      if (loginModal) loginModal.style.display = 'flex';
+      if (inputAccount && !inputAccount.value) {
+        inputAccount.focus();
+      } else if (inputPassword) {
+        inputPassword.focus();
+      }
+    });
+  }
+
+  function closeLoginModal() {
+    if (loginModal) loginModal.style.display = 'none';
+  }
+
+  if (btnCloseLogin) btnCloseLogin.addEventListener('click', closeLoginModal);
+  if (btnCancelLogin) btnCancelLogin.addEventListener('click', closeLoginModal);
+
+  if (btnSubmitLogin) {
+    btnSubmitLogin.addEventListener('click', () => {
+      const account = inputAccount ? inputAccount.value.trim() : '';
+      const password = inputPassword ? inputPassword.value : '';
+
+      if (!account) {
+        showToast('請輸入 KKBOX 帳號或 Email');
+        if (inputAccount) inputAccount.focus();
+        return;
+      }
+
+      // Save account for future
+      localStorage.setItem('rooplayer_kkbox_account', account);
+      if (btnOpenLogin) {
+        btnOpenLogin.innerHTML = `👤 已連線 (${escapeXml(account)})`;
+        btnOpenLogin.classList.add('logged-in');
+      }
+      if (statusBadge) {
+        statusBadge.textContent = '已登入';
+        statusBadge.style.color = '#2ecc71';
+        statusBadge.style.borderColor = 'rgba(46, 204, 113, 0.4)';
+        statusBadge.style.background = 'rgba(46, 204, 113, 0.15)';
+      }
+
+      closeLoginModal();
+      switchTab('player');
+
+      // Navigate webview to login page and auto-fill
+      if (webview) {
+        showToast(`正在前往 KKBOX 登入頁面並帶入帳號 ${account}...`);
+        const loginUrl = 'https://kkid.kkbox.com/login?redirect=https%3A%2F%2Fplay.kkbox.com%2F';
+        webview.loadURL(loginUrl);
+
+        const autoFillScript = `
+          (function() {
+            const acc = ${JSON.stringify(account)};
+            const pwd = ${JSON.stringify(password)};
+            function tryFill() {
+              const accInput = document.querySelector('input[type="email"], input[name="username"], input[name="account"], input#account, input[type="text"]');
+              if (accInput) {
+                accInput.value = acc;
+                accInput.dispatchEvent(new Event('input', { bubbles: true }));
+                accInput.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+              const pwdInput = document.querySelector('input[type="password"]');
+              if (pwdInput && pwd) {
+                pwdInput.value = pwd;
+                pwdInput.dispatchEvent(new Event('input', { bubbles: true }));
+                pwdInput.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            }
+            tryFill();
+            setTimeout(tryFill, 600);
+            setTimeout(tryFill, 1500);
+          })();
+        `;
+
+        const onLoaded = () => {
+          try {
+            webview.executeJavaScript(autoFillScript);
+          } catch (e) {}
+        };
+
+        webview.addEventListener('dom-ready', onLoaded, { once: true });
+        webview.addEventListener('did-finish-load', onLoaded, { once: true });
+      }
+    });
+  }
+
+  // Load Charts via Open API
+  let chartsLoaded = false;
+  async function loadKkboxCharts() {
+    if (chartsLoaded) return;
+    const catContainer = document.getElementById('kkboxChartCategories');
+    const tracksContainer = document.getElementById('kkboxChartTracksList');
+    if (!catContainer || !tracksContainer) return;
+
+    try {
+      tracksContainer.innerHTML = '<div class="kkbox-loading-indicator">⏳ 正在連線 KKBOX Open API 獲取即時排行榜...</div>';
+      const charts = await kkboxService.getCharts();
+      if (!charts || charts.length === 0) {
+        tracksContainer.innerHTML = '<div class="empty-hint">暫無排行榜資料</div>';
+        return;
+      }
+
+      catContainer.innerHTML = '';
+      charts.forEach((chart, idx) => {
+        const chip = document.createElement('button');
+        chip.className = `kkbox-cat-chip ${idx === 0 ? 'active' : ''}`;
+        chip.textContent = chart.title;
+        chip.addEventListener('click', () => {
+          document.querySelectorAll('.kkbox-cat-chip').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          loadChartTracks(chart.id, chart.title);
+        });
+        catContainer.appendChild(chip);
+      });
+
+      // Load first chart
+      loadChartTracks(charts[0].id, charts[0].title);
+      chartsLoaded = true;
+    } catch (err) {
+      console.error('Error loading KKBOX charts:', err);
+      tracksContainer.innerHTML = `<div class="empty-hint" style="color:#ef4444;">連線 KKBOX API 發生錯誤：${escapeXml(err.message)}</div>`;
+    }
+  }
+
+  async function loadChartTracks(chartId, chartTitle) {
+    const tracksContainer = document.getElementById('kkboxChartTracksList');
+    if (!tracksContainer) return;
+    try {
+      tracksContainer.innerHTML = `<div class="kkbox-loading-indicator">⏳ 正在載入《${escapeXml(chartTitle)}》曲目...</div>`;
+      const tracks = await kkboxService.getChartTracks(chartId);
+      if (!tracks || tracks.length === 0) {
+        tracksContainer.innerHTML = '<div class="empty-hint">此榜單暫無曲目資料</div>';
+        return;
+      }
+
+      tracksContainer.innerHTML = '';
+      tracks.forEach((track, idx) => {
+        const row = document.createElement('div');
+        row.className = 'kkbox-track-row';
+        const coverUrl = (track.album && track.album.images && track.album.images[0]) ? track.album.images[0].url : '';
+        const artistName = (track.album && track.album.artist) ? track.album.artist.name : '';
+
+        row.innerHTML = `
+          <div class="kkbox-track-row-left">
+            <span class="kkbox-track-rank">${idx + 1}</span>
+            <img class="kkbox-track-thumb" src="${escapeXml(coverUrl)}" alt="Cover" onerror="this.src='default_cover.png'">
+            <div class="kkbox-track-meta">
+              <span class="kkbox-track-title">${escapeXml(track.name)}</span>
+              <span class="kkbox-track-artist">${escapeXml(artistName)} • ${escapeXml((track.album && track.album.name) || '')}</span>
+            </div>
+          </div>
+          <div class="kkbox-track-row-right">
+            <button class="kkbox-btn-play-now" data-track-id="${escapeXml(track.id)}" title="在 KKBOX 播放此曲">
+              ▶ 播放
+            </button>
+          </div>
+        `;
+
+        const btnPlay = row.querySelector('.kkbox-btn-play-now');
+        if (btnPlay) {
+          btnPlay.addEventListener('click', () => {
+            playTrackInKkbox(track);
+          });
+        }
+
+        tracksContainer.appendChild(row);
+      });
+    } catch (err) {
+      console.error('Error loading chart tracks:', err);
+      tracksContainer.innerHTML = `<div class="empty-hint" style="color:#ef4444;">載入曲目發生錯誤：${escapeXml(err.message)}</div>`;
+    }
+  }
+
+  // Load Featured Playlists via Open API
+  let featuredLoaded = false;
+  async function loadKkboxFeatured() {
+    if (featuredLoaded) return;
+    const grid = document.getElementById('kkboxFeaturedGrid');
+    if (!grid) return;
+    try {
+      grid.innerHTML = '<div class="kkbox-loading-indicator">⏳ 正在連線 KKBOX Open API 獲取官方精選歌單...</div>';
+      const playlists = await kkboxService.getFeaturedPlaylists();
+      if (!playlists || playlists.length === 0) {
+        grid.innerHTML = '<div class="empty-hint">暫無精選歌單</div>';
+        return;
+      }
+
+      grid.innerHTML = '';
+      playlists.forEach((pl) => {
+        const card = document.createElement('div');
+        card.className = 'kkbox-playlist-card';
+        const coverUrl = (pl.images && pl.images[0]) ? pl.images[0].url : '';
+        const ownerName = (pl.owner && pl.owner.name) ? pl.owner.name : 'KKBOX';
+
+        card.innerHTML = `
+          <img class="kkbox-playlist-cover" src="${escapeXml(coverUrl)}" alt="Playlist Art" onerror="this.src='default_cover.png'">
+          <div class="kkbox-playlist-title">${escapeXml(pl.title)}</div>
+          <div class="kkbox-playlist-owner">${escapeXml(ownerName)}</div>
+        `;
+
+        card.addEventListener('click', () => {
+          playPlaylistInKkbox(pl);
+        });
+
+        grid.appendChild(card);
+      });
+      featuredLoaded = true;
+    } catch (err) {
+      console.error('Error loading featured playlists:', err);
+      grid.innerHTML = `<div class="empty-hint" style="color:#ef4444;">連線發生錯誤：${escapeXml(err.message)}</div>`;
+    }
+  }
+
+  function playTrackInKkbox(track) {
+    if (state.isPlaying) {
+      togglePlayPause();
+    }
+    switchTab('player');
+    const songUrl = `https://play.kkbox.com/song/${track.id}`;
+    if (webview) {
+      webview.loadURL(songUrl);
+    }
+    showToast(`正在 KKBOX 播放《${track.name}》...`);
+  }
+
+  function playPlaylistInKkbox(playlist) {
+    if (state.isPlaying) {
+      togglePlayPause();
+    }
+    switchTab('player');
+    const plUrl = `https://play.kkbox.com/playlist/${playlist.id}`;
+    if (webview) {
+      webview.loadURL(plUrl);
+    }
+    showToast(`正在 KKBOX 開啟歌單《${playlist.title}》...`);
+  }
+}
+
 // Start application
 window.addEventListener('DOMContentLoaded', initApp);
+
