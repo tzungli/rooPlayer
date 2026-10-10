@@ -31,6 +31,7 @@ class DlnaManager extends EventEmitter {
     this.hasStartedPlaying = false;
     this.currentDspOptions = null;
     this.coverCache = new Map(); // filePath -> { mimeType, buffer }
+    this.activeStreams = new Map(); // token -> streamInfo
     this._playOpCounter = 0;
     this._activePlayPromise = null;
     this._pollSessionCounter = 0;
@@ -62,43 +63,64 @@ class DlnaManager extends EventEmitter {
         const reqUrl = new URL(req.url, 'http://127.0.0.1');
         const pathname = reqUrl.pathname;
 
-        if (pathname === '/stream' || pathname.startsWith('/stream/')) {
-          const filePath = reqUrl.searchParams.get('file');
+        const streamMatch = pathname.match(/^\/stream\/([^\/]+)/);
+        const dsdMatch = pathname.match(/^\/dsd-stream\/([^\/]+)/);
+        const soxMatch = pathname.match(/^\/sox-stream\/([^\/]+)/);
+        const coverMatch = pathname.match(/^\/cover\/([^\/]+)/);
+
+        if (streamMatch || pathname === '/stream' || pathname === '/stream/') {
+          const token = streamMatch ? streamMatch[1] : null;
+          const streamInfo = token ? this.activeStreams.get(token) : null;
+          const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
           if (!filePath || !fs.existsSync(filePath)) {
             res.writeHead(404);
             res.end('File not found');
             return;
           }
           this.handleLocalAudioStream(req, res, filePath);
-        } else if (pathname === '/dsd-stream' || pathname.startsWith('/dsd-stream/')) {
-          const filePath = reqUrl.searchParams.get('file');
-          const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
+        } else if (dsdMatch || pathname === '/dsd-stream' || pathname === '/dsd-stream/') {
+          const token = dsdMatch ? dsdMatch[1] : null;
+          const streamInfo = token ? this.activeStreams.get(token) : null;
+          const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
+          const startSec = (streamInfo && streamInfo.startSec) !== undefined
+            ? streamInfo.startSec
+            : parseFloat(reqUrl.searchParams.get('start') || '0');
+          const track = streamInfo ? streamInfo.track : this.currentTrack;
           if (!filePath || !fs.existsSync(filePath)) {
             res.writeHead(404);
             res.end('File not found');
             return;
           }
-          this.handleDsdTranscodeStream(req, res, filePath, startSec);
-        } else if (pathname === '/sox-stream' || pathname.startsWith('/sox-stream/')) {
-          const filePath = reqUrl.searchParams.get('file');
-          const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
-          const sampleRate = parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
-          const precision = parseInt(reqUrl.searchParams.get('precision') || '28', 10);
-          const dsdMode = reqUrl.searchParams.get('dsd') || '';
+          this.handleDsdTranscodeStream(req, res, filePath, startSec, track);
+        } else if (soxMatch || pathname === '/sox-stream' || pathname === '/sox-stream/') {
+          const token = soxMatch ? soxMatch[1] : null;
+          const streamInfo = token ? this.activeStreams.get(token) : null;
+          const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
+          const startSec = (streamInfo && streamInfo.startSec) !== undefined
+            ? streamInfo.startSec
+            : parseFloat(reqUrl.searchParams.get('start') || '0');
+          const sampleRate = (streamInfo && streamInfo.dspOptions && streamInfo.dspOptions.sampleRate)
+            ? streamInfo.dspOptions.sampleRate
+            : parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
+          const precision = (streamInfo && streamInfo.dspOptions && streamInfo.dspOptions.precision)
+            ? streamInfo.dspOptions.precision
+            : parseInt(reqUrl.searchParams.get('precision') || '28', 10);
+          const dsdMode = (streamInfo && streamInfo.dspOptions && streamInfo.dspOptions.dsdMode)
+            ? streamInfo.dspOptions.dsdMode
+            : (reqUrl.searchParams.get('dsd') || '');
+          const track = streamInfo ? streamInfo.track : this.currentTrack;
           if (!filePath || !fs.existsSync(filePath)) {
             res.writeHead(404);
             res.end('File not found');
             return;
           }
-          this.handleSoxTranscodeStream(req, res, filePath, startSec, sampleRate, precision, dsdMode);
-        } else if (pathname === '/cover' || pathname.startsWith('/cover/')) {
-          const filePath = reqUrl.searchParams.get('file');
-          if (!filePath || !fs.existsSync(filePath)) {
-            res.writeHead(404);
-            res.end('Cover not found');
-            return;
-          }
-          this.handleCoverImage(req, res, filePath);
+          this.handleSoxTranscodeStream(req, res, filePath, startSec, sampleRate, precision, dsdMode, track);
+        } else if (coverMatch || pathname === '/cover' || pathname === '/cover/') {
+          const token = coverMatch ? coverMatch[1] : null;
+          const streamInfo = token ? this.activeStreams.get(token) : null;
+          const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
+          const track = streamInfo ? streamInfo.track : this.currentTrack;
+          this.handleCoverImage(req, res, filePath, track);
         } else {
           res.writeHead(404);
           res.end('Not found');
@@ -136,14 +158,18 @@ class DlnaManager extends EventEmitter {
       '.aiff': 'audio/aiff'
     };
     const contentType = mimeMap[ext] || 'audio/flac';
+    const commonHeaders = {
+      'Content-Type': contentType,
+      'Accept-Ranges': 'bytes',
+      'transferMode.dlna.org': 'Streaming',
+      'contentFeatures.dlna.org': 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
+      'Access-Control-Allow-Origin': '*'
+    };
 
     if (req.method === 'HEAD') {
       res.writeHead(200, {
-        'Content-Length': totalSize,
-        'Content-Type': contentType,
-        'Accept-Ranges': 'bytes',
-        'transferMode.dlna.org': 'Streaming',
-        'Access-Control-Allow-Origin': '*'
+        ...commonHeaders,
+        'Content-Length': totalSize
       });
       res.end();
       return;
@@ -156,12 +182,9 @@ class DlnaManager extends EventEmitter {
       const chunkSize = (end - start) + 1;
 
       res.writeHead(206, {
+        ...commonHeaders,
         'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunkSize,
-        'Content-Type': contentType,
-        'transferMode.dlna.org': 'Streaming',
-        'Access-Control-Allow-Origin': '*'
+        'Content-Length': chunkSize
       });
 
       const stream = fs.createReadStream(filePath, { start, end });
@@ -169,11 +192,8 @@ class DlnaManager extends EventEmitter {
       req.on('close', () => stream.destroy());
     } else {
       res.writeHead(200, {
-        'Content-Length': totalSize,
-        'Content-Type': contentType,
-        'Accept-Ranges': 'bytes',
-        'transferMode.dlna.org': 'Streaming',
-        'Access-Control-Allow-Origin': '*'
+        ...commonHeaders,
+        'Content-Length': totalSize
       });
 
       const stream = fs.createReadStream(filePath);
@@ -183,7 +203,7 @@ class DlnaManager extends EventEmitter {
   }
 
   // Handle DSD (.dsf / .dff) on-the-fly decimation transcoding to 24-bit / 88.2 kHz FLAC
-  handleDsdTranscodeStream(req, res, filePath, startSec = 0) {
+  handleDsdTranscodeStream(req, res, filePath, startSec = 0, track = null) {
     if (!this.ffmpegPath) {
       res.writeHead(500);
       res.end('FFmpeg not available for DSD decoding');
@@ -195,6 +215,7 @@ class DlnaManager extends EventEmitter {
         'Content-Type': 'audio/flac',
         'Access-Control-Allow-Origin': '*',
         'transferMode.dlna.org': 'Streaming',
+        'contentFeatures.dlna.org': 'DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
         'Transfer-Encoding': 'chunked'
       });
       res.end();
@@ -214,7 +235,21 @@ class DlnaManager extends EventEmitter {
       '-i', filePath,
       '-af', 'volume=6dB',
       '-c:a', 'flac',
-      '-ar', '88200',
+      '-ar', '88200'
+    );
+
+    if (track) {
+      if (track.title) ffmpegArgs.push('-metadata', `title=${track.title}`);
+      if (track.artist) ffmpegArgs.push('-metadata', `artist=${track.artist}`);
+      if (track.album) ffmpegArgs.push('-metadata', `album=${track.album}`);
+      if (track.albumArtist || track.artist) ffmpegArgs.push('-metadata', `album_artist=${track.albumArtist || track.artist}`);
+      if (track.genre) ffmpegArgs.push('-metadata', `genre=${track.genre}`);
+      const trackNum = track.trackNumber || track.trackNo;
+      if (trackNum) ffmpegArgs.push('-metadata', `track=${trackNum}`);
+      if (track.year) ffmpegArgs.push('-metadata', `date=${track.year}`);
+    }
+
+    ffmpegArgs.push(
       '-f', 'flac',
       'pipe:1'
     );
@@ -223,6 +258,7 @@ class DlnaManager extends EventEmitter {
       'Content-Type': 'audio/flac',
       'Access-Control-Allow-Origin': '*',
       'transferMode.dlna.org': 'Streaming',
+      'contentFeatures.dlna.org': 'DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
       'Transfer-Encoding': 'chunked'
     });
 
@@ -243,7 +279,7 @@ class DlnaManager extends EventEmitter {
   }
 
   // Handle SoX Resampler (libsoxr) on-the-fly audiophile upsampling or 1-bit DSD modulation to 24-bit Hi-Res FLAC
-  handleSoxTranscodeStream(req, res, filePath, startSec = 0, sampleRate = 192000, precision = 28, dsdMode = '') {
+  handleSoxTranscodeStream(req, res, filePath, startSec = 0, sampleRate = 192000, precision = 28, dsdMode = '', track = null) {
     if (!this.ffmpegPath) {
       res.writeHead(500);
       res.end('FFmpeg not available for SoX Resampling');
@@ -255,6 +291,7 @@ class DlnaManager extends EventEmitter {
         'Content-Type': 'audio/flac',
         'Access-Control-Allow-Origin': '*',
         'transferMode.dlna.org': 'Streaming',
+        'contentFeatures.dlna.org': 'DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
         'Transfer-Encoding': 'chunked'
       });
       res.end();
@@ -279,7 +316,21 @@ class DlnaManager extends EventEmitter {
       '-af', afFilter,
       '-c:a', 'flac',
       '-sample_fmt', 's32',
-      '-ar', sampleRate.toString(),
+      '-ar', sampleRate.toString()
+    );
+
+    if (track) {
+      if (track.title) ffmpegArgs.push('-metadata', `title=${track.title}`);
+      if (track.artist) ffmpegArgs.push('-metadata', `artist=${track.artist}`);
+      if (track.album) ffmpegArgs.push('-metadata', `album=${track.album}`);
+      if (track.albumArtist || track.artist) ffmpegArgs.push('-metadata', `album_artist=${track.albumArtist || track.artist}`);
+      if (track.genre) ffmpegArgs.push('-metadata', `genre=${track.genre}`);
+      const trackNum = track.trackNumber || track.trackNo;
+      if (trackNum) ffmpegArgs.push('-metadata', `track=${trackNum}`);
+      if (track.year) ffmpegArgs.push('-metadata', `date=${track.year}`);
+    }
+
+    ffmpegArgs.push(
       '-f', 'flac',
       'pipe:1'
     );
@@ -288,6 +339,7 @@ class DlnaManager extends EventEmitter {
       'Content-Type': 'audio/flac',
       'Access-Control-Allow-Origin': '*',
       'transferMode.dlna.org': 'Streaming',
+      'contentFeatures.dlna.org': 'DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
       'Transfer-Encoding': 'chunked'
     });
 
@@ -312,76 +364,93 @@ class DlnaManager extends EventEmitter {
   }
 
   // Handle album cover image serving for DLNA Renderers
-  async handleCoverImage(req, res, filePath) {
+  async handleCoverImage(req, res, filePath, track = null) {
+    const sendCover = (mime, buf) => {
+      res.writeHead(200, {
+        'Content-Type': mime || 'image/jpeg',
+        'Content-Length': buf.length,
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=86400'
+      });
+      if (req.method === 'HEAD') {
+        res.end();
+      } else {
+        res.end(buf);
+      }
+    };
+
     try {
-      // 1. Check in-memory cache first
-      if (this.coverCache.has(filePath)) {
+      // 1. If track object contains base64 cover data URL or local file path
+      if (track && track.cover && typeof track.cover === 'string') {
+        if (track.cover.startsWith('data:')) {
+          const match = track.cover.match(/^data:([^;]+);base64,(.+)$/);
+          if (match) {
+            const mime = match[1];
+            const buf = Buffer.from(match[2], 'base64');
+            if (filePath) this.cacheCover(filePath, mime, buf);
+            sendCover(mime, buf);
+            return;
+          }
+        } else if (fs.existsSync(track.cover)) {
+          const ext = path.extname(track.cover).toLowerCase();
+          const mime = (ext === '.png') ? 'image/png' : 'image/jpeg';
+          const buf = fs.readFileSync(track.cover);
+          if (filePath) this.cacheCover(filePath, mime, buf);
+          sendCover(mime, buf);
+          return;
+        }
+      }
+
+      // 2. Check in-memory coverCache
+      if (filePath && this.coverCache.has(filePath)) {
         const cached = this.coverCache.get(filePath);
-        res.writeHead(200, {
-          'Content-Type': cached.mimeType || 'image/jpeg',
-          'Content-Length': cached.buffer.length,
-          'Access-Control-Allow-Origin': '*',
-          'Cache-Control': 'public, max-age=86400'
-        });
-        res.end(cached.buffer);
+        sendCover(cached.mimeType || 'image/jpeg', cached.buffer);
         return;
       }
 
-      // 2. Check local folder for cover / folder images
-      const dir = path.dirname(filePath);
-      const candidates = [
-        'cover.jpg', 'cover.jpeg', 'cover.png',
-        'folder.jpg', 'folder.jpeg', 'folder.png',
-        'front.jpg', 'front.jpeg', 'front.png',
-        'album.jpg', 'album.jpeg', 'album.png'
-      ];
-      for (const name of candidates) {
-        const full = path.join(dir, name);
-        if (fs.existsSync(full)) {
-          const buf = fs.readFileSync(full);
-          const mime = (name.endsWith('.png')) ? 'image/png' : 'image/jpeg';
-          this.cacheCover(filePath, mime, buf);
-          res.writeHead(200, {
-            'Content-Type': mime,
-            'Content-Length': buf.length,
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'public, max-age=86400'
-          });
-          res.end(buf);
-          return;
+      // 3. Check local directory for cover/folder image files
+      if (filePath && fs.existsSync(filePath)) {
+        const dir = path.dirname(filePath);
+        const candidates = [
+          'cover.jpg', 'cover.jpeg', 'cover.png',
+          'folder.jpg', 'folder.jpeg', 'folder.png',
+          'front.jpg', 'front.jpeg', 'front.png',
+          'album.jpg', 'album.jpeg', 'album.png'
+        ];
+        for (const name of candidates) {
+          const full = path.join(dir, name);
+          if (fs.existsSync(full)) {
+            const buf = fs.readFileSync(full);
+            const mime = (name.endsWith('.png')) ? 'image/png' : 'image/jpeg';
+            this.cacheCover(filePath, mime, buf);
+            sendCover(mime, buf);
+            return;
+          }
+        }
+
+        // 4. Fallback: Parse embedded cover via music-metadata
+        try {
+          const mm = await import('music-metadata');
+          const metadata = await mm.parseFile(filePath, { skipCovers: false });
+          if (metadata.common && metadata.common.picture && metadata.common.picture.length > 0) {
+            const pic = metadata.common.picture[0];
+            const buf = Buffer.from(pic.data);
+            const mime = pic.format || 'image/jpeg';
+            this.cacheCover(filePath, mime, buf);
+            sendCover(mime, buf);
+            return;
+          }
+        } catch (err) {
+          // ignore metadata parse error
         }
       }
 
-      // 3. Fallback: Parse embedded cover via music-metadata
-      try {
-        const mm = await import('music-metadata');
-        const metadata = await mm.parseFile(filePath, { skipCovers: false });
-        if (metadata.common && metadata.common.picture && metadata.common.picture.length > 0) {
-          const pic = metadata.common.picture[0];
-          const buf = Buffer.from(pic.data);
-          const mime = pic.format || 'image/jpeg';
-          this.cacheCover(filePath, mime, buf);
-          res.writeHead(200, {
-            'Content-Type': mime,
-            'Content-Length': buf.length,
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'public, max-age=86400'
-          });
-          res.end(buf);
-          return;
-        }
-      } catch (err) {
-        // metadata parse error ignored
-      }
-
-      // 4. No cover found
-      res.writeHead(404);
-      res.end('Cover not found');
+      // 5. Ultimate fallback: Return valid 1x1 JPEG so renderer never gets 404
+      sendCover('image/jpeg', FALLBACK_JPEG);
     } catch (err) {
       console.warn('handleCoverImage error:', err);
       if (!res.headersSent) {
-        res.writeHead(500);
-        res.end('Server error');
+        sendCover('image/jpeg', FALLBACK_JPEG);
       }
     }
   }
@@ -813,28 +882,55 @@ class DlnaManager extends EventEmitter {
     const localIp = this.getLocalIp();
     const ext = (track.formatName || '').toUpperCase();
     const isDsd = ext === 'DSF' || ext === 'DFF' || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
-    const timestampNonce = `_t=${Date.now()}`;
+
+    // Register active stream token for clean, URL-safe endpoint without long query parameters
+    const streamToken = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+    // Prune old activeStreams if too large
+    if (this.activeStreams.size > 50) {
+      const oldestKey = this.activeStreams.keys().next().value;
+      this.activeStreams.delete(oldestKey);
+    }
 
     let streamUrl = '';
     let mimeType = 'audio/flac';
+    let protocolInfo = 'http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
 
     if (isDsd) {
-      streamUrl = `http://${localIp}:${this.streamingPort}/dsd-stream/audio.flac?file=${encodeURIComponent(track.filePath)}&start=${startSec}&${timestampNonce}`;
+      streamUrl = `http://${localIp}:${this.streamingPort}/dsd-stream/${streamToken}/audio.flac`;
       mimeType = 'audio/flac';
+      protocolInfo = 'http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
     } else if (dspOptions && dspOptions.enabled) {
-      const targetRate = dspOptions.sampleRate || 192000;
-      const precision = dspOptions.precision || 28;
-      const dsdParam = dspOptions.dsdMode ? `&dsd=${encodeURIComponent(dspOptions.dsdMode)}` : '';
-      streamUrl = `http://${localIp}:${this.streamingPort}/sox-stream/audio.flac?file=${encodeURIComponent(track.filePath)}&start=${startSec}&rate=${targetRate}&precision=${precision}${dsdParam}&${timestampNonce}`;
+      streamUrl = `http://${localIp}:${this.streamingPort}/sox-stream/${streamToken}/audio.flac`;
       mimeType = 'audio/flac';
+      protocolInfo = 'http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
     } else {
       const fileExt = path.extname(track.filePath).toLowerCase() || '.flac';
-      streamUrl = `http://${localIp}:${this.streamingPort}/stream/track${fileExt}?file=${encodeURIComponent(track.filePath)}&${timestampNonce}`;
-      if (fileExt === '.mp3') mimeType = 'audio/mpeg';
-      else if (fileExt === '.wav') mimeType = 'audio/wav';
-      else if (fileExt === '.m4a' || fileExt === '.aac') mimeType = 'audio/mp4';
-      else mimeType = 'audio/flac';
+      streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/track${fileExt}`;
+      if (fileExt === '.mp3') {
+        mimeType = 'audio/mpeg';
+        protocolInfo = 'http-get:*:audio/mpeg:DLNA.ORG_PN=MP3;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
+      } else if (fileExt === '.wav') {
+        mimeType = 'audio/wav';
+        protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
+      } else if (fileExt === '.m4a' || fileExt === '.aac') {
+        mimeType = 'audio/mp4';
+        protocolInfo = 'http-get:*:audio/mp4:DLNA.ORG_PN=AAC_ISO;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
+      } else {
+        mimeType = 'audio/flac';
+        protocolInfo = 'http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
+      }
     }
+
+    this.activeStreams.set(streamToken, {
+      track,
+      filePath: track.filePath,
+      startSec,
+      dspOptions,
+      isDsd,
+      mimeType,
+      createdAt: Date.now()
+    });
 
     // Cache artwork if track contains cover data URL
     if (track.cover && typeof track.cover === 'string' && track.cover.startsWith('data:')) {
@@ -846,27 +942,52 @@ class DlnaManager extends EventEmitter {
       }
     }
 
-    const coverUrl = `http://${localIp}:${this.streamingPort}/cover/artwork.jpg?file=${encodeURIComponent(track.filePath)}`;
+    const coverUrl = `http://${localIp}:${this.streamingPort}/cover/${streamToken}/cover.jpg`;
 
-    // Build DIDL-Lite metadata with multi-profile UPnP album artwork
-    const coverXml = `
-    <upnp:albumArtURI dlna:profileID="JPEG_TN">${escapeXml(coverUrl)}</upnp:albumArtURI>
-    <upnp:albumArtURI dlna:profileID="JPEG_MED">${escapeXml(coverUrl)}</upnp:albumArtURI>
-    <upnp:albumArtURI dlna:profileID="JPEG_LRG">${escapeXml(coverUrl)}</upnp:albumArtURI>
-    <upnp:albumArtURI>${escapeXml(coverUrl)}</upnp:albumArtURI>
-    <upnp:icon>${escapeXml(coverUrl)}</upnp:icon>`;
+    // Duration in H:MM:SS.000 format
+    const durationFormatted = (track.duration && track.duration > 0) ? formatHmsMs(track.duration) : '';
+    const durationAttr = durationFormatted ? `duration="${durationFormatted}"` : '';
 
-    const didl = `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns:dlna="urn:schemas-dlna-org:metadata-1-0/">
-  <item id="1" parentID="0" restricted="1">
-    <dc:title>${escapeXml(track.title || 'Track')}</dc:title>
-    <dc:creator>${escapeXml(track.artist || 'Artist')}</dc:creator>
-    <upnp:artist>${escapeXml(track.artist || 'Artist')}</upnp:artist>
-    <upnp:album>${escapeXml(track.album || 'Album')}</upnp:album>
-    <upnp:class>object.item.audioItem.musicTrack</upnp:class>${coverXml}
-    <res protocolInfo="http-get:*:${mimeType}:*">${streamUrl}</res>
-  </item>
-</DIDL-Lite>`;
+    const titleStr = track.title || path.basename(track.filePath, path.extname(track.filePath)) || 'Track';
+    const artistStr = track.artist || 'Unknown Artist';
+    const albumStr = track.album || 'Unknown Album';
+    const albumArtistStr = track.albumArtist || artistStr;
 
+    // Build standard compliant DIDL-Lite metadata
+    const didlParts = [
+      '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns:dlna="urn:schemas-dlna-org:metadata-1-0/">',
+      '  <item id="1" parentID="0" restricted="1">',
+      `    <dc:title>${escapeXml(titleStr)}</dc:title>`,
+      `    <dc:creator>${escapeXml(artistStr)}</dc:creator>`,
+      `    <upnp:artist role="Performer">${escapeXml(artistStr)}</upnp:artist>`,
+      `    <upnp:artist>${escapeXml(artistStr)}</upnp:artist>`,
+      `    <upnp:album>${escapeXml(albumStr)}</upnp:album>`,
+      `    <upnp:albumArtist>${escapeXml(albumArtistStr)}</upnp:albumArtist>`
+    ];
+
+    if (track.genre) {
+      didlParts.push(`    <upnp:genre>${escapeXml(track.genre)}</upnp:genre>`);
+    }
+    const trackNum = track.trackNumber || track.trackNo;
+    if (trackNum) {
+      didlParts.push(`    <upnp:originalTrackNumber>${escapeXml(trackNum)}</upnp:originalTrackNumber>`);
+    }
+    if (track.year) {
+      didlParts.push(`    <dc:date>${escapeXml(track.year)}</dc:date>`);
+    }
+
+    didlParts.push(
+      `    <upnp:albumArtURI dlna:profileID="JPEG_TN">${coverUrl}</upnp:albumArtURI>`,
+      `    <upnp:albumArtURI dlna:profileID="JPEG_MED">${coverUrl}</upnp:albumArtURI>`,
+      `    <upnp:albumArtURI dlna:profileID="JPEG_LRG">${coverUrl}</upnp:albumArtURI>`,
+      `    <upnp:albumArtURI>${coverUrl}</upnp:albumArtURI>`,
+      `    <upnp:class>object.item.audioItem.musicTrack</upnp:class>`,
+      `    <res protocolInfo="${protocolInfo}" ${durationAttr}>${streamUrl}</res>`,
+      '  </item>',
+      '</DIDL-Lite>'
+    );
+
+    const didl = didlParts.join('\n');
     const escapedDidl = escapeXml(didl);
 
     // 3. SetAVTransportURI with retry loop and metadata fallback
@@ -1164,5 +1285,32 @@ function parseHmsToSec(hms) {
   }
   return 0;
 }
+
+function formatHmsMs(seconds) {
+  if (!seconds || seconds <= 0 || isNaN(seconds)) return '';
+  const s = Math.floor(seconds);
+  const hrs = Math.floor(s / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  const ms = Math.floor((seconds - s) * 1000);
+  return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+}
+
+// Minimal 1x1 valid baseline JPEG buffer for cover image fallback
+const FALLBACK_JPEG = Buffer.from([
+  0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+  0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00, 0xff, 0xdb, 0x00, 0x43,
+  0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09,
+  0x09, 0x08, 0x0a, 0x0c, 0x14, 0x0d, 0x0c, 0x0b, 0x0b, 0x0c, 0x19, 0x12,
+  0x13, 0x0f, 0x14, 0x1d, 0x1a, 0x1f, 0x1e, 0x1d, 0x1a, 0x1c, 0x1c, 0x20,
+  0x24, 0x2e, 0x27, 0x20, 0x22, 0x2c, 0x23, 0x1c, 0x1c, 0x28, 0x37, 0x29,
+  0x2c, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1f, 0x27, 0x39, 0x3d, 0x38, 0x32,
+  0x3c, 0x2e, 0x33, 0x34, 0x32, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x01,
+  0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xff, 0xc4, 0x00, 0x1f, 0x00, 0x00,
+  0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+  0x09, 0x0a, 0x0b, 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f,
+  0x00, 0xbf, 0x80, 0xff, 0xd9
+]);
 
 module.exports = DlnaManager;

@@ -2748,6 +2748,20 @@ function closeAlbumDetail() {
 }
 
 // ----------------- Player & Audio Engine -----------------
+function getEnrichedTrack(track) {
+  if (!track) return track;
+  const foundAlbum = state.albums.find(a => a.title === track.album && (a.artist || '').toLowerCase() === (track.artist || '').toLowerCase());
+  return {
+    ...track,
+    cover: track.cover || (foundAlbum ? foundAlbum.cover : null) || null,
+    album: track.album || (foundAlbum ? foundAlbum.title : 'Album'),
+    artist: track.artist || (foundAlbum ? foundAlbum.artist : 'Artist'),
+    albumArtist: track.albumArtist || (foundAlbum ? (foundAlbum.albumArtist || foundAlbum.artist) : track.artist),
+    genre: track.genre || (foundAlbum ? foundAlbum.genre : ''),
+    year: track.year || (foundAlbum ? foundAlbum.year : '')
+  };
+}
+
 function playAlbum(album) {
   if (!album.tracks || !album.tracks.length) return;
   recordRecentlyPlayed(album);
@@ -2848,7 +2862,8 @@ function playCurrentTrack() {
         dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : ''
       } : null;
 
-      window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, 0, dspOptions).then(res => {
+      const enrichedTrack = getEnrichedTrack(track);
+      window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, enrichedTrack, 0, dspOptions).then(res => {
         if (res && res.success) {
           state.isPlaying = true;
           updatePlayPauseBtnUI();
@@ -3241,7 +3256,7 @@ function initDspControls() {
             precision: state.dsp.precision,
             dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : ''
           };
-          window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, Math.floor(curSec), dspOptions);
+          window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), dspOptions);
         } else {
           playSoxTrack(track, Math.floor(curSec));
         }
@@ -3270,7 +3285,7 @@ function initDspControls() {
             precision: state.dsp.precision,
             dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : ''
           } : null;
-          window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, Math.floor(curSec), dspOptions);
+          window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), dspOptions);
         } else {
           if (state.dsp.enabled) {
             playSoxTrack(track, Math.floor(curSec));
