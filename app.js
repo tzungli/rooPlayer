@@ -5754,10 +5754,17 @@ function onOpenKkboxView() {
     togglePlayPause();
     showToast('已為您暫停本機音樂播放，切換至 KKBOX 線上串流');
   }
+  const webview = document.getElementById('kkboxWebview');
+  if (webview) {
+    if (!webview.getAttribute('src')) {
+      webview.setAttribute('src', 'https://play.kkbox.com/');
+    }
+  }
 }
 
 function initKkboxStreaming() {
   const webview = document.getElementById('kkboxWebview');
+  const webviewLoader = document.getElementById('kkboxWebviewLoader');
   const tabPlayer = document.getElementById('btnKkboxTabPlayer');
   const tabCharts = document.getElementById('btnKkboxTabCharts');
   const tabFeatured = document.getElementById('btnKkboxTabFeatured');
@@ -5885,6 +5892,34 @@ function initKkboxStreaming() {
     webview.addEventListener('media-started-playing', () => {
       if (state.isPlaying) {
         togglePlayPause();
+      }
+    });
+
+    // Loading overlay handlers
+    webview.addEventListener('did-start-loading', () => {
+      if (webviewLoader) webviewLoader.style.display = 'flex';
+    });
+    webview.addEventListener('did-stop-loading', () => {
+      if (webviewLoader) webviewLoader.style.display = 'none';
+    });
+    webview.addEventListener('dom-ready', () => {
+      if (webviewLoader) webviewLoader.style.display = 'none';
+    });
+    webview.addEventListener('did-fail-load', (e) => {
+      console.warn('KKBOX webview did-fail-load:', e);
+      if (webviewLoader) {
+        webviewLoader.innerHTML = `
+          <div style="font-size:32px; margin-bottom:12px;">⚠️</div>
+          <div style="font-size:15px; font-weight:600; color:#fff;">無法載入 KKBOX 線上播放器</div>
+          <div style="font-size:12px; color:var(--text-muted); margin:6px 0 16px 0;">請檢查網路連線或稍後再試</div>
+          <button class="btn btn-sm btn-primary" id="btnKkboxRetryLoad">🔄 重新載入</button>
+        `;
+        const btnRetry = document.getElementById('btnKkboxRetryLoad');
+        if (btnRetry) {
+          btnRetry.addEventListener('click', () => {
+            webview.loadURL('https://play.kkbox.com/');
+          });
+        }
       }
     });
   }

@@ -78,15 +78,6 @@
       </div>
 
       <div class="nav-group">
-        <div class="nav-title">線上串流 STREAMING</div>
-        <button class="nav-item" data-view="kkbox">
-          <span class="nav-icon" style="color: #25d5ff;">🎧</span>
-          <span class="nav-label">KKBOX</span>
-          <span class="badge" id="kkboxStatusBadge" style="background: rgba(37, 213, 255, 0.15); color: #25d5ff; border: 1px solid rgba(37, 213, 255, 0.35);">在線</span>
-        </button>
-      </div>
-
-      <div class="nav-group">
         <div class="nav-title">我的最愛 FAVORITES</div>
         <button class="nav-item" data-view="favAlbums">
           <span class="nav-icon">❤️</span>
@@ -102,6 +93,15 @@
           <span class="nav-icon">⭐</span>
           <span class="nav-label">最愛演出者</span>
           <span class="badge" id="favArtistsCountBadge">0</span>
+        </button>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-title">線上串流 STREAMING</div>
+        <button class="nav-item" data-view="kkbox">
+          <span class="nav-icon" style="color: #25d5ff;">🎧</span>
+          <span class="nav-label">KKBOX</span>
+          <span class="badge" id="kkboxStatusBadge" style="background: rgba(37, 213, 255, 0.15); color: #25d5ff; border: 1px solid rgba(37, 213, 255, 0.35);">在線</span>
         </button>
       </div>
 
@@ -536,6 +536,9 @@
           <div style="font-size: 36px; margin-bottom: 12px;">⭐</div>
           <div style="font-size: 15px; font-weight: 600; color: var(--text-main);">尚未收藏任何最愛演出者</div>
           <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">在演出者介紹頁面或演出者卡片上點擊 ⭐ 即可加入最愛演出者。</div>
+        </div>
+      </section>
+
       <!-- 10. KKBOX STREAMING VIEW -->
       <section id="viewKkbox" class="content-view">
         <div class="kkbox-view-container">
@@ -584,6 +587,11 @@
           <!-- Pane 1: Full-screen Embedded Web Player -->
           <div class="kkbox-content-pane active" id="kkboxPanePlayer">
             <div class="kkbox-webview-wrapper">
+              <div id="kkboxWebviewLoader" class="kkbox-webview-loading-overlay">
+                <div class="spinner" style="width: 36px; height: 36px; border-width: 3px; border-top-color: #25d5ff;"></div>
+                <div style="font-size: 15px; font-weight: 600; color: #fff; margin-top: 14px;">正在連線 KKBOX 線上播放器...</div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">若首次載入稍慢，亦可點擊上方「即時排行榜」或「精選推薦」搶先聆聽熱門音樂</div>
+              </div>
               <webview id="kkboxWebview"
                        src="https://play.kkbox.com/"
                        partition="persist:kkbox"

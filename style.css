@@ -4178,15 +4178,18 @@ body {
    ============================================================ */
 
 #viewKkbox {
-  height: calc(100vh - 60px - 90px);
-  padding: 0;
-  overflow: hidden;
   display: none;
+  width: 100%;
+  height: 100%;
 }
 
 #viewKkbox.active {
-  display: flex;
+  display: flex !important;
   flex-direction: column;
+  margin: -24px -32px -32px -32px;
+  width: calc(100% + 64px);
+  height: calc(100% + 56px);
+  min-height: calc(100vh - 150px);
 }
 
 .kkbox-view-container {
@@ -4194,6 +4197,8 @@ body {
   flex-direction: column;
   width: 100%;
   height: 100%;
+  flex: 1;
+  min-height: 0;
   background: #0f1013;
   overflow: hidden;
 }
@@ -4385,14 +4390,33 @@ body {
 }
 
 .kkbox-content-pane.active {
-  display: block;
+  display: flex !important;
+  flex-direction: column;
 }
 
 .kkbox-webview-wrapper {
   width: 100%;
   height: 100%;
-  background: #111;
+  flex: 1;
+  min-height: 0;
+  background: #0f1013;
   overflow: hidden;
+  position: relative;
+}
+
+.kkbox-webview-loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #0f1013;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  transition: opacity 0.3s ease;
 }
 
 /* KKBOX Open API Views */
