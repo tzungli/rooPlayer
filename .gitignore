@@ -1,0 +1,13 @@
+# 依賴模組與暫存檔
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 系統與編輯器快取
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+.vscode/
+.idea/

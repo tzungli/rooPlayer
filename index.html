@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rooPlayer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Custom Window Titlebar (rooPlayer Style) -->
+  <header id="titlebar">
+    <div class="titlebar-left">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span class="brand-text">rooPlayer</span>
+        <span class="brand-badge">CORE • LOCAL</span>
+      </div>
+      <div class="history-nav">
+        <button id="btnNavBack" class="icon-btn" title="返回">❮</button>
+        <button id="btnNavForward" class="icon-btn" title="前進">❯</button>
+      </div>
+    </div>
+    
+    <div class="titlebar-center">
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="globalSearch" placeholder="搜尋演出者、專輯、曲目、作曲家..." autocomplete="off">
+        <button id="btnClearSearch" class="btn-clear" style="display: none;">✕</button>
+      </div>
+    </div>
+
+    <div class="titlebar-right">
+      <div class="sync-status" id="syncStatus">
+        <span class="status-indicator online"></span>
+        <span id="syncText">資料庫已連線</span>
+      </div>
+      <button id="btnThemeToggle" class="icon-btn theme-toggle-btn" title="切換深色 / 淺色主題">
+        <span id="themeIcon">🌙</span> <span id="themeLabel">深色</span>
+      </button>
+      <div class="window-controls">
+        <button id="btnMinimize" class="win-btn" title="最小化">─</button>
+        <button id="btnMaximize" class="win-btn" title="最大化">□</button>
+        <button id="btnClose" class="win-btn win-close" title="關閉">✕</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <div id="appContainer">
+    <!-- Left Navigation Sidebar -->
+    <aside id="sidebar">
+      <div class="nav-group">
+        <div class="nav-title">音樂庫 LIBRARY</div>
+        <button class="nav-item active" data-view="overview">
+          <span class="nav-icon">☷</span>
+          <span class="nav-label">總覽 Overview</span>
+        </button>
+        <button class="nav-item" data-view="albums">
+          <span class="nav-icon">💿</span>
+          <span class="nav-label">專輯 Albums</span>
+          <span class="badge" id="albumCountBadge">0</span>
+        </button>
+        <button class="nav-item" data-view="artists">
+          <span class="nav-icon">👤</span>
+          <span class="nav-label">演出者 Artists</span>
+          <span class="badge" id="artistCountBadge">0</span>
+        </button>
+        <button class="nav-item" data-view="tracks">
+          <span class="nav-icon">🎵</span>
+          <span class="nav-label">曲目 Tracks</span>
+          <span class="badge" id="trackCountBadge">0</span>
+        </button>
+        <button class="nav-item" data-view="genres">
+          <span class="nav-icon">🏷️</span>
+          <span class="nav-label">曲風流派 Genres</span>
+          <span class="badge" id="genreCountBadge">0</span>
+        </button>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-title">我的最愛 FAVORITES</div>
+        <button class="nav-item" data-view="favAlbums">
+          <span class="nav-icon">❤️</span>
+          <span class="nav-label">最愛專輯</span>
+          <span class="badge" id="favAlbumsCountBadge">0</span>
+        </button>
+        <button class="nav-item" data-view="favTracks">
+          <span class="nav-icon">💖</span>
+          <span class="nav-label">最愛歌曲</span>
+          <span class="badge" id="favTracksCountBadge">0</span>
+        </button>
+        <button class="nav-item" data-view="favArtists">
+          <span class="nav-icon">⭐</span>
+          <span class="nav-label">最愛演出者</span>
+          <span class="badge" id="favArtistsCountBadge">0</span>
+        </button>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-title">管理與設定 SETTINGS</div>
+        <button class="nav-item" data-view="storage">
+          <span class="nav-icon">📁</span>
+          <span class="nav-label">本機資料夾管理</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main id="mainContent">
+      <!-- 1. OVERVIEW VIEW -->
+      <section id="viewOverview" class="content-view active">
+        <div class="hero-banner">
+          <div class="hero-overlay"></div>
+          <div class="hero-content">
+            <span class="hero-tag">AUDIOPHILE MEDIA HUB</span>
+            <h1 class="hero-title">高解析音樂殿堂</h1>
+            <p class="hero-desc">還原母帶級細節，探索無損音訊的極致聆聽體驗。</p>
+            <div class="hero-stats">
+              <div class="stat-pill"><span id="heroAlbumCount">0</span> 專輯</div>
+              <div class="stat-pill"><span id="heroTrackCount">0</span> 曲目</div>
+              <div class="stat-pill highlight"><span id="heroHiresCount">0</span> Hi-Res 無損標題</div>
+            </div>
+            <div class="hero-actions">
+              <button class="btn btn-primary" id="btnHeroScan">➕ 新增本機音樂目錄</button>
+              <button class="btn btn-secondary" id="btnHeroPlayRandom">🔀 隨機播放精選</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-block">
+          <div class="section-header">
+            <h2>精選與最近新增</h2>
+            <button class="btn-text" id="btnSeeAllAlbums">瀏覽全部專輯 ➔</button>
+          </div>
+          <div class="album-grid featured-grid" id="overviewGrid">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+
+        <div class="section-block" style="margin-top: 36px;">
+          <div class="section-header">
+            <h2>探索演出者 Artists</h2>
+            <button class="btn-text" id="btnSeeAllArtists">瀏覽全部演出者 ➔</button>
+          </div>
+          <div class="artist-grid" id="overviewArtistsGrid">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. ALBUMS VIEW -->
+      <section id="viewAlbums" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">專輯庫 Albums</h1>
+            <span class="page-subtitle" id="albumsHeaderCount">共 0 張專輯</span>
+          </div>
+          <div class="filter-bar">
+            <div class="pill-group" id="albumFilters">
+              <button class="pill active" data-filter="all">全部</button>
+              <button class="pill" data-filter="hires">Hi-Res 24-bit</button>
+              <button class="pill" data-filter="flac">FLAC 無損</button>
+              <button class="pill" data-filter="recent">最近新增</button>
+            </div>
+            <select id="albumSortSelect" class="select-dropdown">
+              <option value="title">依專輯名稱 A-Z</option>
+              <option value="artist">依演出者 A-Z</option>
+              <option value="year">依發行年份 (新到舊)</option>
+              <option value="tracks">依曲目數量</option>
+            </select>
+          </div>
+        </div>
+        <div id="genreFilterBannerBox"></div>
+        <div class="album-grid" id="allAlbumsGrid">
+          <!-- Injected via JS -->
+        </div>
+      </section>
+
+      <!-- 3. ARTISTS VIEW -->
+      <section id="viewArtists" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">演出者 Artists</h1>
+            <span class="page-subtitle" id="artistsHeaderCount">共 0 位演出者</span>
+          </div>
+        </div>
+        <div class="artist-grid" id="artistsGrid">
+          <!-- Injected via JS -->
+        </div>
+      </section>
+
+      <!-- 3.5 ARTIST DETAIL VIEW (Roon Style) -->
+      <section id="viewArtistDetail" class="content-view">
+        <div class="artist-detail-hero" id="artistDetailHero">
+          <div class="artist-hero-backdrop" id="artistHeroBackdrop"></div>
+          <div class="artist-hero-gradient"></div>
+
+          <div class="artist-hero-inner">
+            <div class="artist-detail-avatar-box">
+              <img id="artistDetailAvatar" src="" alt="Artist Photo" class="artist-detail-avatar" style="display: none;">
+              <div id="artistDetailAvatarPlaceholder" class="artist-detail-avatar-placeholder">🎤</div>
+            </div>
+            <div class="artist-detail-info">
+              <div class="artist-detail-tag">ARTIST PROFILE • 演出者總覽</div>
+              <h1 class="artist-detail-name" id="artistDetailName">Artist Name</h1>
+              <div class="artist-detail-genres" id="artistDetailGenres">
+                <!-- Genre chips -->
+              </div>
+              <div class="artist-detail-stats" id="artistDetailStats">
+                <span class="stat-pill"><span id="artistDetailAlbumCount">0</span> 本機專輯</span>
+                <span class="stat-pill"><span id="artistDetailTrackCount">0</span> 首歌曲</span>
+              </div>
+              <div class="artist-detail-actions">
+                <button class="btn btn-primary" id="btnPlayAllArtistTracks">▶ 播放該歌手所有歌曲</button>
+                <button class="btn btn-secondary" id="btnShuffleArtistTracks">🔀 隨機播放</button>
+                <button class="btn btn-secondary" id="btnFavArtistDetail">⭐ 加入最愛</button>
+                <button class="btn btn-secondary" id="btnOpenWikipedia" title="在瀏覽器開啟 Wikipedia 完整條目">🌐 Wikipedia 維基百科</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2-1. 維基百科或音樂資料庫簡介 -->
+        <div class="artist-section-block">
+          <div class="section-header">
+            <h2>📖 歌手簡介與背景</h2>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="data-source-badge" id="bioSourceBadge">來源：Wikipedia 百科資料庫</span>
+              <button class="btn-toggle-lang" id="btnToggleBioLang" style="display: none;" title="切換檢視原文或繁體中文翻譯">檢視原文</button>
+            </div>
+          </div>
+          <div class="artist-bio-card" id="artistBioCard">
+            <div class="bio-loading" id="bioLoading">
+              <span class="spinner"></span> 正在連線至維基百科音樂資料庫並自動翻譯為繁體中文...
+            </div>
+            <p class="bio-text" id="artistBioText" style="display: none;"></p>
+          </div>
+        </div>
+
+        <!-- 2-2. 最近播放的專輯 -->
+        <div class="artist-section-block">
+          <div class="section-header">
+            <h2>⏱️ 最近播放的專輯</h2>
+            <span class="section-count-badge" id="artistRecentAlbumsCount">0 張</span>
+          </div>
+          <div class="album-grid" id="artistRecentAlbumsGrid">
+            <!-- Injected via JS -->
+          </div>
+          <div class="empty-hint" id="artistNoRecentHint" style="display: none;">
+            尚無最近播放紀錄，點擊下方本機專輯即可開始聆聽。
+          </div>
+        </div>
+
+        <!-- 2-3. 目前本機端擁有的專輯 -->
+        <div class="artist-section-block">
+          <div class="section-header">
+            <h2>💿 本機音樂庫收藏</h2>
+            <span class="section-count-badge" id="artistLocalAlbumsCount">0 張</span>
+          </div>
+          <div class="album-grid" id="artistLocalAlbumsGrid">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+
+        <!-- 2-4. 找尋 KKBOX, Tidal, Qobuz 等網站，列出本機沒有的專輯 -->
+        <div class="artist-section-block">
+          <div class="section-header">
+            <div class="header-with-tag">
+              <h2>🌐 線上專輯探索 (本機未收錄)</h2>
+              <div class="streaming-platforms-tags">
+                <span class="platform-tag tidal">Tidal</span>
+                <span class="platform-tag qobuz">Qobuz</span>
+                <span class="platform-tag kkbox">KKBOX</span>
+                <span class="platform-tag apple">Apple Music</span>
+                <span class="platform-tag spotify">Spotify</span>
+              </div>
+            </div>
+            <span class="section-count-badge" id="artistMissingAlbumsCount">載入中...</span>
+          </div>
+          <p class="section-desc">比對線上音樂資料庫，為您挖掘該歌手尚未收藏的經典專輯，點擊按鈕可直接前往 Tidal、Qobuz Hi-Res、KKBOX、Apple Music 或 Spotify 平台搜尋聆聽。</p>
+          
+          <div class="bio-loading" id="missingAlbumsLoading">
+            <span class="spinner"></span> 正在比對線上音樂庫 (Tidal / Qobuz / KKBOX 支援)...
+          </div>
+
+          <div class="album-grid missing-album-grid" id="artistMissingAlbumsGrid">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. TRACKS VIEW -->
+      <section id="viewTracks" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">所有曲目 Tracks</h1>
+            <span class="page-subtitle" id="tracksHeaderCount">共 0 首曲目</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btnPlayAllTracks">▶ 播放全部曲目</button>
+        </div>
+        <div class="tracklist-table-container">
+          <table class="tracklist-table" id="allTracksTable">
+            <thead>
+              <tr>
+                <th style="width: 45px;">#</th>
+                <th style="width: 38px;"></th>
+                <th>曲目名稱</th>
+                <th>演出者</th>
+                <th>專輯</th>
+                <th style="width: 140px;">格式規格</th>
+                <th style="width: 80px; text-align: right;">時長</th>
+              </tr>
+            </thead>
+            <tbody id="allTracksTbody">
+              <!-- Injected via JS -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 5. GENRES VIEW -->
+      <section id="viewGenres" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">曲風風格 Genres</h1>
+            <p class="page-subtitle" id="genresHeaderCount">共 0 個音樂曲風與流派，以專輯風格探索您的發燒音樂庫</p>
+          </div>
+        </div>
+        <div class="genre-grid" id="genresGrid">
+          <!-- Injected via JS -->
+        </div>
+      </section>
+
+      <!-- 6. STORAGE VIEW -->
+      <section id="viewStorage" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">本機音樂庫設定 Storage</h1>
+            <p class="page-subtitle">管理本地音樂儲存夾，自動監控並建立音訊母帶資料庫。</p>
+          </div>
+        </div>
+
+        <div class="storage-card">
+          <div class="storage-card-header">
+            <h3>掃描本機資料夾</h3>
+            <p>支援格式：FLAC (24/192 Hi-Res), WAV, AIFF, DSD/DSF, MP3, M4A, AAC, OGG</p>
+          </div>
+          <div class="storage-actions">
+            <button class="btn btn-primary" id="btnSelectFolder">
+              <span>📂 選擇音樂資料夾並掃描</span>
+            </button>
+          </div>
+          
+          <!-- Scan Progress Indicator -->
+          <div id="scanProgressBox" class="scan-progress-box" style="display: none;">
+            <div class="progress-info">
+              <span id="scanStatusLabel">正在分析無損音訊中...</span>
+              <span id="scanPercentLabel">0%</span>
+            </div>
+            <div class="progress-track">
+              <div id="scanProgressBar" class="progress-fill" style="width: 0%;"></div>
+            </div>
+            <div class="current-file-text" id="scanCurrentFile">掃描中...</div>
+          </div>
+
+          <div class="folder-list-header">已加入的資料夾：</div>
+          <div class="folder-list" id="scannedFoldersList">
+            <div class="empty-folder-hint">尚未加入任何音樂資料夾，請點擊上方按鈕選取包含音樂的檔案夾。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 7. FAVORITE ALBUMS VIEW -->
+      <section id="viewFavAlbums" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">最愛專輯 Favorite Albums</h1>
+            <span class="page-subtitle" id="favAlbumsHeaderCount">共 0 張最愛專輯</span>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-secondary btn-sm" id="btnPlayAllFavAlbums">▶ 播放全部最愛專輯</button>
+            <button class="btn btn-secondary btn-sm" id="btnShuffleFavAlbums">🔀 隨機播放</button>
+          </div>
+        </div>
+        <div class="album-grid" id="favAlbumsGrid">
+          <!-- Injected via JS -->
+        </div>
+        <div class="empty-hint" id="favAlbumsEmptyHint" style="display: none; padding: 48px; text-align: center;">
+          <div style="font-size: 36px; margin-bottom: 12px;">💿</div>
+          <div style="font-size: 15px; font-weight: 600; color: var(--text-main);">尚未收藏任何最愛專輯</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">在任何專輯卡片上點擊 ♡ 空心愛心圖示即可加入我的最愛。</div>
+        </div>
+      </section>
+
+      <!-- 8. FAVORITE TRACKS VIEW -->
+      <section id="viewFavTracks" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">最愛歌曲 Favorite Tracks</h1>
+            <span class="page-subtitle" id="favTracksHeaderCount">共 0 首最愛歌曲</span>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-primary btn-sm" id="btnPlayAllFavTracks">▶ 播放全部最愛歌曲</button>
+            <button class="btn btn-secondary btn-sm" id="btnShuffleFavTracks">🔀 隨機播放</button>
+          </div>
+        </div>
+        <div class="tracklist-table-container">
+          <table class="tracklist-table" id="favTracksTable">
+            <thead>
+              <tr>
+                <th style="width: 45px;">#</th>
+                <th style="width: 38px;"></th>
+                <th>曲目名稱</th>
+                <th>演出者</th>
+                <th>專輯</th>
+                <th style="width: 140px;">格式規格</th>
+                <th style="width: 80px; text-align: right;">時長</th>
+              </tr>
+            </thead>
+            <tbody id="favTracksTbody">
+              <!-- Injected via JS -->
+            </tbody>
+          </table>
+        </div>
+        <div class="empty-hint" id="favTracksEmptyHint" style="display: none; padding: 48px; text-align: center;">
+          <div style="font-size: 36px; margin-bottom: 12px;">💖</div>
+          <div style="font-size: 15px; font-weight: 600; color: var(--text-main);">尚未收藏任何最愛歌曲</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">在播放列左側愛心按鈕或曲目清單點擊 ♡ 即可收藏。</div>
+        </div>
+      </section>
+
+      <!-- 9. FAVORITE ARTISTS VIEW -->
+      <section id="viewFavArtists" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">最愛演出者 Favorite Artists</h1>
+            <span class="page-subtitle" id="favArtistsHeaderCount">共 0 位最愛演出者</span>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-secondary btn-sm" id="btnPlayAllFavArtists">▶ 播放最愛演出者歌曲</button>
+            <button class="btn btn-secondary btn-sm" id="btnShuffleFavArtists">🔀 隨機播放</button>
+          </div>
+        </div>
+        <div class="artist-grid" id="favArtistsGrid">
+          <!-- Injected via JS -->
+        </div>
+        <div class="empty-hint" id="favArtistsEmptyHint" style="display: none; padding: 48px; text-align: center;">
+          <div style="font-size: 36px; margin-bottom: 12px;">⭐</div>
+          <div style="font-size: 15px; font-weight: 600; color: var(--text-main);">尚未收藏任何最愛演出者</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">在演出者介紹頁面或演出者卡片上點擊 ⭐ 即可加入最愛演出者。</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Album Detail Overlay Modal (Roon Style) -->
+  <div id="albumDetailModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content album-detail-container">
+      <button class="btn-close-modal" id="btnCloseAlbumDetail">✕</button>
+      
+      <div class="album-detail-header">
+        <div class="album-detail-art-box">
+          <img id="detailCoverImg" src="" alt="Album Artwork" class="album-detail-art">
+          <span class="detail-format-badge" id="detailFormatBadge">FLAC 24/96</span>
+        </div>
+        <div class="album-detail-meta">
+          <div class="detail-tag">ALBUM • <span id="detailYear">2024</span></div>
+          <h1 class="detail-title" id="detailTitle">Album Title</h1>
+          <div class="detail-artist" id="detailArtist">Artist Name</div>
+          <div class="detail-specs" id="detailSpecs">
+            <span class="spec-chip">24-bit / 96kHz Lossless</span>
+            <span class="spec-chip">2 Channels (Stereo)</span>
+            <span class="spec-chip" id="detailGenre">Classical</span>
+          </div>
+          <div class="detail-actions">
+            <button class="btn btn-primary" id="btnPlayAlbumNow">▶ 播放專輯</button>
+            <button class="btn btn-secondary" id="btnShuffleAlbum">🔀 隨機播放</button>
+            <button class="btn btn-secondary" id="btnFavAlbumDetail">♡ 加入最愛</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 簡短專輯介紹 (網路上搜尋，轉換成繁體中文) -->
+      <div class="album-intro-section" id="albumIntroSection">
+        <div class="album-intro-header">
+          <div class="album-intro-title-wrap">
+            <h3 class="album-intro-title">📖 專輯介紹 Album Review</h3>
+            <span class="data-source-badge" id="albumIntroSourceBadge">資料來源：維基百科音樂資料庫</span>
+          </div>
+          <button class="btn-toggle-lang" id="btnToggleAlbumBioLang" style="display: none;" title="切換檢視原文或繁體中文翻譯">檢視原文</button>
+        </div>
+        <div class="album-intro-card" id="albumIntroCard">
+          <div class="bio-loading" id="albumBioLoading">
+            <span class="spinner"></span> 正在搜尋專輯背景資料並自動翻譯為繁體中文...
+          </div>
+          <p class="bio-text" id="albumBioText" style="display: none;"></p>
+        </div>
+      </div>
+
+      <div class="album-detail-tracklist">
+        <h3>曲目清單 (<span id="detailTrackCount">0</span> 首)</h3>
+        <table class="tracklist-table">
+          <thead>
+            <tr>
+              <th style="width: 45px;">#</th>
+              <th style="width: 38px;"></th>
+              <th>曲目名稱</th>
+              <th style="width: 140px;">格式</th>
+              <th style="width: 80px; text-align: right;">時長</th>
+            </tr>
+          </thead>
+          <tbody id="detailTracklistTbody">
+            <!-- Injected via JS -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 專輯元資料與製作資訊 (Album Credits & Metadata) -->
+      <div class="album-metadata-section" id="albumMetadataSection">
+        <div class="section-header" style="margin-bottom: 12px;">
+          <div class="header-with-tag">
+            <h3 style="font-size: 16px;">📀 專輯元資料與製作資訊 Album Credits & Metadata</h3>
+            <span class="metadata-source-badge" id="albumMetaSourceBadge">Audio Metadata</span>
+          </div>
+        </div>
+        <div class="album-meta-grid" id="albumMetaGrid">
+          <!-- Injected via JS -->
+        </div>
+      </div>
+
+      <!-- 同類型推薦專輯 (由歌曲 meta 資料判斷) -->
+      <div class="album-recommendations-section" id="albumRecommendationsSection">
+        <div class="section-header" style="margin-bottom: 12px;">
+          <div class="header-with-tag">
+            <h3 style="font-size: 16px;">✨ 同類型推薦專輯 Recommended Albums</h3>
+            <span class="recommend-reason-badge" id="recommendReasonBadge">依曲風與音樂類型推薦</span>
+          </div>
+          <span class="section-count-badge" id="recommendCountBadge">0 張推薦</span>
+        </div>
+        <p class="section-desc" id="recommendDesc" style="margin-bottom: 16px; font-size: 12px; color: var(--text-muted);">
+          根據此專輯的曲風標籤（<span id="recommendGenreTag" style="color: var(--accent-purple); font-weight: 600;">Genre</span>）與音訊元資料，為您發掘同風格精彩專輯。
+        </p>
+        <div class="album-grid recommend-album-grid" id="albumRecommendationsGrid">
+          <!-- Injected via JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audiophile Signal Path Modal (Roon Iconic Feature) -->
+  <div id="signalPathModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content signal-path-container">
+      <button class="btn-close-modal" id="btnCloseSignalPath">✕</button>
+      <div class="signal-path-header">
+        <span class="signal-dot purple"></span>
+        <h2>Signal Path (音訊路徑)</h2>
+        <span class="signal-status-pill" id="signalPathStatusPill">LOSSLESS BIT-PERFECT</span>
+      </div>
+      <p class="signal-sub">rooPlayer 標誌性功能：即時追蹤從原始音訊源到耳機/擴大機的音質還原路徑。</p>
+
+      <div class="signal-stages">
+        <div class="signal-stage">
+          <div class="stage-icon">💿</div>
+          <div class="stage-info">
+            <div class="stage-title" id="signalSourceTitle">FLAC 96kHz 24bit</div>
+            <div class="stage-desc" id="signalSourceDesc">原始母帶音訊源 (Bit-Perfect Lossless)</div>
+          </div>
+        </div>
+        <div class="signal-arrow">↓</div>
+        <div class="signal-stage">
+          <div class="stage-icon">⚡</div>
+          <div class="stage-info">
+            <div class="stage-title" id="signalEngineTitle">rooPlayer Core Audio Engine</div>
+            <div class="stage-desc" id="signalEngineDesc">64-bit 浮點無損混音核心，零採樣損失處理</div>
+          </div>
+        </div>
+        <div class="signal-arrow">↓</div>
+        <div class="signal-stage">
+          <div class="stage-icon" id="signalOutputIcon">🔊</div>
+          <div class="stage-info">
+            <div class="stage-title" id="signalOutputTitle">Windows WASAPI Exclusive / DirectSound</div>
+            <div class="stage-desc" id="signalOutputDesc">輸出至本機預設音訊裝置</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audio Output Devices / Zones Modal (DLNA / UPnP Discovery) -->
+  <div id="audioDeviceModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content audio-device-container">
+      <button class="btn-close-modal" id="btnCloseAudioDevice">✕</button>
+      <div class="device-modal-header">
+        <div class="device-title-wrap">
+          <span class="device-modal-icon">📡</span>
+          <div>
+            <h2>音訊輸出設備 Audio Output Zones</h2>
+            <p class="device-modal-sub">自動搜尋區網 DLNA / UPnP 串流節點與本機音訊端點</p>
+          </div>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="btnRefreshDevices">
+          <span class="refresh-spinner" id="deviceScanSpinner" style="display: none;">⏳</span>
+          <span>重新搜尋設備 🔄</span>
+        </button>
+      </div>
+
+      <!-- Direct IP Probe Bar -->
+      <div class="direct-ip-probe-box">
+        <div class="direct-ip-input-wrap">
+          <span class="direct-ip-icon">🎯</span>
+          <input type="text" id="inputDirectIp" class="direct-ip-input" placeholder="手動指定 IP 連線探測 (例如: 192.168.1.100)">
+        </div>
+        <button class="btn btn-primary btn-sm" id="btnProbeDirectIp">指定 IP 探測連線</button>
+      </div>
+
+      <div class="device-list-section">
+        <div class="device-section-title">💻 本機音訊端點</div>
+        <div class="device-card active" id="localAudioCard" data-device-id="local">
+          <div class="device-card-left">
+            <div class="device-avatar">💻</div>
+            <div class="device-info">
+              <div class="device-name">本機音訊 (此電腦)</div>
+              <div class="device-detail">Windows WASAPI Exclusive / DirectSound 核心</div>
+            </div>
+          </div>
+          <div class="device-card-right">
+            <span class="device-status-badge active" id="localBadge">播放中端點</span>
+          </div>
+        </div>
+
+        <div class="device-section-title" style="margin-top: 20px;">
+          <span>🌐 區網 DLNA / UPnP 串流設備 (<span id="dlnaDeviceCount">0</span>)</span>
+        </div>
+        <div class="dlna-devices-list" id="dlnaDevicesList">
+          <!-- Injected via JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Play Queue Slide-in Drawer -->
+  <div id="queueDrawer" class="queue-drawer">
+    <div class="queue-header">
+      <h3>播放隊列 (<span id="queueCount">0</span>)</h3>
+      <button class="btn-clear-queue" id="btnClearQueue">清空</button>
+      <button class="btn-close-queue" id="btnCloseQueue">✕</button>
+    </div>
+    <div class="queue-list" id="queueList">
+      <!-- Injected via JS -->
+    </div>
+  </div>
+
+  <!-- Bottom Audiophile Playback Bar (Roon Style) -->
+  <footer id="playerBar">
+    <!-- Left: Track info -->
+    <div class="player-left">
+      <div class="player-cover-box" id="playerCoverBox">
+        <img id="playerCoverImg" src="" alt="Cover" class="player-cover">
+      </div>
+      <div class="player-track-info">
+        <div class="player-title" id="playerTitle">未播放曲目</div>
+        <div class="player-artist" id="playerArtist">點選任意曲目開始聆聽</div>
+      </div>
+      <button class="btn-heart" id="btnPlayerHeart" title="加入最愛">♡</button>
+    </div>
+
+    <!-- Center: Signal path badge & controls -->
+    <div class="player-center">
+      <div class="player-top-indicator">
+        <button class="signal-path-btn" id="btnSignalPath" title="查看 rooPlayer 音訊路徑 (Signal Path)">
+          <span class="signal-light-dot"></span>
+          <span id="signalPathBadge">LOSSLESS | 24/96 FLAC</span>
+        </button>
+      </div>
+
+      <div class="player-controls">
+        <button id="btnShuffle" class="ctrl-btn" title="隨機播放">🔀</button>
+        <button id="btnPrev" class="ctrl-btn" title="上一首">⏮</button>
+        <button id="btnPlayPause" class="ctrl-btn ctrl-play" title="播放 / 暫停">▶</button>
+        <button id="btnNext" class="ctrl-btn" title="下一首">⏭</button>
+        <button id="btnRepeat" class="ctrl-btn" title="循環模式">🔁</button>
+      </div>
+
+      <div class="player-scrubber-box">
+        <span class="time-label" id="currentTimeLabel">0:00</span>
+        <div class="scrubber-bar" id="scrubberBar">
+          <div class="scrubber-fill" id="scrubberFill"></div>
+          <div class="scrubber-handle" id="scrubberHandle"></div>
+        </div>
+        <span class="time-label" id="totalTimeLabel">0:00</span>
+      </div>
+    </div>
+
+    <!-- Right: Zone Output, Volume & Queue -->
+    <div class="player-right">
+      <button id="btnAudioOutput" class="zone-btn" title="切換音訊輸出裝置 (本機 / DLNA / UPnP)">
+        <span class="zone-icon">🔊</span>
+        <span class="zone-name" id="currentZoneName">本機播放</span>
+      </button>
+      <button id="btnVolumeIcon" class="icon-btn" title="靜音切換">🔊</button>
+      <input type="range" id="volumeSlider" min="0" max="1" step="0.01" value="0.8" class="volume-slider">
+      <button id="btnToggleQueue" class="icon-btn" title="播放清單隊列">
+        <span class="queue-icon">☰</span>
+      </button>
+    </div>
+  </footer>
+
+  <!-- Hidden native HTML5 Audio element -->
+  <audio id="nativeAudio"></audio>
+
+  <script src="app.js"></script>
+</body>
+</html>
