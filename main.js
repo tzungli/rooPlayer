@@ -6,10 +6,15 @@ const http = require('http');
 const { spawn } = require('child_process');
 
 let ffmpegPath = null;
-try {
-  ffmpegPath = require('ffmpeg-static');
-} catch (e) {
-  console.warn('ffmpeg-static not found:', e);
+const customBinFfmpeg = path.join(__dirname, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+if (fs.existsSync(customBinFfmpeg)) {
+  ffmpegPath = customBinFfmpeg;
+} else {
+  try {
+    ffmpegPath = require('ffmpeg-static');
+  } catch (e) {
+    console.warn('ffmpeg-static not found:', e);
+  }
 }
 
 const DlnaManager = require('./dlna-manager');
@@ -135,6 +140,58 @@ function startDsdStreamingServer() {
   dsdStreamServer = http.createServer((req, res) => {
     try {
       const reqUrl = new URL(req.url, 'http://127.0.0.1');
+      if (reqUrl.pathname === '/sox-stream') {
+        const filePath = reqUrl.searchParams.get('file');
+        const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
+        const sampleRate = parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
+        const precision = parseInt(reqUrl.searchParams.get('precision') || '28', 10);
+
+        if (!filePath || !fs.existsSync(filePath)) {
+          res.writeHead(404);
+          res.end('File not found');
+          return;
+        }
+
+        const ffmpegArgs = [];
+        if (startSec > 0) {
+          ffmpegArgs.push('-ss', startSec.toString());
+        }
+        ffmpegArgs.push(
+          '-i', filePath,
+          '-af', `aresample=resampler=soxr:precision=${precision}:cheby=1:osr=${sampleRate}`,
+          '-c:a', 'flac',
+          '-sample_fmt', 's32',
+          '-ar', sampleRate.toString(),
+          '-f', 'flac',
+          'pipe:1'
+        );
+
+        res.writeHead(200, {
+          'Content-Type': 'audio/flac',
+          'Access-Control-Allow-Origin': '*',
+          'Transfer-Encoding': 'chunked'
+        });
+
+        const proc = spawn(ffmpegPath, ffmpegArgs, { windowsHide: true });
+        proc.stdout.pipe(res);
+        proc.stderr.on('data', () => {});
+
+        proc.on('error', (err) => {
+          console.error('FFmpeg SoX transcode process error:', err);
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end('SoX transcode error');
+          }
+        });
+
+        req.on('close', () => {
+          try {
+            proc.kill();
+          } catch (e) {}
+        });
+        return;
+      }
+
       if (reqUrl.pathname !== '/dsd-stream') {
         res.writeHead(404);
         res.end('Not found');
@@ -188,7 +245,7 @@ function startDsdStreamingServer() {
         } catch (e) {}
       });
     } catch (err) {
-      console.error('DSD stream server error:', err);
+      console.error('Audio stream server error:', err);
       if (!res.headersSent) {
         res.writeHead(500);
         res.end('Server error');
@@ -198,7 +255,7 @@ function startDsdStreamingServer() {
 
   dsdStreamServer.listen(0, '127.0.0.1', () => {
     dsdStreamPort = dsdStreamServer.address().port;
-    console.log(`DSD High-Res Streaming Server running on port ${dsdStreamPort}`);
+    console.log(`High-Res Audio Streaming Server (DSD & SoX) running on port ${dsdStreamPort}`);
   });
 }
 
@@ -229,6 +286,17 @@ ipcMain.handle('audio:getDsdStreamUrl', (event, filePath, startSec = 0) => {
   params.set('file', filePath);
   if (startSec > 0) params.set('start', startSec.toString());
   return `http://127.0.0.1:${dsdStreamPort}/dsd-stream?${params.toString()}`;
+});
+
+// SoX Resampler Stream URL helper IPC
+ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, precision = 28) => {
+  if (!dsdStreamPort) return '';
+  const params = new URLSearchParams();
+  params.set('file', filePath);
+  if (startSec > 0) params.set('start', startSec.toString());
+  params.set('rate', sampleRate.toString());
+  params.set('precision', precision.toString());
+  return `http://127.0.0.1:${dsdStreamPort}/sox-stream?${params.toString()}`;
 });
 
 function getDurationWithFfmpeg(filePath) {
@@ -302,9 +370,9 @@ ipcMain.handle('dlna:selectDevice', (event, deviceId) => {
   return 'local';
 });
 
-ipcMain.handle('dlna:playTrack', async (event, deviceId, track, startSec = 0) => {
+ipcMain.handle('dlna:playTrack', async (event, deviceId, track, startSec = 0, dspOptions = null) => {
   if (dlnaManager) {
-    return await dlnaManager.playTrack(deviceId, track, startSec);
+    return await dlnaManager.playTrack(deviceId, track, startSec, dspOptions);
   }
   return { success: false };
 });
@@ -722,3 +790,26 @@ ipcMain.handle('library:removeFolder', async (event, folderPath) => {
   fs.writeFileSync(LIBRARY_FILE, JSON.stringify(data), 'utf-8');
   return data;
 });
+
+ipcMain.handle('library:updateAlbumArtist', async (event, albumTitle, artistName) => {
+  try {
+    const existing = loadLibraryData();
+    let changed = false;
+    (existing.tracks || []).forEach(t => {
+      if (t.album === albumTitle && (!t.artist || t.artist === 'Unknown Artist' || t.artist === '未知演出者' || t.artist === '未知歌手' || t.artist.trim().toLowerCase() === 'unknown')) {
+        t.artist = artistName;
+        if (!t.albumArtist || t.albumArtist === 'Unknown Artist') t.albumArtist = artistName;
+        changed = true;
+      }
+    });
+    if (changed) {
+      existing.updatedAt = new Date().toISOString();
+      fs.writeFileSync(LIBRARY_FILE, JSON.stringify(existing), 'utf-8');
+    }
+    return { success: true, changed };
+  } catch (err) {
+    console.error('Failed to update album artist:', err);
+    return { success: false, error: err.message };
+  }
+});
+

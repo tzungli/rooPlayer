@@ -11,3 +11,4 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+bin/

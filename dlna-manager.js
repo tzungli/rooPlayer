@@ -73,6 +73,17 @@ class DlnaManager extends EventEmitter {
             return;
           }
           this.handleDsdTranscodeStream(req, res, filePath, startSec);
+        } else if (pathname === '/sox-stream') {
+          const filePath = reqUrl.searchParams.get('file');
+          const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
+          const sampleRate = parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
+          const precision = parseInt(reqUrl.searchParams.get('precision') || '28', 10);
+          if (!filePath || !fs.existsSync(filePath)) {
+            res.writeHead(404);
+            res.end('File not found');
+            return;
+          }
+          this.handleSoxTranscodeStream(req, res, filePath, startSec, sampleRate, precision);
         } else if (pathname === '/cover') {
           const filePath = reqUrl.searchParams.get('file');
           if (!filePath || !fs.existsSync(filePath)) {
@@ -184,6 +195,54 @@ class DlnaManager extends EventEmitter {
 
     proc.on('error', (err) => {
       console.error('[DLNA] DSD transcode process error:', err);
+    });
+
+    req.on('close', () => {
+      try {
+        proc.kill();
+      } catch (e) {}
+    });
+  }
+
+  // Handle SoX Resampler (libsoxr) on-the-fly audiophile upsampling to 24-bit Hi-Res FLAC
+  handleSoxTranscodeStream(req, res, filePath, startSec = 0, sampleRate = 192000, precision = 28) {
+    if (!this.ffmpegPath) {
+      res.writeHead(500);
+      res.end('FFmpeg not available for SoX Resampling');
+      return;
+    }
+
+    const ffmpegArgs = [];
+    if (startSec > 0) {
+      ffmpegArgs.push('-ss', startSec.toString());
+    }
+    ffmpegArgs.push(
+      '-i', filePath,
+      '-af', `aresample=resampler=soxr:precision=${precision}:cheby=1:osr=${sampleRate}`,
+      '-c:a', 'flac',
+      '-sample_fmt', 's32',
+      '-ar', sampleRate.toString(),
+      '-f', 'flac',
+      'pipe:1'
+    );
+
+    res.writeHead(200, {
+      'Content-Type': 'audio/flac',
+      'Access-Control-Allow-Origin': '*',
+      'Transfer-Encoding': 'chunked'
+    });
+
+    const proc = spawn(this.ffmpegPath, ffmpegArgs, { windowsHide: true });
+    this.currentDsdProcess = proc;
+    proc.stdout.pipe(res);
+    proc.stderr.on('data', () => {});
+
+    proc.on('error', (err) => {
+      console.error('[DLNA] SoX Resampler transcode process error:', err);
+      if (!res.headersSent) {
+        res.writeHead(500);
+        res.end('SoX transcode error');
+      }
     });
 
     req.on('close', () => {
@@ -623,7 +682,7 @@ class DlnaManager extends EventEmitter {
   }
 
   // Play a track on a DLNA renderer
-  async playTrack(deviceId, track, startSec = 0) {
+  async playTrack(deviceId, track, startSec = 0, dspOptions = null) {
     const dev = this.devices.get(deviceId);
     if (!dev) throw new Error('DLNA Device not found');
 
@@ -637,6 +696,11 @@ class DlnaManager extends EventEmitter {
 
     if (isDsd) {
       streamUrl = `http://${localIp}:${this.streamingPort}/dsd-stream?file=${encodeURIComponent(track.filePath)}&start=${startSec}`;
+      mimeType = 'audio/flac';
+    } else if (dspOptions && dspOptions.enabled) {
+      const targetRate = dspOptions.sampleRate || 192000;
+      const precision = dspOptions.precision || 28;
+      streamUrl = `http://${localIp}:${this.streamingPort}/sox-stream?file=${encodeURIComponent(track.filePath)}&start=${startSec}&rate=${targetRate}&precision=${precision}`;
       mimeType = 'audio/flac';
     } else {
       streamUrl = `http://${localIp}:${this.streamingPort}/stream?file=${encodeURIComponent(track.filePath)}`;
@@ -699,8 +763,8 @@ class DlnaManager extends EventEmitter {
        <Speed>1</Speed>`
     );
 
-    // 3. If seeking needed on non-DSD file
-    if (startSec > 0 && !isDsd) {
+    // 3. If seeking needed on non-DSD/non-DSP file (since DSD & SoX stream handle -ss directly in FFmpeg)
+    if (startSec > 0 && !isDsd && (!dspOptions || !dspOptions.enabled)) {
       await this.seek(deviceId, startSec).catch(() => {});
     }
 

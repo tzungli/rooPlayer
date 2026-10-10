@@ -150,12 +150,12 @@
 
       <!-- 2. ALBUMS VIEW -->
       <section id="viewAlbums" class="content-view">
-        <div class="view-header">
+        <div class="view-header" id="albumsViewHeader">
           <div>
-            <h1 class="page-title">專輯庫 Albums</h1>
+            <h1 class="page-title" id="albumsPageTitle">專輯庫 Albums</h1>
             <span class="page-subtitle" id="albumsHeaderCount">共 0 張專輯</span>
           </div>
-          <div class="filter-bar">
+          <div class="filter-bar" id="albumsFilterBar">
             <div class="pill-group" id="albumFilters">
               <button class="pill active" data-filter="all">全部</button>
               <button class="pill" data-filter="hires">Hi-Res 24-bit</button>
@@ -167,10 +167,80 @@
               <option value="artist">依演出者 A-Z</option>
               <option value="year">依發行年份 (新到舊)</option>
               <option value="tracks">依曲目數量</option>
+              <option value="playCount">依最常播放 (播放次數)</option>
             </select>
+            <div class="cover-size-control" id="albumCoverSizeControl">
+              <span class="size-control-label">封面尺寸：</span>
+              <div class="pill-group size-pill-group" id="albumCoverSizePills">
+                <button class="pill size-pill" data-cover-size="small" title="小尺寸封面">小</button>
+                <button class="pill size-pill active" data-cover-size="medium" title="中尺寸封面 (預設)">中</button>
+                <button class="pill size-pill" data-cover-size="large" title="大尺寸封面">大</button>
+              </div>
+            </div>
           </div>
         </div>
         <div id="genreFilterBannerBox"></div>
+
+        <!-- Search Active Results Container (Shown when searching) -->
+        <div id="searchResultsContainer" style="display: none;">
+          <!-- Search Header & Tab Controls -->
+          <div class="search-results-summary-bar">
+            <div class="search-summary-text">
+              <span class="search-summary-label">搜尋關鍵字：</span>
+              <span class="search-query-badge" id="searchQueryBadge"></span>
+              <span class="search-stat-text" id="searchStatText"></span>
+            </div>
+            <div class="pill-group search-filter-pills" id="searchFilterPills">
+              <button class="pill active" data-search-tab="all">全部結果</button>
+              <button class="pill" data-search-tab="local">📁 本機端專輯</button>
+              <button class="pill" data-search-tab="streaming">🌐 線上串流 (KKBOX • TIDAL • QOBUZ • SPOTIFY)</button>
+            </div>
+          </div>
+
+          <!-- Section 1: Local Albums -->
+          <div class="search-section" id="searchLocalSection">
+            <div class="search-section-header">
+              <div class="search-section-title">
+                <span class="search-section-icon">📁</span>
+                <span>本機端音樂庫專輯</span>
+                <span class="badge" id="searchLocalCountBadge">0</span>
+              </div>
+            </div>
+            <div class="album-grid" id="searchLocalAlbumsGrid"></div>
+            <div class="search-empty-box" id="searchLocalEmptyBox" style="display: none;">
+              未在本機音樂庫找到相符的專輯，您可透過下方各大線上串流平台進行搜尋與試聽。
+            </div>
+          </div>
+
+          <!-- Section 2: Online Streaming Platforms Search -->
+          <div class="search-section" id="searchStreamingSection">
+            <div class="search-section-header">
+              <div>
+                <div class="search-section-title">
+                  <span class="search-section-icon">🌐</span>
+                  <span>線上串流搜尋結果</span>
+                  <span class="badge highlight">KKBOX • TIDAL • QOBUZ • SPOTIFY</span>
+                </div>
+                <div class="search-section-desc">線上各大串流平台相關作品，可點選各平台按鈕前往收聽</div>
+              </div>
+            </div>
+
+            <!-- Online Catalog Matching Albums -->
+            <div class="streaming-catalog-block" id="streamingCatalogBlock" style="margin-top: 0;">
+              <div class="streaming-catalog-header">
+                <h3>線上相關專輯作品</h3>
+                <span id="streamingCatalogCount">檢索中...</span>
+              </div>
+              <div class="streaming-loading-box" id="streamingLoadingBox">
+                <span class="spinner"></span> 正在連線檢索 KKBOX、TIDAL、QOBUZ、SPOTIFY 線上音樂作品...
+              </div>
+              <div class="album-grid streaming-catalog-grid" id="streamingCatalogGrid">
+                <!-- Injected via JS -->
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="album-grid" id="allAlbumsGrid">
           <!-- Injected via JS -->
         </div>
@@ -296,7 +366,16 @@
             <h1 class="page-title">所有曲目 Tracks</h1>
             <span class="page-subtitle" id="tracksHeaderCount">共 0 首曲目</span>
           </div>
-          <button class="btn btn-secondary btn-sm" id="btnPlayAllTracks">▶ 播放全部曲目</button>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            <select id="trackSortSelect" class="select-dropdown">
+              <option value="default">預設排序</option>
+              <option value="playCount">依最常播放 (播放次數)</option>
+              <option value="title">依曲目名稱 A-Z</option>
+              <option value="artist">依演出者 A-Z</option>
+              <option value="duration">依曲目長度</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" id="btnPlayAllTracks">▶ 播放全部曲目</button>
+          </div>
         </div>
         <div class="tracklist-table-container">
           <table class="tracklist-table" id="allTracksTable">
@@ -459,12 +538,22 @@
       <button class="btn-close-modal" id="btnCloseAlbumDetail">✕</button>
       
       <div class="album-detail-header">
-        <div class="album-detail-art-box">
-          <img id="detailCoverImg" src="" alt="Album Artwork" class="album-detail-art">
-          <span class="detail-format-badge" id="detailFormatBadge">FLAC 24/96</span>
+        <div class="detail-cover-column">
+          <div class="album-detail-art-box" id="detailCoverArtBox">
+            <img id="detailCoverImg" src="" alt="Album Artwork" class="album-detail-art">
+            <span class="detail-format-badge" id="detailFormatBadge">FLAC 24/96</span>
+          </div>
+          <div class="detail-cover-size-bar">
+            <span class="detail-size-label">封面尺寸：</span>
+            <div class="pill-group detail-size-pills" id="detailCoverSizePills">
+              <button class="pill size-pill" data-detail-size="small" title="小尺寸封面">小</button>
+              <button class="pill size-pill active" data-detail-size="medium" title="中尺寸封面 (預設)">中</button>
+              <button class="pill size-pill" data-detail-size="large" title="大尺寸封面">大</button>
+            </div>
+          </div>
         </div>
         <div class="album-detail-meta">
-          <div class="detail-tag">ALBUM • <span id="detailYear">2024</span></div>
+          <div class="detail-tag">ALBUM</div>
           <h1 class="detail-title" id="detailTitle">Album Title</h1>
           <div class="detail-artist" id="detailArtist">Artist Name</div>
           <div class="detail-specs" id="detailSpecs">
@@ -547,16 +636,94 @@
     </div>
   </div>
 
-  <!-- Audiophile Signal Path Modal (Roon Iconic Feature) -->
+  <!-- Now Playing Modal: Album Artwork, Playlist & Online Lyrics -->
+  <div id="nowPlayingModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content now-playing-modal-container">
+      <button class="btn-close-modal" id="btnCloseNowPlaying" title="關閉視窗 (Esc)">✕</button>
+
+      <!-- Modal Top Bar -->
+      <div class="now-playing-header">
+        <div class="now-playing-header-left">
+          <span class="now-playing-badge">NOW PLAYING</span>
+          <span class="now-playing-subtitle">正在播放詳情與歌詞</span>
+        </div>
+        <div class="now-playing-source-tag" id="nowPlayingSourceTag">母帶音訊串流</div>
+      </div>
+
+      <!-- Main 3-Column Layout -->
+      <div class="now-playing-grid">
+        <!-- 1. Left: Cover Art & Playback Controls -->
+        <div class="now-playing-col-left">
+          <div class="now-playing-art-wrap">
+            <img id="nowPlayingCoverImg" src="" alt="Album Artwork" class="now-playing-art-img">
+            <span class="detail-format-badge" id="nowPlayingFormatBadge">FLAC 24/96</span>
+          </div>
+
+          <div class="now-playing-meta">
+            <h2 class="now-playing-track-title" id="nowPlayingTrackTitle">曲目名稱</h2>
+            <div class="now-playing-artist-name clickable-artist" id="nowPlayingArtistName" title="點擊查看演出者簡介">演出者</div>
+            <div class="now-playing-album-name clickable-album" id="nowPlayingAlbumName" title="點擊查看專輯詳情">專輯名稱</div>
+          </div>
+
+          <!-- Mini Player Bar inside Modal -->
+          <div class="now-playing-controls-box">
+            <div class="now-playing-progress-wrap">
+              <span class="now-playing-time" id="nowPlayingCurTime">0:00</span>
+              <div class="now-playing-scrubber" id="nowPlayingScrubber">
+                <div class="now-playing-scrubber-fill" id="nowPlayingScrubberFill"></div>
+              </div>
+              <span class="now-playing-time" id="nowPlayingTotalTime">0:00</span>
+            </div>
+
+            <div class="now-playing-buttons">
+              <button class="now-playing-btn" id="btnNowPlayingPrev" title="上一首">⏮</button>
+              <button class="now-playing-btn btn-play-large" id="btnNowPlayingPlayPause" title="播放 / 暫停">▶</button>
+              <button class="now-playing-btn" id="btnNowPlayingNext" title="下一首">⏭</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Middle: Album Playlist / Tracklist -->
+        <div class="now-playing-col-middle">
+          <div class="now-playing-panel-title">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span>🎵</span>
+              <span style="font-weight: 700;">專輯播放列表</span>
+            </div>
+            <span class="now-playing-count-pill" id="nowPlayingTracklistCount">0 首歌曲</span>
+          </div>
+          <div class="now-playing-tracklist-scroll" id="nowPlayingTracklistContainer">
+            <!-- Dynamic Track items -->
+          </div>
+        </div>
+
+        <!-- 3. Right: Online Lyrics -->
+        <div class="now-playing-col-right">
+          <div class="now-playing-panel-title">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span>📜</span>
+              <span style="font-weight: 700;">動態歌詞 Lyrics</span>
+            </div>
+            <span class="now-playing-lyric-source" id="nowPlayingLyricSource">正在連線搜尋...</span>
+          </div>
+          <div class="now-playing-lyrics-container" id="nowPlayingLyricsContainer">
+            <!-- Dynamic Lyrics (synced or plain or empty) -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audiophile Signal Path Modal (Roon Iconic Feature with SoX Resampler DSP) -->
   <div id="signalPathModal" class="modal-overlay" style="display: none;">
     <div class="modal-content signal-path-container">
       <button class="btn-close-modal" id="btnCloseSignalPath">✕</button>
       <div class="signal-path-header">
-        <span class="signal-dot purple"></span>
+        <span class="signal-dot purple" id="signalPathDot"></span>
         <h2>Signal Path (音訊路徑)</h2>
         <span class="signal-status-pill" id="signalPathStatusPill">LOSSLESS BIT-PERFECT</span>
       </div>
-      <p class="signal-sub">rooPlayer 標誌性功能：即時追蹤從原始音訊源到耳機/擴大機的音質還原路徑。</p>
+      <p class="signal-sub">rooPlayer 標誌性功能：即時追蹤從原始音訊源到耳機/擴大機的音質還原路徑與 DSP 升頻處理。</p>
 
       <div class="signal-stages">
         <div class="signal-stage">
@@ -566,6 +733,20 @@
             <div class="stage-desc" id="signalSourceDesc">原始母帶音訊源 (Bit-Perfect Lossless)</div>
           </div>
         </div>
+
+        <!-- Dynamic SoX DSP Resampler Stage -->
+        <div class="signal-arrow sox-dsp-element" id="signalSoxArrow" style="display: none;">↓</div>
+        <div class="signal-stage sox-dsp-element sox-stage-highlight" id="signalSoxStage" style="display: none;">
+          <div class="stage-icon">🎛️</div>
+          <div class="stage-info">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <div class="stage-title" id="signalSoxTitle">SoX Resampler (libsoxr VHQ)</div>
+              <span class="stage-badge-dsp">DSP ACTIVE</span>
+            </div>
+            <div class="stage-desc" id="signalSoxDesc">28-bit VHQ 超高精度升頻：44.1 kHz ➔ 176.4 kHz (4x 整數倍頻)</div>
+          </div>
+        </div>
+
         <div class="signal-arrow">↓</div>
         <div class="signal-stage">
           <div class="stage-icon">⚡</div>
@@ -580,6 +761,60 @@
           <div class="stage-info">
             <div class="stage-title" id="signalOutputTitle">Windows WASAPI Exclusive / DirectSound</div>
             <div class="stage-desc" id="signalOutputDesc">輸出至本機預設音訊裝置</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DSP SoX Resampler Control Panel -->
+      <div class="dsp-sox-card">
+        <div class="dsp-sox-header">
+          <div class="dsp-sox-title-wrap">
+            <span class="dsp-sox-icon">🎛️</span>
+            <div>
+              <div class="dsp-sox-title">SoX Resampler (libsoxr) 升頻引擎</div>
+              <div class="dsp-sox-desc">發燒級 64 位元浮點即時超取樣升頻濾波器，拓展音場細節與瞬態還原</div>
+            </div>
+          </div>
+          <label class="switch-toggle" title="啟用/關閉 SoX 升頻引擎">
+            <input type="checkbox" id="toggleSoxDsp">
+            <span class="slider-round"></span>
+          </label>
+        </div>
+
+        <div class="dsp-sox-body" id="dspSoxBody">
+          <!-- Target Sample Rate Selection -->
+          <div class="dsp-option-group">
+            <div class="dsp-option-label">
+              <span>目標升頻規格 (Target Sample Rate)</span>
+              <span class="dsp-hint-badge" id="dspActiveRateHint">4x 整數倍頻</span>
+            </div>
+            <div class="dsp-pill-selector" id="dspRateSelector">
+              <button class="dsp-pill active" data-rate-mode="4x" title="44.1k➔176.4k, 48k➔192k (發燒推薦：整數倍頻相位最純淨)">4x 整數倍頻 (推薦)</button>
+              <button class="dsp-pill" data-rate-mode="2x" title="44.1k➔88.2k, 48k➔96k (整數 2 倍超取樣)">2x 整數倍頻</button>
+              <button class="dsp-pill" data-rate-mode="192k" title="固定升頻至 192 kHz / 24-bit">固定 192 kHz</button>
+              <button class="dsp-pill" data-rate-mode="384k" title="固定升頻至 384 kHz / 24-bit (DXD 頂級解碼)">固定 384 kHz</button>
+              <button class="dsp-pill" data-rate-mode="96k" title="固定升頻至 96 kHz / 24-bit">固定 96 kHz</button>
+            </div>
+          </div>
+
+          <!-- Filter Precision Selection -->
+          <div class="dsp-option-group">
+            <div class="dsp-option-label">
+              <span>濾波精度 (Filter Precision)</span>
+              <span class="dsp-hint-badge" id="dspActivePrecisionHint">28-bit VHQ</span>
+            </div>
+            <div class="dsp-pill-selector" id="dspPrecisionSelector">
+              <button class="dsp-pill active" data-precision="28" title="SoX Very High Quality (28-bit，訊噪比高達 ~175 dB)">28-bit VHQ (極致發燒)</button>
+              <button class="dsp-pill" data-precision="33" title="SoX Ultra Precision (33-bit 最高位元運算精度)">33-bit Ultra (最高位階)</button>
+              <button class="dsp-pill" data-precision="20" title="SoX High Quality (20-bit 快速高解析)">20-bit HQ (標準高解析)</button>
+            </div>
+          </div>
+
+          <!-- Feature Note -->
+          <div class="dsp-info-footer">
+            <span class="dsp-info-tag">✓ Chebyshev 等波紋通帶</span>
+            <span class="dsp-info-tag">✓ 24-bit Hi-Res FLAC 串流</span>
+            <span class="dsp-info-tag">✓ 零相位失真還原</span>
           </div>
         </div>
       </div>
@@ -654,8 +889,9 @@
   <footer id="playerBar">
     <!-- Left: Track info -->
     <div class="player-left">
-      <div class="player-cover-box" id="playerCoverBox">
+      <div class="player-cover-box" id="playerCoverBox" title="點擊展開專輯封面、播放列表與動態歌詞">
         <img id="playerCoverImg" src="" alt="Cover" class="player-cover">
+        <div class="player-cover-expand-hint" title="展開播放詳情與歌詞">⛶</div>
       </div>
       <div class="player-track-info">
         <div class="player-title" id="playerTitle">未播放曲目</div>

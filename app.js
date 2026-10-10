@@ -25,6 +25,7 @@ const state = {
   recentlyPlayedAlbums: [],
   activeFilter: 'all',
   sortBy: 'title',
+  trackSortBy: 'default',
   history: ['overview'],
   historyIndex: 0,
   activeAudioZone: 'local',
@@ -36,7 +37,21 @@ const state = {
     albums: [],
     tracks: [],
     artists: []
-  }
+  },
+  albumCoverSize: localStorage.getItem('rooplayer_album_cover_size') || 'medium',
+  detailCoverSize: localStorage.getItem('rooplayer_detail_cover_size') || 'medium',
+  dsp: (() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('rooplayer_dsp_settings') || '{}');
+      return {
+        enabled: saved.enabled === true,
+        rateMode: saved.rateMode || '4x',
+        precision: saved.precision || 28
+      };
+    } catch (e) {
+      return { enabled: false, rateMode: '4x', precision: 28 };
+    }
+  })()
 };
 
 // SVG Vinyl/Cover Generator for Showcase Albums
@@ -338,7 +353,9 @@ async function initApp() {
   setupScannerEvents();
   setupFavoritesEvents();
   setupSearch();
+  setupCoverSizeControls();
   initAudioZones();
+  initDspControls();
 
   // Load saved library or fall back to showcase demo data
   let saved = null;
@@ -432,6 +449,255 @@ function recordRecentlyPlayed(album) {
   if (recent.length > 30) recent = recent.slice(0, 30);
   localStorage.setItem('roon_recent_albums', JSON.stringify(recent));
   state.recentlyPlayedAlbums = recent;
+}
+
+// ----------------- Play Count Tracker -----------------
+function getPlayStats() {
+  try {
+    const raw = localStorage.getItem('rooplayer_play_stats');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return { albums: {}, tracks: {} };
+}
+
+function savePlayStats(stats) {
+  try {
+    localStorage.setItem('rooplayer_play_stats', JSON.stringify(stats));
+  } catch (e) {}
+}
+
+function recordPlayCount(track, album) {
+  if (!track) return;
+  const stats = getPlayStats();
+  if (!stats.albums) stats.albums = {};
+  if (!stats.tracks) stats.tracks = {};
+
+  const trackKey = track.id || `${track.title}___${track.artist}`;
+  stats.tracks[trackKey] = (stats.tracks[trackKey] || 0) + 1;
+
+  const albKey = album ? (album.id || `${album.title}___${album.artist}`) : `${track.album}___${track.artist}`;
+  stats.albums[albKey] = (stats.albums[albKey] || 0) + 1;
+
+  savePlayStats(stats);
+}
+
+function getAlbumPlayCount(album) {
+  if (!album) return 0;
+  const stats = getPlayStats();
+  const albKey = album.id || `${album.title}___${album.artist}`;
+  const directCount = (stats.albums && stats.albums[albKey]) || 0;
+  let trackSum = 0;
+  if (album.tracks && album.tracks.length) {
+    album.tracks.forEach(t => {
+      const tKey = t.id || `${t.title}___${t.artist}`;
+      trackSum += (stats.tracks && stats.tracks[tKey]) || 0;
+    });
+  }
+  return Math.max(directCount, trackSum);
+}
+
+function getTrackPlayCount(track) {
+  if (!track) return 0;
+  const stats = getPlayStats();
+  const trackKey = track.id || `${track.title}___${track.artist}`;
+  return (stats.tracks && stats.tracks[trackKey]) || 0;
+}
+
+// ----------------- Online Unknown Artist Resolver -----------------
+function isUnknownArtist(artist) {
+  if (!artist) return true;
+  const s = String(artist).trim().toLowerCase();
+  return (
+    s === '' ||
+    s === 'unknown' ||
+    s === 'unknown artist' ||
+    s === 'unknown artists' ||
+    s === 'unknown album' ||
+    s === '未知演出者' ||
+    s === '未知歌手' ||
+    s === '未知' ||
+    s === 'undefined' ||
+    s === 'null'
+  );
+}
+
+function cleanAlbumTitleForSearch(title) {
+  if (!title) return '';
+  let cleaned = String(title)
+    .replace(/\[(?:flac|dsd|dsf|hi-res|remaster|24bit|24\/[0-9]+|cd[0-9]*|dff|wav|lossless)[^\]]*\]/gi, '')
+    .replace(/\((?:remaster|deluxe|expanded|bonus|edition|cd[0-9]*|dff|lossless)[^\)]*\)/gi, '')
+    .replace(/\b(?:19|20)\d{2}\b/g, '')
+    .replace(/\(\s*\)/g, '')
+    .replace(/\[\s*\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || title;
+}
+
+const resolvedArtistCache = new Map();
+
+function getCachedResolvedArtist(albumTitle) {
+  if (!albumTitle) return null;
+  const key = cleanAlbumTitleForSearch(albumTitle).toLowerCase();
+  if (resolvedArtistCache.has(key)) return resolvedArtistCache.get(key);
+  try {
+    const raw = localStorage.getItem('rooplayer_resolved_artists');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed[key]) {
+        resolvedArtistCache.set(key, parsed[key]);
+        return parsed[key];
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+function setCachedResolvedArtist(albumTitle, artistName) {
+  if (!albumTitle || !artistName) return;
+  const key = cleanAlbumTitleForSearch(albumTitle).toLowerCase();
+  resolvedArtistCache.set(key, artistName);
+  try {
+    const raw = localStorage.getItem('rooplayer_resolved_artists');
+    const store = raw ? JSON.parse(raw) : {};
+    store[key] = artistName;
+    localStorage.setItem('rooplayer_resolved_artists', JSON.stringify(store));
+  } catch (e) {}
+}
+
+async function findArtistByAlbumTitleOnline(albumTitle) {
+  if (!albumTitle) return null;
+  const cached = getCachedResolvedArtist(albumTitle);
+  if (cached) return cached;
+
+  const cleanTitle = cleanAlbumTitleForSearch(albumTitle);
+  if (!cleanTitle || cleanTitle.length < 2) return null;
+
+  // 1. Try MusicBrainz Release API
+  try {
+    const mbUrl = `https://musicbrainz.org/ws/2/release/?query=release:${encodeURIComponent(cleanTitle)}&fmt=json&limit=5`;
+    const res = await fetch(mbUrl, { headers: { 'User-Agent': 'rooPlayer/1.0' } });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.releases && data.releases.length > 0) {
+        for (const rel of data.releases) {
+          if (rel['artist-credit'] && rel['artist-credit'].length > 0) {
+            const artistName = rel['artist-credit'].map(a => a.name).filter(Boolean).join(', ');
+            if (artistName && !isUnknownArtist(artistName) && artistName.toLowerCase() !== 'various artists') {
+              setCachedResolvedArtist(albumTitle, artistName);
+              return artistName;
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 2. Try iTunes Search API
+  try {
+    const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=album&limit=5`;
+    const res = await fetch(itunesUrl);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.results && data.results.length > 0) {
+        for (const r of data.results) {
+          if (r.artistName && !isUnknownArtist(r.artistName) && r.artistName.toLowerCase() !== 'various artists') {
+            setCachedResolvedArtist(albumTitle, r.artistName);
+            return r.artistName;
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 3. Try Wikipedia Search API
+  try {
+    const wikiUrl = `https://zh.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(cleanTitle + ' 專輯')}&format=json&utf8=1`;
+    const res = await fetch(wikiUrl, { headers: { 'User-Agent': 'rooPlayer/1.0' } });
+    if (res.ok) {
+      const data = await res.json();
+      const hits = data.query?.search;
+      if (hits && hits.length > 0) {
+        for (const hit of hits) {
+          const text = hit.snippet || '';
+          const m = text.match(/(?:歌手|音樂人|由)\s*([A-Za-z\u4e00-\u9fa5\s·]{2,15}?)(?:發行|製作|的第|於|推出)/);
+          if (m && m[1]) {
+            const cand = m[1].replace(/<[^>]+>/g, '').trim();
+            if (cand && !isUnknownArtist(cand) && cand.length >= 2 && cand.length <= 25) {
+              setCachedResolvedArtist(albumTitle, cand);
+              return cand;
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  return null;
+}
+
+function applyResolvedArtistToAlbum(album, artistName) {
+  if (!album || !artistName) return;
+  album.artist = artistName;
+  if (album.tracks && album.tracks.length) {
+    album.tracks.forEach(t => {
+      if (isUnknownArtist(t.artist)) {
+        t.artist = artistName;
+      }
+    });
+  }
+
+  // Update in state.artists
+  let foundArt = state.artists.find(a => a.name.toLowerCase() === artistName.toLowerCase());
+  if (!foundArt) {
+    foundArt = {
+      name: artistName,
+      albums: new Set([album.title]),
+      tracks: [...album.tracks]
+    };
+    state.artists.push(foundArt);
+  } else {
+    foundArt.albums.add(album.title);
+    album.tracks.forEach(t => {
+      if (!foundArt.tracks.includes(t)) foundArt.tracks.push(t);
+    });
+  }
+
+  // Persist to main process
+  if (window.electronAPI && window.electronAPI.updateAlbumArtist) {
+    window.electronAPI.updateAlbumArtist(album.title, artistName).catch(() => {});
+  }
+
+  updateBadgesAndStats();
+}
+
+let isResolvingUnknownArtists = false;
+async function autoResolveUnknownAlbumArtists() {
+  if (isResolvingUnknownArtists) return;
+  const unknownAlbums = state.albums.filter(a => isUnknownArtist(a.artist));
+  if (unknownAlbums.length === 0) return;
+
+  isResolvingUnknownArtists = true;
+  try {
+    for (const alb of unknownAlbums) {
+      const found = await findArtistByAlbumTitleOnline(alb.title);
+      if (found) {
+        applyResolvedArtistToAlbum(alb, found);
+        // Refresh cards on screen
+        const cards = document.querySelectorAll('.album-card');
+        cards.forEach(card => {
+          const titleEl = card.querySelector('.album-title');
+          if (titleEl && titleEl.textContent === alb.title) {
+            const artEl = card.querySelector('.album-artist');
+            if (artEl) artEl.textContent = found;
+          }
+        });
+      }
+      await new Promise(r => setTimeout(r, 400));
+    }
+  } finally {
+    isResolvingUnknownArtists = false;
+  }
 }
 
 // ----------------- Favorites State Management -----------------
@@ -757,6 +1023,15 @@ function rebuildLibraryCollections() {
   CURATED_PILLARS.forEach(p => genreSet.add(p));
 
   state.tracks.forEach(t => {
+    // If track artist is unknown, restore from cached resolved artist if available
+    if (isUnknownArtist(t.artist)) {
+      const cachedArt = getCachedResolvedArtist(t.album);
+      if (cachedArt) {
+        t.artist = cachedArt;
+        if (!t.albumArtist || isUnknownArtist(t.albumArtist)) t.albumArtist = cachedArt;
+      }
+    }
+
     // If track genre is missing or unknown, infer it intelligently
     if (!t.genre || t.genre === 'Unknown') {
       t.genre = inferGenreFromTrack(t);
@@ -818,6 +1093,15 @@ function rebuildLibraryCollections() {
 
   // Post-process albums: inherit cover from any child track, sort tracks
   albumMap.forEach(alb => {
+    if (isUnknownArtist(alb.artist)) {
+      const cachedArt = getCachedResolvedArtist(alb.title);
+      if (cachedArt) {
+        alb.artist = cachedArt;
+        alb.tracks.forEach(tr => {
+          if (isUnknownArtist(tr.artist)) tr.artist = cachedArt;
+        });
+      }
+    }
     if (!alb.cover) {
       const childWithCover = alb.tracks.find(tr => tr.cover);
       if (childWithCover) alb.cover = childWithCover.cover;
@@ -836,6 +1120,9 @@ function rebuildLibraryCollections() {
   state.albums = Array.from(albumMap.values());
   state.artists = Array.from(artistMap.values());
   state.genres = Array.from(genreSet);
+
+  // Trigger background online resolution for any remaining unknown album artists
+  setTimeout(() => autoResolveUnknownAlbumArtists(), 1000);
 }
 
 // ----------------- UI Rendering -----------------
@@ -912,6 +1199,9 @@ function renderOverview() {
 // Render Albums
 function renderAlbums() {
   allAlbumsGrid.innerHTML = '';
+  const curSize = state.albumCoverSize || 'medium';
+  allAlbumsGrid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
+  allAlbumsGrid.classList.add(`cover-size-${curSize}`);
   let filtered = [...state.albums];
 
   // If genre filter is active
@@ -957,6 +1247,13 @@ function renderAlbums() {
     filtered.sort((a, b) => (b.year || 0) - (a.year || 0));
   } else if (state.sortBy === 'tracks') {
     filtered.sort((a, b) => b.tracks.length - a.tracks.length);
+  } else if (state.sortBy === 'playCount') {
+    filtered.sort((a, b) => {
+      const countA = getAlbumPlayCount(a);
+      const countB = getAlbumPlayCount(b);
+      if (countB !== countA) return countB - countA;
+      return a.title.localeCompare(b.title);
+    });
   }
 
   if (filtered.length === 0) {
@@ -984,6 +1281,8 @@ function createAlbumCard(album) {
   }
 
   const isFav = isAlbumFavorite(album);
+  const playCount = getAlbumPlayCount(album);
+  const playCountText = playCount > 0 ? ` • 播放 ${playCount} 次` : '';
 
   card.innerHTML = `
     <div class="album-art-wrap">
@@ -995,7 +1294,7 @@ function createAlbumCard(album) {
     <div class="album-meta">
       <div class="album-title" title="${escapeXml(album.title)}">${escapeXml(album.title)}</div>
       <div class="album-artist clickable-artist" title="查看演出者介紹">${escapeXml(album.artist)}</div>
-      <div class="album-year">${album.year ? album.year : ''} ${album.tracks ? album.tracks.length + ' 首' : ''}</div>
+      <div class="album-year">${album.year ? album.year + ' • ' : ''}${album.tracks ? album.tracks.length + ' 首' : ''}${playCountText}</div>
     </div>
   `;
 
@@ -1539,18 +1838,36 @@ function handleTrackExternalLinkClick(extLink) {
 // Render Tracks Tab
 function renderTracks() {
   allTracksTbody.innerHTML = '';
-  state.tracks.forEach((track, idx) => {
+  let displayTracks = [...state.tracks];
+  if (state.trackSortBy === 'playCount') {
+    displayTracks.sort((a, b) => {
+      const cA = getTrackPlayCount(a);
+      const cB = getTrackPlayCount(b);
+      if (cB !== cA) return cB - cA;
+      return (a.title || '').localeCompare(b.title || '');
+    });
+  } else if (state.trackSortBy === 'title') {
+    displayTracks.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+  } else if (state.trackSortBy === 'artist') {
+    displayTracks.sort((a, b) => (a.artist || '').localeCompare(b.artist || ''));
+  } else if (state.trackSortBy === 'duration') {
+    displayTracks.sort((a, b) => (b.duration || 0) - (a.duration || 0));
+  }
+
+  displayTracks.forEach((track, idx) => {
     const tr = document.createElement('tr');
     const isHires = (track.bitsPerSample >= 24) || (track.sampleRate > 48000);
     const specLabel = `${track.formatName || 'PCM'} ${track.bitsPerSample ? track.bitsPerSample + 'b/' : ''}${Math.round((track.sampleRate || 44100)/1000)}k`;
     const isFav = isTrackFavorite(track);
     const onlineLinksHtml = generateTrackOnlineLinks(track);
+    const playCount = getTrackPlayCount(track);
+    const playBadge = playCount > 0 ? `<span style="display:inline-block; margin-left:6px; font-size:11px; padding:1px 6px; border-radius:10px; background:rgba(217,70,239,0.15); color:var(--accent-purple);">播放 ${playCount} 次</span>` : '';
 
     tr.innerHTML = `
       <td>${idx + 1}</td>
       <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button></td>
       <td class="track-title-cell">
-        <div class="track-title-text">${escapeXml(track.title)}</div>
+        <div class="track-title-text">${escapeXml(track.title)}${playBadge}</div>
         ${onlineLinksHtml}
       </td>
       <td>${escapeXml(track.artist)}</td>
@@ -1571,7 +1888,7 @@ function renderTracks() {
         toggleTrackFavorite(track);
         return;
       }
-      playTrackList(state.tracks, idx);
+      playTrackList(displayTracks, idx);
     });
     allTracksTbody.appendChild(tr);
   });
@@ -2054,7 +2371,7 @@ function renderAlbumMetadata(album) {
   if (!metaGrid) return;
 
   // Extract initial values from album and track objects
-  let artist = album.artist || '各種演出者';
+  let artist = isUnknownArtist(album.artist) ? '正在線上查找歌手...' : (album.artist || '各種演出者');
   let year = album.year ? `${album.year} 年` : (album.date ? `${album.date.slice(0, 4)} 年` : '未載明');
   let releaseDate = album.date || (album.year ? `${album.year} 年` : '未載明');
   let genre = album.genre || '未分類風格';
@@ -2310,24 +2627,7 @@ function renderAlbumRecommendations(album) {
   });
 }
 
-function openAlbumDetail(album) {
-  state.activeAlbumDetail = album;
-  const defaultDetailCover = createSvgCover(album.title, album.artist, '#27272a', '#09090b');
-  detailCoverImg.src = album.cover || defaultDetailCover;
-  detailCoverImg.onerror = () => {
-    detailCoverImg.onerror = null;
-    detailCoverImg.src = defaultDetailCover;
-  };
-  detailTitle.textContent = album.title;
-  detailArtist.textContent = album.artist;
-  detailYear.textContent = album.year || 'Unknown';
-  detailGenre.textContent = album.genre || 'Various';
-  
-  const sampleRateKhz = album.sampleRate ? Math.round(album.sampleRate / 1000) : 44.1;
-  const bitDepth = album.bitsPerSample || 16;
-  detailFormatBadge.textContent = `${album.formatName || 'FLAC'} ${bitDepth}/${sampleRateKhz}`;
-  detailTrackCount.textContent = album.tracks.length;
-
+function renderDetailTracklist(album) {
   detailTracklistTbody.innerHTML = '';
   album.tracks.forEach((t, idx) => {
     const tr = document.createElement('tr');
@@ -2362,6 +2662,50 @@ function openAlbumDetail(album) {
     });
     detailTracklistTbody.appendChild(tr);
   });
+}
+
+function openAlbumDetail(album) {
+  state.activeAlbumDetail = album;
+  applyDetailCoverSize(state.detailCoverSize || 'medium');
+  const defaultDetailCover = createSvgCover(album.title, album.artist, '#27272a', '#09090b');
+  detailCoverImg.src = album.cover || defaultDetailCover;
+  detailCoverImg.onerror = () => {
+    detailCoverImg.onerror = null;
+    detailCoverImg.src = defaultDetailCover;
+  };
+  detailTitle.textContent = album.title;
+  if (detailYear) detailYear.textContent = '';
+  detailGenre.textContent = album.genre || 'Various';
+
+  if (isUnknownArtist(album.artist)) {
+    const cachedArt = getCachedResolvedArtist(album.title);
+    if (cachedArt) {
+      applyResolvedArtistToAlbum(album, cachedArt);
+      detailArtist.textContent = cachedArt;
+    } else {
+      detailArtist.innerHTML = '<span style="color: var(--accent-purple); font-size: 14px; font-weight: normal;">🔍 正在透過專輯名稱搜尋線上音樂庫歌手...</span>';
+      findArtistByAlbumTitleOnline(album.title).then(found => {
+        if (found && state.activeAlbumDetail === album) {
+          applyResolvedArtistToAlbum(album, found);
+          detailArtist.textContent = found;
+          fetchAlbumBio(album);
+          renderAlbumMetadata(album);
+          renderDetailTracklist(album);
+        } else if (state.activeAlbumDetail === album && isUnknownArtist(album.artist)) {
+          detailArtist.textContent = '未知演出者';
+        }
+      });
+    }
+  } else {
+    detailArtist.textContent = album.artist;
+  }
+  
+  const sampleRateKhz = album.sampleRate ? Math.round(album.sampleRate / 1000) : 44.1;
+  const bitDepth = album.bitsPerSample || 16;
+  detailFormatBadge.textContent = `${album.formatName || 'FLAC'} ${bitDepth}/${sampleRateKhz}`;
+  detailTrackCount.textContent = album.tracks.length;
+
+  renderDetailTracklist(album);
 
   // Favorite button in Album Detail Modal
   const btnFavAlbum = document.getElementById('btnFavAlbumDetail');
@@ -2430,6 +2774,9 @@ function playCurrentTrack() {
     recordRecentlyPlayed(foundAlbum);
   }
 
+  // Record play count statistics
+  recordPlayCount(track, foundAlbum);
+
   // Stop previous synth or native audio
   stopDemoSynth();
   nativeAudio.pause();
@@ -2460,51 +2807,14 @@ function playCurrentTrack() {
   }
 
   // Update Signal Path Badge & Modal
-  const ext = (track.formatName || '').toUpperCase();
-  const isDsd = ext === 'DSF' || ext === 'DFF' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
-
-  const statusPill = document.getElementById('signalPathStatusPill');
-  const sourceDesc = document.getElementById('signalSourceDesc');
-  const engineTitle = document.getElementById('signalEngineTitle');
-  const engineDesc = document.getElementById('signalEngineDesc');
-  const signalOutputIcon = document.getElementById('signalOutputIcon');
-  const signalOutputTitle = document.getElementById('signalOutputTitle');
-  const signalOutputDesc = document.getElementById('signalOutputDesc');
-
-  if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
-    if (signalOutputIcon) signalOutputIcon.textContent = '📡';
-    if (signalOutputTitle) signalOutputTitle.textContent = `${state.activeDlnaDevice.name} (DLNA / UPnP)`;
-    if (signalOutputDesc) signalOutputDesc.textContent = `透過區網即時串流至 ${state.activeDlnaDevice.ip} (UPnP AVTransport)`;
-  } else {
-    if (signalOutputIcon) signalOutputIcon.textContent = '🔊';
-    if (signalOutputTitle) signalOutputTitle.textContent = 'Windows WASAPI Exclusive / DirectSound';
-    if (signalOutputDesc) signalOutputDesc.textContent = '輸出至本機預設音訊裝置';
-  }
-
-  if (isDsd) {
-    const dsdRate = track.sampleRate ? `${(track.sampleRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
-    signalPathBadge.textContent = `ENHANCED | DSD ➔ 24/88.2kHz FLAC`;
-    document.getElementById('signalSourceTitle').textContent = `DSD (1-bit / ${dsdRate}) — ${track.title}`;
-    if (statusPill) statusPill.textContent = 'ENHANCED (HIGH PRECISION TRANSCODE)';
-    if (sourceDesc) sourceDesc.textContent = '原始 DSD 母帶碼流 (Bitstream 1-bit PDM)';
-    if (engineTitle) engineTitle.textContent = 'rooPlayer DSD-to-PCM Audio Engine';
-    if (engineDesc) engineDesc.textContent = '64-bit 浮點即時降採樣 (Decimation Filter) ➔ 24-bit 88.2kHz FLAC';
-  } else {
-    const sampleKhz = track.sampleRate ? Math.round(track.sampleRate / 1000) : 44;
-    const bitDepth = track.bitsPerSample || 16;
-    const isLossless = track.isLossless || track.formatName === 'FLAC';
-    signalPathBadge.textContent = `${isLossless ? 'LOSSLESS' : 'ENHANCED'} | ${track.formatName} ${bitDepth}/${sampleKhz}kHz`;
-    document.getElementById('signalSourceTitle').textContent = `${track.formatName} ${bitDepth}-bit / ${sampleKhz}kHz (${track.title})`;
-    if (statusPill) statusPill.textContent = isLossless ? 'LOSSLESS BIT-PERFECT' : 'ENHANCED';
-    if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless)';
-    if (engineTitle) engineTitle.textContent = 'rooPlayer Core Audio Engine';
-    if (engineDesc) engineDesc.textContent = '64-bit 浮點無損混音核心，零採樣損失處理';
-  }
+  updateSignalPathUI(track);
 
   // 1. Play audio via DLNA if a network zone is selected
   if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
     isCurrentDsd = false;
+    isCurrentSox = false;
     currentDsdOffset = 0;
+    currentSoxOffset = 0;
     stopVirtualProgress();
     stopDemoSynth();
     nativeAudio.pause();
@@ -2518,7 +2828,13 @@ function playCurrentTrack() {
     }
 
     if (window.electronAPI && window.electronAPI.playDlnaTrack) {
-      window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, 0).then(res => {
+      const dspOptions = state.dsp && state.dsp.enabled ? {
+        enabled: true,
+        sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
+        precision: state.dsp.precision || 28
+      } : null;
+
+      window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, 0, dspOptions).then(res => {
         if (res && res.success) {
           state.isPlaying = true;
           btnPlayPause.textContent = '⏸';
@@ -2546,20 +2862,35 @@ function playCurrentTrack() {
   }
 
   // Play audio
+  const ext = (track.formatName || '').toUpperCase();
+  const isDsd = ext === 'DSF' || ext === 'DFF' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
+
   if (track.isDemo || !track.filePath) {
     isCurrentDsd = false;
+    isCurrentSox = false;
     currentDsdOffset = 0;
+    currentSoxOffset = 0;
     playDemoSynth(track);
     state.isPlaying = true;
     btnPlayPause.textContent = '⏸';
     startVirtualProgress(track.duration || 300);
   } else if (isDsd && window.electronAPI && window.electronAPI.getDsdStreamUrl) {
+    isCurrentSox = false;
+    currentSoxOffset = 0;
     stopVirtualProgress();
     stopDemoSynth();
     playDsdTrack(track, 0);
-  } else {
+  } else if (state.dsp && state.dsp.enabled && window.electronAPI && window.electronAPI.getSoxStreamUrl) {
     isCurrentDsd = false;
     currentDsdOffset = 0;
+    stopVirtualProgress();
+    stopDemoSynth();
+    playSoxTrack(track, 0);
+  } else {
+    isCurrentDsd = false;
+    isCurrentSox = false;
+    currentDsdOffset = 0;
+    currentSoxOffset = 0;
     stopVirtualProgress();
     stopDemoSynth();
 
@@ -2577,6 +2908,12 @@ function playCurrentTrack() {
   }
 
   updateQueueActiveItem();
+  if (typeof updateNowPlayingModalContent === 'function') {
+    const npModal = document.getElementById('nowPlayingModal');
+    if (npModal && npModal.style.display !== 'none') {
+      updateNowPlayingModalContent();
+    }
+  }
 }
 
 // ----------------- DSD Direct Streaming Engine -----------------
@@ -2620,6 +2957,725 @@ async function playDsdTrack(track, startSec = 0) {
   }
 }
 
+// ----------------- SoX Resampler Direct Streaming Engine -----------------
+let isCurrentSox = false;
+let currentSoxOffset = 0;
+
+function calculateTargetSampleRate(sourceRate = 44100, rateMode = '4x') {
+  const src = Number(sourceRate) || 44100;
+  if (rateMode === '192k') return 192000;
+  if (rateMode === '384k') return 384000;
+  if (rateMode === '96k') return 96000;
+
+  if (rateMode === '2x') {
+    if (src <= 48000) return src * 2;
+    if (src <= 96000) return src * 2;
+    return src;
+  }
+
+  // Default '4x'
+  if (src <= 48000) return src * 4;
+  if (src <= 96000) return src * 2;
+  return src;
+}
+
+function formatKhz(rateHz) {
+  if (!rateHz) return '44.1kHz';
+  const khz = rateHz / 1000;
+  return Number.isInteger(khz) ? `${khz}kHz` : `${khz.toFixed(1)}kHz`;
+}
+
+async function playSoxTrack(track, startSec = 0) {
+  isCurrentSox = true;
+  isCurrentDsd = false;
+  currentSoxOffset = startSec;
+
+  try {
+    if ((!track.duration || track.duration === 0) && window.electronAPI && window.electronAPI.getAudioDuration) {
+      window.electronAPI.getAudioDuration(track.filePath).then(dur => {
+        if (dur) {
+          track.duration = dur;
+          totalTimeLabel.textContent = formatDuration(dur);
+        }
+      }).catch(() => {});
+    }
+
+    const targetRate = calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode);
+    const precision = state.dsp.precision || 28;
+
+    const streamUrl = await window.electronAPI.getSoxStreamUrl(track.filePath, startSec, targetRate, precision);
+    if (!streamUrl) {
+      playerArtist.textContent = '無法建立 SoX 升頻串流服務';
+      return;
+    }
+
+    nativeAudio.src = streamUrl;
+    nativeAudio.play().then(() => {
+      state.isPlaying = true;
+      btnPlayPause.textContent = '⏸';
+      showToast(`🎛️ SoX 升頻啟用: ${formatKhz(track.sampleRate || 44100)} ➔ ${formatKhz(targetRate)} (24-bit Hi-Res FLAC)`);
+    }).catch(err => {
+      console.error('SoX play error:', err);
+      playerArtist.textContent = `SoX 播放異常，正在切換原生播放...`;
+      isCurrentSox = false;
+      currentSoxOffset = 0;
+      nativeAudio.src = window.electronAPI ? window.electronAPI.getMediaUrl(track.filePath) : track.filePath;
+      nativeAudio.play().catch(e => console.error('Fallback error:', e));
+    });
+  } catch (err) {
+    console.error('getSoxStreamUrl error:', err);
+    playerArtist.textContent = `SoX 升頻解碼服務錯誤: ${err.message}`;
+  }
+}
+
+function updateSignalPathUI(track = null) {
+  if (!track && state.currentTrackIndex >= 0 && state.queue[state.currentTrackIndex]) {
+    track = state.queue[state.currentTrackIndex];
+  }
+
+  const signalPathBadge = document.getElementById('signalPathBadge');
+  const statusPill = document.getElementById('signalPathStatusPill');
+  const signalPathDot = document.getElementById('signalPathDot');
+  const sourceTitle = document.getElementById('signalSourceTitle');
+  const sourceDesc = document.getElementById('signalSourceDesc');
+  const engineTitle = document.getElementById('signalEngineTitle');
+  const engineDesc = document.getElementById('signalEngineDesc');
+  const signalOutputIcon = document.getElementById('signalOutputIcon');
+  const signalOutputTitle = document.getElementById('signalOutputTitle');
+  const signalOutputDesc = document.getElementById('signalOutputDesc');
+  const signalSoxArrow = document.getElementById('signalSoxArrow');
+  const signalSoxStage = document.getElementById('signalSoxStage');
+  const signalSoxTitle = document.getElementById('signalSoxTitle');
+  const signalSoxDesc = document.getElementById('signalSoxDesc');
+
+  // Output Zone Info
+  if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+    if (signalOutputIcon) signalOutputIcon.textContent = '📡';
+    if (signalOutputTitle) signalOutputTitle.textContent = `${state.activeDlnaDevice.name} (DLNA / UPnP)`;
+    if (signalOutputDesc) signalOutputDesc.textContent = `透過區網即時串流至 ${state.activeDlnaDevice.ip} (UPnP AVTransport)`;
+  } else {
+    if (signalOutputIcon) signalOutputIcon.textContent = '🔊';
+    if (signalOutputTitle) signalOutputTitle.textContent = 'Windows WASAPI Exclusive / DirectSound';
+    if (signalOutputDesc) signalOutputDesc.textContent = '輸出至本機預設音訊裝置';
+  }
+
+  // Update DSP UI controls state inside modal
+  const toggleSoxDsp = document.getElementById('toggleSoxDsp');
+  const dspSoxCard = document.querySelector('.dsp-sox-card');
+  const dspActiveRateHint = document.getElementById('dspActiveRateHint');
+  const dspActivePrecisionHint = document.getElementById('dspActivePrecisionHint');
+
+  if (toggleSoxDsp) toggleSoxDsp.checked = !!(state.dsp && state.dsp.enabled);
+  if (dspSoxCard) dspSoxCard.classList.toggle('active', !!(state.dsp && state.dsp.enabled));
+
+  const curRateMode = (state.dsp && state.dsp.rateMode) || '4x';
+  const curPrecision = (state.dsp && state.dsp.precision) || 28;
+
+  const ratePill = document.querySelector(`#dspRateSelector .dsp-pill[data-rate-mode="${curRateMode}"]`);
+  if (ratePill) {
+    document.querySelectorAll('#dspRateSelector .dsp-pill').forEach(p => p.classList.remove('active'));
+    ratePill.classList.add('active');
+    if (dspActiveRateHint) dspActiveRateHint.textContent = ratePill.textContent;
+  }
+
+  const precPill = document.querySelector(`#dspPrecisionSelector .dsp-pill[data-precision="${curPrecision}"]`);
+  if (precPill) {
+    document.querySelectorAll('#dspPrecisionSelector .dsp-pill').forEach(p => p.classList.remove('active'));
+    precPill.classList.add('active');
+    if (dspActivePrecisionHint) dspActivePrecisionHint.textContent = `${curPrecision}-bit VHQ`;
+  }
+
+  if (!track) return;
+
+  const ext = (track.formatName || '').toUpperCase();
+  const isDsd = ext === 'DSF' || ext === 'DFF' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
+  const isDspActive = !track.isDemo && state.dsp && state.dsp.enabled;
+
+  if (isDspActive) {
+    const srcRate = track.sampleRate || 44100;
+    const targetRate = calculateTargetSampleRate(srcRate, state.dsp.rateMode);
+    const srcKhz = formatKhz(srcRate);
+    const targetKhz = formatKhz(targetRate);
+
+    if (signalPathBadge) signalPathBadge.textContent = `DSP (${state.dsp.rateMode.toUpperCase()}) | 24/${targetKhz} ⚡`;
+    if (statusPill) statusPill.textContent = 'DSP ENHANCED (SOX RESAMPLER)';
+    if (sourceTitle) sourceTitle.textContent = `${track.formatName || 'PCM'} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
+    if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless Input)';
+
+    if (signalSoxArrow) signalSoxArrow.style.display = 'block';
+    if (signalSoxStage) signalSoxStage.style.display = 'flex';
+    if (signalSoxTitle) signalSoxTitle.textContent = 'SoX Resampler (libsoxr VHQ)';
+    if (signalSoxDesc) signalSoxDesc.textContent = `${state.dsp.precision}-bit VHQ 浮點升頻：${srcKhz} ➔ ${targetKhz} (24-bit Hi-Res FLAC)`;
+
+    if (engineTitle) engineTitle.textContent = 'rooPlayer Core Audio Engine';
+    if (engineDesc) engineDesc.textContent = `64-bit 浮點即時超取樣升頻核心 ➔ 輸出至 24-bit ${targetKhz}`;
+    if (signalPathDot) signalPathDot.className = 'signal-dot purple';
+  } else if (isDsd) {
+    const dsdRate = track.sampleRate ? `${(track.sampleRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
+    if (signalPathBadge) signalPathBadge.textContent = `ENHANCED | DSD ➔ 24/88.2kHz FLAC`;
+    if (sourceTitle) sourceTitle.textContent = `DSD (1-bit / ${dsdRate}) — ${track.title}`;
+    if (statusPill) statusPill.textContent = 'ENHANCED (HIGH PRECISION TRANSCODE)';
+    if (sourceDesc) sourceDesc.textContent = '原始 DSD 母帶碼流 (Bitstream 1-bit PDM)';
+
+    if (signalSoxArrow) signalSoxArrow.style.display = 'none';
+    if (signalSoxStage) signalSoxStage.style.display = 'none';
+
+    if (engineTitle) engineTitle.textContent = 'rooPlayer DSD-to-PCM Audio Engine';
+    if (engineDesc) engineDesc.textContent = '64-bit 浮點即時降採樣 (Decimation Filter) ➔ 24-bit 88.2kHz FLAC';
+    if (signalPathDot) signalPathDot.className = 'signal-dot purple';
+  } else {
+    const sampleKhz = track.sampleRate ? Math.round(track.sampleRate / 1000) : 44;
+    const bitDepth = track.bitsPerSample || 16;
+    const isLossless = track.isLossless || track.formatName === 'FLAC';
+
+    if (signalPathBadge) signalPathBadge.textContent = `${isLossless ? 'LOSSLESS' : 'ENHANCED'} | ${track.formatName} ${bitDepth}/${sampleKhz}kHz`;
+    if (sourceTitle) sourceTitle.textContent = `${track.formatName} ${bitDepth}-bit / ${sampleKhz}kHz (${track.title})`;
+    if (statusPill) statusPill.textContent = isLossless ? 'LOSSLESS BIT-PERFECT' : 'ENHANCED';
+    if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless)';
+
+    if (signalSoxArrow) signalSoxArrow.style.display = 'none';
+    if (signalSoxStage) signalSoxStage.style.display = 'none';
+
+    if (engineTitle) engineTitle.textContent = 'rooPlayer Core Audio Engine';
+    if (engineDesc) engineDesc.textContent = '64-bit 浮點無損混音核心，零採樣損失處理';
+    if (signalPathDot) signalPathDot.className = 'signal-dot purple';
+  }
+}
+
+function initDspControls() {
+  const toggleSoxDsp = document.getElementById('toggleSoxDsp');
+  const dspSoxCard = document.querySelector('.dsp-sox-card');
+  const dspRateSelector = document.getElementById('dspRateSelector');
+  const dspPrecisionSelector = document.getElementById('dspPrecisionSelector');
+  const dspActiveRateHint = document.getElementById('dspActiveRateHint');
+  const dspActivePrecisionHint = document.getElementById('dspActivePrecisionHint');
+
+  if (toggleSoxDsp) {
+    toggleSoxDsp.checked = state.dsp.enabled;
+    if (dspSoxCard) dspSoxCard.classList.toggle('active', state.dsp.enabled);
+
+    toggleSoxDsp.addEventListener('change', () => {
+      state.dsp.enabled = toggleSoxDsp.checked;
+      if (dspSoxCard) dspSoxCard.classList.toggle('active', state.dsp.enabled);
+      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+      updateSignalPathUI();
+
+      // If a track is currently playing, switch stream seamlessly
+      const track = state.queue[state.currentTrackIndex];
+      if (track && !track.isDemo && track.filePath && state.isPlaying) {
+        const curSec = getCurrentPlaybackTime();
+        if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+          const dspOptions = state.dsp.enabled ? {
+            enabled: true,
+            sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
+            precision: state.dsp.precision
+          } : null;
+          window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, Math.floor(curSec), dspOptions);
+        } else {
+          if (state.dsp.enabled) {
+            playSoxTrack(track, Math.floor(curSec));
+          } else {
+            isCurrentSox = false;
+            currentSoxOffset = 0;
+            const ext = (track.formatName || '').toUpperCase();
+            const isDsd = ext === 'DSF' || ext === 'DFF' || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
+            if (isDsd) {
+              playDsdTrack(track, Math.floor(curSec));
+            } else {
+              const mediaUrl = window.electronAPI ? window.electronAPI.getMediaUrl(track.filePath) : track.filePath;
+              nativeAudio.src = mediaUrl;
+              nativeAudio.currentTime = Math.floor(curSec);
+              nativeAudio.play().catch(e => console.error(e));
+            }
+          }
+        }
+      }
+      showToast(state.dsp.enabled ? '⚡ 已啟用 SoX Resampler 發燒升頻引擎' : '已關閉 DSP 升頻，恢復 Bit-Perfect 直通');
+    });
+  }
+
+  if (dspRateSelector) {
+    dspRateSelector.addEventListener('click', (e) => {
+      const btn = e.target.closest('.dsp-pill');
+      if (!btn) return;
+      const rateMode = btn.getAttribute('data-rate-mode');
+      if (!rateMode) return;
+
+      dspRateSelector.querySelectorAll('.dsp-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+
+      state.dsp.rateMode = rateMode;
+      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+      if (dspActiveRateHint) dspActiveRateHint.textContent = btn.textContent;
+      updateSignalPathUI();
+
+      if (state.dsp.enabled && state.isPlaying) {
+        const track = state.queue[state.currentTrackIndex];
+        if (track && !track.isDemo && track.filePath) {
+          const curSec = getCurrentPlaybackTime();
+          if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+            const dspOptions = {
+              enabled: true,
+              sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
+              precision: state.dsp.precision
+            };
+            window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, Math.floor(curSec), dspOptions);
+          } else {
+            playSoxTrack(track, Math.floor(curSec));
+          }
+        }
+      }
+    });
+  }
+
+  if (dspPrecisionSelector) {
+    dspPrecisionSelector.addEventListener('click', (e) => {
+      const btn = e.target.closest('.dsp-pill');
+      if (!btn) return;
+      const prec = parseInt(btn.getAttribute('data-precision') || '28', 10);
+      if (!prec) return;
+
+      dspPrecisionSelector.querySelectorAll('.dsp-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+
+      state.dsp.precision = prec;
+      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+      if (dspActivePrecisionHint) dspActivePrecisionHint.textContent = `${prec}-bit VHQ`;
+      updateSignalPathUI();
+
+      if (state.dsp.enabled && state.isPlaying) {
+        const track = state.queue[state.currentTrackIndex];
+        if (track && !track.isDemo && track.filePath) {
+          const curSec = getCurrentPlaybackTime();
+          if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+            const dspOptions = {
+              enabled: true,
+              sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
+              precision: state.dsp.precision
+            };
+            window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, track, Math.floor(curSec), dspOptions);
+          } else {
+            playSoxTrack(track, Math.floor(curSec));
+          }
+        }
+      }
+    });
+  }
+}
+
+// ========================================================
+// Now Playing Modal & Dynamic Online Lyrics Subsystem
+// ========================================================
+const nowPlayingLyricsCache = new Map();
+let currentSyncedLyrics = [];
+let currentActiveLyricIndex = -1;
+let nowPlayingSyncInterval = null;
+
+function cleanTitleForLyrics(title) {
+  if (!title) return '';
+  return title
+    .replace(/^\d+[\.\-\s]+/, '')
+    .replace(/\(.*?(?:feat|ft|live|version|remaster|mix|acoustic|edit|deluxe).*?\)/gi, '')
+    .replace(/\[.*?(?:feat|ft|live|version|remaster|mix|acoustic|edit|deluxe).*?\]/gi, '')
+    .replace(/\b(?:feat|ft)\.?\s+[^\-]+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim() || title;
+}
+
+function parseLrc(lrcText) {
+  if (!lrcText) return [];
+  const lines = lrcText.split('\n');
+  const result = [];
+  const timeRegex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\]/g;
+  for (const line of lines) {
+    const matches = [...line.matchAll(timeRegex)];
+    const text = line.replace(timeRegex, '').trim();
+    if (matches.length > 0 && text) {
+      for (const m of matches) {
+        const min = parseInt(m[1], 10);
+        const sec = parseInt(m[2], 10);
+        const ms = m[3] ? parseFloat('0.' + m[3]) : 0;
+        result.push({ time: min * 60 + sec + ms, text });
+      }
+    }
+  }
+  result.sort((a, b) => a.time - b.time);
+  return result;
+}
+
+async function fetchLyricsOnline(title, artist, album, duration) {
+  if (!title) return null;
+  const cleanTitle = cleanTitleForLyrics(title);
+  const cleanArt = (artist && !isUnknownArtist(artist)) ? artist.replace(/\(.*?\)|\[.*?\]/g, '').trim() : '';
+  const cacheKey = `${cleanArt}___${cleanTitle}`.toLowerCase();
+
+  if (nowPlayingLyricsCache.has(cacheKey)) {
+    return nowPlayingLyricsCache.get(cacheKey);
+  }
+
+  // 1. Try LRCLIB API (Best global database for synced + plain lyrics)
+  try {
+    const q = (cleanArt ? cleanArt + ' ' : '') + cleanTitle;
+    const url = `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'rooPlayer/1.0' } });
+    if (res.ok) {
+      const hits = await res.json();
+      if (Array.isArray(hits) && hits.length > 0) {
+        const best = hits.find(h => h.syncedLyrics) || hits[0];
+        if (best.syncedLyrics || best.plainLyrics) {
+          const result = {
+            source: 'LRCLIB 線上音樂資料庫',
+            synced: best.syncedLyrics || null,
+            plain: best.plainLyrics || null
+          };
+          nowPlayingLyricsCache.set(cacheKey, result);
+          return result;
+        }
+      }
+    }
+  } catch (e) {
+    // LRCLIB error ignored
+  }
+
+  // 2. Try Netease Cloud Music Lyric API (Comprehensive fallback for Pop/Asian/Classic)
+  try {
+    const searchUrl = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(cleanTitle + ' ' + cleanArt)}&type=1&offset=0&limit=3`;
+    const sRes = await fetch(searchUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (sRes.ok) {
+      const sData = await sRes.json();
+      const songId = sData.result?.songs?.[0]?.id;
+      if (songId) {
+        const lyricUrl = `https://music.163.com/api/song/lyric?os=pc&id=${songId}&lv=-1&kv=-1&tv=-1`;
+        const lRes = await fetch(lyricUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (lRes.ok) {
+          const lData = await lRes.json();
+          const raw = lData.lrc?.lyric;
+          if (raw && raw.trim()) {
+            const isSynced = raw.includes('[00:');
+            const result = {
+              source: '網易雲音樂歌詞庫',
+              synced: isSynced ? raw : null,
+              plain: raw
+            };
+            nowPlayingLyricsCache.set(cacheKey, result);
+            return result;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Netease error ignored
+  }
+
+  return null;
+}
+
+async function loadLyricsForNowPlaying(track) {
+  const container = document.getElementById('nowPlayingLyricsContainer');
+  const sourceEl = document.getElementById('nowPlayingLyricSource');
+  if (!container) return;
+
+  currentSyncedLyrics = [];
+  currentActiveLyricIndex = -1;
+
+  container.innerHTML = `
+    <div class="lyrics-loading-state">
+      <span class="spinner"></span>
+      <div>正在連線線上音樂庫檢索歌詞...</div>
+      <div style="font-size: 11px; opacity: 0.7;">《${escapeXml(track.title)}》 • ${escapeXml(track.artist)}</div>
+    </div>
+  `;
+  if (sourceEl) sourceEl.textContent = '搜尋中...';
+
+  const lyricData = await fetchLyricsOnline(track.title, track.artist, track.album, track.duration);
+
+  // Prevent race condition if track changed during fetch
+  if (state.currentTrackIndex < 0 || state.queue[state.currentTrackIndex] !== track) {
+    return;
+  }
+
+  if (lyricData && lyricData.synced) {
+    if (sourceEl) sourceEl.textContent = `即時同步歌詞 • ${lyricData.source}`;
+    currentSyncedLyrics = parseLrc(lyricData.synced);
+    renderSyncedLyrics(currentSyncedLyrics);
+  } else if (lyricData && lyricData.plain) {
+    if (sourceEl) sourceEl.textContent = `純文字歌詞 • ${lyricData.source}`;
+    container.innerHTML = `<div class="lyrics-plain-box">${escapeXml(lyricData.plain)}</div>`;
+  } else {
+    if (sourceEl) sourceEl.textContent = '未收錄歌詞';
+    const googleQuery = encodeURIComponent(`${track.title} ${track.artist} 歌詞`);
+    container.innerHTML = `
+      <div class="lyrics-empty-state">
+        <div class="lyrics-empty-icon">🎶</div>
+        <div style="font-size: 15px; font-weight: 600; color: var(--text-main);">未找到動態歌詞</div>
+        <div style="font-size: 12px; color: var(--text-muted); line-height: 1.6;">此曲目可能為純音樂演奏，或線上音樂資料庫中尚未建立歌詞。</div>
+        <button class="lyrics-empty-btn" id="btnGoogleLyrics">🌐 在 Google 搜尋此曲歌詞</button>
+      </div>
+    `;
+    const btnGoogle = document.getElementById('btnGoogleLyrics');
+    if (btnGoogle) {
+      btnGoogle.onclick = () => {
+        const url = `https://www.google.com/search?q=${googleQuery}`;
+        if (window.electronAPI && window.electronAPI.openExternal) {
+          window.electronAPI.openExternal(url);
+        } else {
+          window.open(url, '_blank');
+        }
+      };
+    }
+  }
+}
+
+function renderSyncedLyrics(lines) {
+  const container = document.getElementById('nowPlayingLyricsContainer');
+  if (!container) return;
+
+  if (!lines || lines.length === 0) {
+    container.innerHTML = '<div class="lyrics-empty-state"><div>無歌詞內容</div></div>';
+    return;
+  }
+
+  const box = document.createElement('div');
+  box.className = 'lyrics-synced-box';
+
+  lines.forEach((line, idx) => {
+    const lineEl = document.createElement('div');
+    lineEl.className = 'lyric-line';
+    lineEl.id = `lyric-line-${idx}`;
+    lineEl.textContent = line.text;
+    lineEl.title = `點擊跳至 ${formatDuration(line.time)}`;
+    lineEl.onclick = () => {
+      seekPlaybackTo(line.time);
+    };
+    box.appendChild(lineEl);
+  });
+
+  container.innerHTML = '';
+  container.appendChild(box);
+}
+
+function updateNowPlayingPlaybackProgress() {
+  const modal = document.getElementById('nowPlayingModal');
+  if (!modal || modal.style.display === 'none') return;
+  const track = state.queue[state.currentTrackIndex];
+  if (!track) return;
+
+  const currentSec = getCurrentPlaybackTime();
+  const totalSec = track.duration || (nativeAudio.duration || 300);
+
+  const curTimeEl = document.getElementById('nowPlayingCurTime');
+  const totalTimeEl = document.getElementById('nowPlayingTotalTime');
+  const fillEl = document.getElementById('nowPlayingScrubberFill');
+
+  if (curTimeEl) curTimeEl.textContent = formatDuration(currentSec);
+  if (totalTimeEl) totalTimeEl.textContent = formatDuration(totalSec);
+
+  if (fillEl && totalSec > 0) {
+    const percent = Math.min(100, Math.max(0, (currentSec / totalSec) * 100));
+    fillEl.style.width = `${percent}%`;
+  }
+
+  // Update Synced Lyrics Highlighting & Smooth Auto-scroll
+  if (currentSyncedLyrics.length > 0) {
+    let targetIdx = -1;
+    for (let i = 0; i < currentSyncedLyrics.length; i++) {
+      if (currentSec >= currentSyncedLyrics[i].time) {
+        targetIdx = i;
+      } else {
+        break;
+      }
+    }
+
+    if (targetIdx !== currentActiveLyricIndex) {
+      if (currentActiveLyricIndex >= 0) {
+        const prevEl = document.getElementById(`lyric-line-${currentActiveLyricIndex}`);
+        if (prevEl) prevEl.classList.remove('active');
+      }
+      currentActiveLyricIndex = targetIdx;
+      if (currentActiveLyricIndex >= 0) {
+        const curEl = document.getElementById(`lyric-line-${currentActiveLyricIndex}`);
+        if (curEl) {
+          curEl.classList.add('active');
+          curEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }
+    }
+  }
+}
+
+function getCurrentPlaybackTime() {
+  if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+    return state.dlnaCurrentSec || 0;
+  }
+  if (isCurrentDsd) {
+    return (currentDsdOffset || 0) + (nativeAudio.currentTime || 0);
+  }
+  if (isCurrentSox) {
+    return (currentSoxOffset || 0) + (nativeAudio.currentTime || 0);
+  }
+  if (nativeAudio.duration) {
+    return nativeAudio.currentTime || 0;
+  }
+  return virtualCurrentSec || 0;
+}
+
+function seekPlaybackTo(targetSec) {
+  const track = state.queue[state.currentTrackIndex];
+  if (!track) return;
+  const total = track.duration || (nativeAudio.duration || 300);
+  targetSec = Math.max(0, Math.min(total, targetSec));
+
+  if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+    if (window.electronAPI && window.electronAPI.seekDlna) {
+      window.electronAPI.seekDlna(state.activeDlnaDevice.id, targetSec);
+    }
+  } else if (isCurrentDsd) {
+    playDsdTrack(track, targetSec);
+  } else if (isCurrentSox) {
+    playSoxTrack(track, targetSec);
+  } else if (nativeAudio.duration) {
+    nativeAudio.currentTime = targetSec;
+  } else {
+    virtualCurrentSec = targetSec;
+  }
+  updateNowPlayingPlaybackProgress();
+}
+
+function updatePlayPauseBtnUI() {
+  const icon = state.isPlaying ? '⏸' : '▶';
+  if (btnPlayPause) btnPlayPause.textContent = icon;
+  const npBtn = document.getElementById('btnNowPlayingPlayPause');
+  if (npBtn) npBtn.textContent = icon;
+}
+
+function updateNowPlayingModalContent() {
+  if (state.currentTrackIndex < 0 || !state.queue[state.currentTrackIndex]) return;
+  const track = state.queue[state.currentTrackIndex];
+  const foundAlbum = state.albums.find(a => a.title === track.album && a.artist.toLowerCase() === track.artist.toLowerCase());
+
+  // 1. Left: Cover Art & Track Info
+  const defaultCover = createSvgCover(track.album || track.title, track.artist, '#27272a', '#09090b');
+  const coverSrc = track.cover || (foundAlbum ? foundAlbum.cover : null) || defaultCover;
+  const coverImg = document.getElementById('nowPlayingCoverImg');
+  if (coverImg) {
+    coverImg.src = coverSrc;
+    coverImg.onerror = () => {
+      coverImg.onerror = null;
+      coverImg.src = defaultCover;
+    };
+  }
+
+  const titleEl = document.getElementById('nowPlayingTrackTitle');
+  if (titleEl) titleEl.textContent = track.title;
+
+  const artistEl = document.getElementById('nowPlayingArtistName');
+  if (artistEl) {
+    artistEl.textContent = track.artist;
+    artistEl.onclick = () => {
+      closeNowPlayingModal();
+      openArtistDetail(track.artist);
+    };
+  }
+
+  const albumEl = document.getElementById('nowPlayingAlbumName');
+  if (albumEl) {
+    albumEl.textContent = track.album || '未分類專輯';
+    albumEl.onclick = () => {
+      if (foundAlbum) {
+        closeNowPlayingModal();
+        openAlbumDetail(foundAlbum);
+      }
+    };
+  }
+
+  const sampleRateKhz = track.sampleRate ? Math.round(track.sampleRate / 1000) : 44.1;
+  const bitDepth = track.bitsPerSample || 16;
+  const formatBadge = document.getElementById('nowPlayingFormatBadge');
+  if (formatBadge) {
+    formatBadge.textContent = `${track.formatName || 'FLAC'} ${bitDepth}/${sampleRateKhz}`;
+  }
+
+  updatePlayPauseBtnUI();
+
+  // 2. Middle: Playlist / Album Tracklist
+  const tracklistSource = (foundAlbum && foundAlbum.tracks && foundAlbum.tracks.length > 0)
+    ? foundAlbum.tracks
+    : state.queue;
+
+  const countPill = document.getElementById('nowPlayingTracklistCount');
+  if (countPill) {
+    countPill.textContent = `共 ${tracklistSource.length} 首歌曲`;
+  }
+
+  const tracklistScroll = document.getElementById('nowPlayingTracklistContainer');
+  if (tracklistScroll) {
+    tracklistScroll.innerHTML = '';
+    tracklistSource.forEach((t, idx) => {
+      const isCurrent = (t.title === track.title && (t.artist || '').toLowerCase() === (track.artist || '').toLowerCase());
+      const row = document.createElement('div');
+      row.className = `np-track-item ${isCurrent ? 'active' : ''}`;
+      row.innerHTML = `
+        <div class="np-track-num">${isCurrent ? '🔊' : (t.trackNumber || idx + 1)}</div>
+        <div class="np-track-title-wrap">
+          <div class="np-track-title" title="${escapeXml(t.title)}">${escapeXml(t.title)}</div>
+        </div>
+        <div class="np-track-dur">${formatDuration(t.duration)}</div>
+      `;
+      row.onclick = () => {
+        const queueIdx = state.queue.findIndex(qt => (qt.filePath && t.filePath) ? qt.filePath === t.filePath : qt.title === t.title);
+        if (queueIdx >= 0) {
+          state.currentTrackIndex = queueIdx;
+          playCurrentTrack();
+        } else {
+          playTrackList(tracklistSource, idx);
+        }
+      };
+      tracklistScroll.appendChild(row);
+      if (isCurrent) {
+        setTimeout(() => row.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+      }
+    });
+  }
+
+  // 3. Right: Load Lyrics Online
+  loadLyricsForNowPlaying(track);
+
+  // Update Time
+  updateNowPlayingPlaybackProgress();
+}
+
+function openNowPlayingModal() {
+  if (state.currentTrackIndex < 0 || !state.queue[state.currentTrackIndex]) {
+    if (state.tracks.length > 0) {
+      playTrackList(state.tracks, 0);
+    } else {
+      showToast('音樂庫中尚無歌曲，請先匯入音樂資料夾');
+      return;
+    }
+  }
+
+  const modal = document.getElementById('nowPlayingModal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  updateNowPlayingModalContent();
+
+  if (!nowPlayingSyncInterval) {
+    nowPlayingSyncInterval = setInterval(() => {
+      updateNowPlayingPlaybackProgress();
+    }, 250);
+  }
+}
+
+function closeNowPlayingModal() {
+  const modal = document.getElementById('nowPlayingModal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  if (nowPlayingSyncInterval) {
+    clearInterval(nowPlayingSyncInterval);
+    nowPlayingSyncInterval = null;
+  }
+}
+
 function togglePlayPause() {
   if (state.currentTrackIndex === -1) {
     if (state.tracks.length > 0) {
@@ -2637,13 +3693,13 @@ function togglePlayPause() {
         window.electronAPI.pauseDlna(state.activeDlnaDevice.id);
       }
       state.isPlaying = false;
-      btnPlayPause.textContent = '▶';
+      updatePlayPauseBtnUI();
     } else {
       if (window.electronAPI && window.electronAPI.resumeDlna) {
         window.electronAPI.resumeDlna(state.activeDlnaDevice.id);
       }
       state.isPlaying = true;
-      btnPlayPause.textContent = '⏸';
+      updatePlayPauseBtnUI();
     }
     return;
   }
@@ -2656,7 +3712,7 @@ function togglePlayPause() {
       nativeAudio.pause();
     }
     state.isPlaying = false;
-    btnPlayPause.textContent = '▶';
+    updatePlayPauseBtnUI();
   } else {
     if (currentTrack.isDemo || !currentTrack.filePath) {
       playDemoSynth(currentTrack);
@@ -2665,7 +3721,7 @@ function togglePlayPause() {
       nativeAudio.play();
     }
     state.isPlaying = true;
-    btnPlayPause.textContent = '⏸';
+    updatePlayPauseBtnUI();
   }
 }
 
@@ -2823,11 +3879,7 @@ function playPrevTrack() {
   // If user is more than 3 seconds into the track, replay the current track
   const track = state.queue[state.currentTrackIndex];
   const isLocalFile = track && !track.isDemo && track.filePath;
-  const currentSec = (state.activeAudioZone !== 'local')
-    ? state.dlnaCurrentSec
-    : (isCurrentDsd
-      ? (currentDsdOffset + nativeAudio.currentTime)
-      : ((isLocalFile && nativeAudio.duration) ? nativeAudio.currentTime : virtualCurrentSec));
+  const currentSec = getCurrentPlaybackTime();
 
   if (currentSec > 3) {
     if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
@@ -2838,6 +3890,8 @@ function playPrevTrack() {
       scrubberFill.style.width = '0%';
     } else if (isCurrentDsd) {
       playDsdTrack(track, 0);
+    } else if (isCurrentSox) {
+      playSoxTrack(track, 0);
     } else if (isLocalFile && nativeAudio.src) {
       nativeAudio.currentTime = 0;
     } else {
@@ -2872,6 +3926,8 @@ function playPrevTrack() {
           scrubberFill.style.width = '0%';
         } else if (isCurrentDsd) {
           playDsdTrack(track, 0);
+        } else if (isCurrentSox) {
+          playSoxTrack(track, 0);
         } else if (isLocalFile && nativeAudio.src) {
           nativeAudio.currentTime = 0;
         } else {
@@ -2889,7 +3945,7 @@ function playPrevTrack() {
 
 function stopPlaybackAtEnd() {
   state.isPlaying = false;
-  btnPlayPause.textContent = '▶';
+  updatePlayPauseBtnUI();
   stopDemoSynth();
   stopVirtualProgress();
   if (nativeAudio.src) {
@@ -2915,6 +3971,8 @@ function onTrackEnded() {
       playCurrentTrack();
     } else if (isCurrentDsd && track) {
       playDsdTrack(track, 0);
+    } else if (isCurrentSox && track) {
+      playSoxTrack(track, 0);
     } else if (track && !track.isDemo && track.filePath && nativeAudio.src) {
       nativeAudio.currentTime = 0;
       nativeAudio.play().catch(err => console.error('Repeat error:', err));
@@ -2954,6 +4012,17 @@ nativeAudio.addEventListener('timeupdate', () => {
     if (current >= total && total > 0) {
       onTrackEnded();
     }
+  } else if (isCurrentSox) {
+    const current = currentSoxOffset + nativeAudio.currentTime;
+    const total = track.duration || 300;
+    const percent = Math.min(100, (current / total) * 100);
+    scrubberFill.style.width = `${percent}%`;
+    currentTimeLabel.textContent = formatDuration(current);
+    totalTimeLabel.textContent = formatDuration(total);
+
+    if (current >= total && total > 0) {
+      onTrackEnded();
+    }
   } else {
     if (!nativeAudio.duration) return;
     const current = nativeAudio.currentTime;
@@ -2963,6 +4032,8 @@ nativeAudio.addEventListener('timeupdate', () => {
     currentTimeLabel.textContent = formatDuration(current);
     totalTimeLabel.textContent = formatDuration(total);
   }
+
+  updateNowPlayingPlaybackProgress();
 });
 
 nativeAudio.addEventListener('ended', () => {
@@ -3040,6 +4111,9 @@ scrubberBar.addEventListener('click', (e) => {
   } else if (isCurrentDsd) {
     const targetSec = Math.floor(ratio * (track.duration || 300));
     playDsdTrack(track, targetSec);
+  } else if (isCurrentSox) {
+    const targetSec = Math.floor(ratio * (track.duration || 300));
+    playSoxTrack(track, targetSec);
   } else if (nativeAudio.duration) {
     nativeAudio.currentTime = ratio * nativeAudio.duration;
   }
@@ -3167,6 +4241,14 @@ function setupNavigation() {
     state.sortBy = e.target.value;
     renderAlbums();
   });
+
+  const trackSortSelect = document.getElementById('trackSortSelect');
+  if (trackSortSelect) {
+    trackSortSelect.addEventListener('change', (e) => {
+      state.trackSortBy = e.target.value;
+      renderTracks();
+    });
+  }
 }
 
 function navigateTo(viewId) {
@@ -3401,7 +4483,50 @@ function setupFavoritesEvents() {
   }
 }
 
-// ----------------- Search Logic -----------------
+// ----------------- Search Logic & Online Streaming Platforms Integration -----------------
+const STREAMING_PLATFORMS = [
+  {
+    id: 'kkbox',
+    name: 'KKBOX',
+    icon: '🎧',
+    tag: '華語 / 亞洲首選',
+    desc: '臺灣與亞洲頂級流行音樂曲庫',
+    getUrl: (q) => `https://play.kkbox.com/search?q=${encodeURIComponent(q)}`,
+    btnText: '在 KKBOX 搜尋'
+  },
+  {
+    id: 'tidal',
+    name: 'TIDAL',
+    icon: '💎',
+    tag: 'HiFi Plus • MQA',
+    desc: '高解析無損母帶級發燒串流平台',
+    getUrl: (q) => `https://listen.tidal.com/search?q=${encodeURIComponent(q)}`,
+    btnText: '在 TIDAL 搜尋'
+  },
+  {
+    id: 'qobuz',
+    name: 'QOBUZ',
+    icon: '🎼',
+    tag: '24-bit Hi-Res',
+    desc: '專業級錄音室母帶音質發燒樂庫',
+    getUrl: (q) => `https://www.qobuz.com/us-en/search?q=${encodeURIComponent(q)}`,
+    btnText: '在 QOBUZ 搜尋'
+  },
+  {
+    id: 'spotify',
+    name: 'SPOTIFY',
+    icon: '🟢',
+    tag: '全球最大串流',
+    desc: '超過一億首跨國曲目即時串流聆聽',
+    getUrl: (q) => `https://open.spotify.com/search/${encodeURIComponent(q)}`,
+    btnText: '在 SPOTIFY 搜尋'
+  }
+];
+
+const streamingSearchCache = new Map();
+let searchDebounceTimer = null;
+let currentSearchQuery = '';
+
 function setupSearch() {
   const searchInput = document.getElementById('globalSearch');
   const btnClear = document.getElementById('btnClearSearch');
@@ -3412,19 +4537,299 @@ function setupSearch() {
     handleSearch(val);
   });
 
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      searchInput.value = '';
+      btnClear.style.display = 'none';
+      handleSearch('');
+      searchInput.blur();
+    }
+  });
+
   btnClear.addEventListener('click', () => {
     searchInput.value = '';
     btnClear.style.display = 'none';
     handleSearch('');
+    searchInput.focus();
+  });
+
+  // Setup Search Filter Tabs (All / Local / Streaming)
+  const filterPills = document.querySelectorAll('#searchFilterPills .pill');
+  filterPills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      filterPills.forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      const tab = pill.getAttribute('data-search-tab');
+      applySearchFilterTab(tab);
+    });
+  });
+}
+
+function applySearchFilterTab(tab) {
+  const localSec = document.getElementById('searchLocalSection');
+  const streamSec = document.getElementById('searchStreamingSection');
+  if (!localSec || !streamSec) return;
+
+  if (tab === 'local') {
+    localSec.style.display = 'block';
+    streamSec.style.display = 'none';
+  } else if (tab === 'streaming') {
+    localSec.style.display = 'none';
+    streamSec.style.display = 'block';
+  } else {
+    localSec.style.display = 'block';
+    streamSec.style.display = 'block';
+  }
+}
+
+function openStreamingPlatform(platformId, query, customUrl = null) {
+  const platform = STREAMING_PLATFORMS.find(p => p.id === platformId) || { name: platformId.toUpperCase() };
+  let url = customUrl;
+  if (!url) {
+    if (platformId === 'kkbox') {
+      url = `https://play.kkbox.com/search?q=${encodeURIComponent(query)}`;
+    } else if (platformId === 'tidal') {
+      url = `https://listen.tidal.com/search?q=${encodeURIComponent(query)}`;
+    } else if (platformId === 'qobuz') {
+      url = `https://www.qobuz.com/us-en/search?q=${encodeURIComponent(query)}`;
+    } else if (platformId === 'spotify') {
+      url = `https://open.spotify.com/search/${encodeURIComponent(query)}`;
+    }
+  }
+
+  // Copy query to clipboard
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(query).catch(() => {});
+  }
+
+  showToast(`已複製「${query}」，正在開啟 ${platform.name} 搜尋...`);
+
+  if (window.electronAPI && window.electronAPI.openExternal) {
+    window.electronAPI.openExternal(url);
+  } else {
+    window.open(url, '_blank');
+  }
+}
+
+// ----------------- Album Cover Size Switcher (Grid & Detail) -----------------
+function applyAlbumCoverSize(size) {
+  state.albumCoverSize = size;
+  try {
+    localStorage.setItem('rooplayer_album_cover_size', size);
+  } catch (e) {}
+
+  document.querySelectorAll('#albumCoverSizePills .size-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-cover-size') === size);
+  });
+
+  const grids = [
+    document.getElementById('allAlbumsGrid'),
+    document.getElementById('searchLocalAlbumsGrid'),
+    document.getElementById('favAlbumsGrid')
+  ];
+
+  grids.forEach(grid => {
+    if (!grid) return;
+    grid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
+    grid.classList.add(`cover-size-${size}`);
+  });
+}
+
+function applyDetailCoverSize(size) {
+  state.detailCoverSize = size;
+  try {
+    localStorage.setItem('rooplayer_detail_cover_size', size);
+  } catch (e) {}
+
+  document.querySelectorAll('#detailCoverSizePills .size-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-detail-size') === size);
+  });
+
+  const box = document.getElementById('detailCoverArtBox');
+  if (box) {
+    box.classList.remove('size-small', 'size-medium', 'size-large');
+    box.classList.add(`size-${size}`);
+  }
+}
+
+function setupCoverSizeControls() {
+  // 1. Album Library Grid Size Controls
+  const gridPills = document.querySelectorAll('#albumCoverSizePills .size-pill');
+  gridPills.forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const size = pill.getAttribute('data-cover-size');
+      applyAlbumCoverSize(size);
+    });
+  });
+
+  // 2. Album Detail Modal Cover Size Controls
+  const detailPills = document.querySelectorAll('#detailCoverSizePills .size-pill');
+  detailPills.forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const size = pill.getAttribute('data-detail-size');
+      applyDetailCoverSize(size);
+    });
+  });
+
+  // Apply initial saved sizes
+  applyAlbumCoverSize(state.albumCoverSize || 'medium');
+  applyDetailCoverSize(state.detailCoverSize || 'medium');
+}
+
+async function fetchOnlineStreamingAlbums(query) {
+  const cleanQ = query.trim();
+  if (!cleanQ) return [];
+
+  const cacheKey = cleanQ.toLowerCase();
+  if (streamingSearchCache.has(cacheKey)) {
+    return streamingSearchCache.get(cacheKey);
+  }
+
+  const normalize = (s) => (s || '').toLowerCase()
+    .replace(/\(.*?\)|\[.*?\]/g, '')
+    .replace(/[^a-z0-9\u4e00-\u9fa5]/g, '')
+    .trim();
+
+  let results = [];
+  try {
+    // 1. First attempt with Taiwan store (best for Chinese, Asian & Western popular albums)
+    const twUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQ)}&entity=album&country=TW&limit=24`;
+    let res = await fetch(twUrl);
+    let data = res.ok ? await res.json() : null;
+
+    // 2. If no results or failed, attempt global US catalog
+    if (!data || !data.results || data.results.length === 0) {
+      const globalUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQ)}&entity=album&limit=24`;
+      res = await fetch(globalUrl);
+      data = res.ok ? await res.json() : null;
+    }
+
+    if (data && data.results && data.results.length > 0) {
+      const seen = new Set();
+      data.results.forEach(online => {
+        const normTitle = normalize(online.collectionName);
+        if (!normTitle || seen.has(normTitle)) return;
+        seen.add(normTitle);
+
+        const year = online.releaseDate ? new Date(online.releaseDate).getFullYear() : '';
+        const highResCover = online.artworkUrl100 ? online.artworkUrl100.replace('100x100bb', '600x600bb') : '';
+        results.push({
+          title: online.collectionName,
+          artist: online.artistName || 'Various Artists',
+          year: year,
+          trackCount: online.trackCount || 0,
+          cover: highResCover,
+          genre: online.primaryGenreName || 'Music',
+          appleUrl: online.collectionViewUrl || ''
+        });
+      });
+    }
+  } catch (err) {
+    console.warn('Online streaming albums search error:', err);
+  }
+
+  streamingSearchCache.set(cacheKey, results);
+  return results;
+}
+
+function renderOnlineStreamingAlbums(albums, query) {
+  const container = document.getElementById('streamingCatalogGrid');
+  const countEl = document.getElementById('streamingCatalogCount');
+  const loadingEl = document.getElementById('streamingLoadingBox');
+  if (!container || !countEl || !loadingEl) return;
+
+  loadingEl.style.display = 'none';
+  container.innerHTML = '';
+  countEl.textContent = `共 ${albums.length} 張作品`;
+
+  if (albums.length === 0) {
+    container.innerHTML = `
+      <div style="grid-column: 1/-1; padding: 28px; text-align: center; color: var(--text-muted); background: var(--bg-card); border-radius: 12px; border: 1px dashed var(--border-color);">
+        線上資料庫暫無直接相符之完整作品，建議更換關鍵字或檢查拼寫。
+      </div>
+    `;
+    return;
+  }
+
+  albums.forEach(alb => {
+    const card = document.createElement('div');
+    card.className = 'missing-album-card';
+
+    const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
+    const coverSrc = alb.cover || defaultCover;
+    const albumQuery = `${alb.title} ${alb.artist}`.trim();
+
+    card.innerHTML = `
+      <div class="album-art-wrap" style="position: relative;">
+        <img src="${coverSrc}" class="album-art-img" alt="${escapeXml(alb.title)}" loading="lazy">
+        <span class="missing-badge" style="background-color: rgba(139, 92, 246, 0.9); color: #fff;">線上串流</span>
+      </div>
+      <div class="album-meta">
+        <div class="album-title" title="${escapeXml(alb.title)}">${escapeXml(alb.title)}</div>
+        <div class="album-artist">${escapeXml(alb.artist)}</div>
+        <div class="album-year">${alb.year ? alb.year + ' • ' : ''}${alb.trackCount ? alb.trackCount + ' 首' : ''}</div>
+      </div>
+      <div class="missing-links-bar">
+        <button class="btn-stream-link kkbox" data-platform="kkbox" title="在 KKBOX 搜尋「${escapeXml(albumQuery)}」">KKBOX</button>
+        <button class="btn-stream-link tidal" data-platform="tidal" title="在 TIDAL 搜尋「${escapeXml(albumQuery)}」">TIDAL</button>
+        <button class="btn-stream-link qobuz" data-platform="qobuz" title="在 Qobuz Hi-Res 搜尋「${escapeXml(albumQuery)}」">QOBUZ</button>
+        <button class="btn-stream-link spotify" data-platform="spotify" title="在 Spotify 搜尋「${escapeXml(albumQuery)}」">SPOTIFY</button>
+      </div>
+    `;
+
+    card.querySelectorAll('.btn-stream-link').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const platform = btn.getAttribute('data-platform');
+        openStreamingPlatform(platform, albumQuery);
+      });
+    });
+
+    container.appendChild(card);
   });
 }
 
 function handleSearch(query) {
-  const q = query.toLowerCase();
+  const q = query.trim();
+  currentSearchQuery = q;
+
+  const searchResultsContainer = document.getElementById('searchResultsContainer');
+  const allAlbumsGrid = document.getElementById('allAlbumsGrid');
+  const albumsFilterBar = document.getElementById('albumsFilterBar');
+  const albumsPageTitle = document.getElementById('albumsPageTitle');
+  const albumsHeaderCount = document.getElementById('albumsHeaderCount');
+  const searchQueryBadge = document.getElementById('searchQueryBadge');
+  const searchStatText = document.getElementById('searchStatText');
+  const searchLocalAlbumsGrid = document.getElementById('searchLocalAlbumsGrid');
+  const searchLocalEmptyBox = document.getElementById('searchLocalEmptyBox');
+  const searchLocalCountBadge = document.getElementById('searchLocalCountBadge');
+  const streamingLoadingBox = document.getElementById('streamingLoadingBox');
+  const streamingCatalogGrid = document.getElementById('streamingCatalogGrid');
+  const streamingCatalogCount = document.getElementById('streamingCatalogCount');
+
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = null;
+  }
+
+  // If query is empty: restore normal album & track view
   if (!q) {
+    if (searchResultsContainer) searchResultsContainer.style.display = 'none';
+    if (allAlbumsGrid) allAlbumsGrid.style.display = 'grid';
+    if (albumsFilterBar) albumsFilterBar.style.display = 'flex';
+    if (albumsPageTitle) albumsPageTitle.textContent = '專輯庫 Albums';
+    if (albumsHeaderCount) albumsHeaderCount.textContent = `共 ${state.albums.length} 張專輯`;
+
     renderAlbums();
     renderTracks();
     return;
+  }
+
+  // Active search: navigate to albums view if not already there
+  if (state.currentView !== 'albums') {
+    applyView('albums', true);
   }
 
   // Clear genre filter banner when typing explicit search
@@ -3432,23 +4837,62 @@ function handleSearch(query) {
   const bannerBox = document.getElementById('genreFilterBannerBox');
   if (bannerBox) bannerBox.innerHTML = '';
 
+  // Show search container, hide normal album grid and filter bar
+  if (searchResultsContainer) searchResultsContainer.style.display = 'block';
+  if (allAlbumsGrid) allAlbumsGrid.style.display = 'none';
+  if (albumsFilterBar) albumsFilterBar.style.display = 'none';
+  if (albumsPageTitle) albumsPageTitle.textContent = '搜尋結果 Search Results';
+  if (searchQueryBadge) searchQueryBadge.textContent = q;
+
+  // 1. Local Albums Filtering
+  const qLower = q.toLowerCase();
   const matchedAlbums = state.albums.filter(a =>
-    a.title.toLowerCase().includes(q) ||
-    a.artist.toLowerCase().includes(q) ||
-    (a.genre && a.genre.toLowerCase().includes(q)) ||
-    matchItemGenre(a, q)
+    a.title.toLowerCase().includes(qLower) ||
+    a.artist.toLowerCase().includes(qLower) ||
+    (a.genre && a.genre.toLowerCase().includes(qLower)) ||
+    matchItemGenre(a, qLower)
   );
 
-  allAlbumsGrid.innerHTML = '';
-  if (matchedAlbums.length === 0) {
-    allAlbumsGrid.innerHTML = '<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--text-muted);">未找到相符的專輯</div>';
-  } else {
-    matchedAlbums.forEach(alb => allAlbumsGrid.appendChild(createAlbumCard(alb)));
+  if (searchLocalCountBadge) searchLocalCountBadge.textContent = matchedAlbums.length;
+
+  if (searchLocalAlbumsGrid) {
+    searchLocalAlbumsGrid.innerHTML = '';
+    const curSize = state.albumCoverSize || 'medium';
+    searchLocalAlbumsGrid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
+    searchLocalAlbumsGrid.classList.add(`cover-size-${curSize}`);
+
+    if (matchedAlbums.length === 0) {
+      if (searchLocalEmptyBox) searchLocalEmptyBox.style.display = 'block';
+      searchLocalAlbumsGrid.style.display = 'none';
+    } else {
+      if (searchLocalEmptyBox) searchLocalEmptyBox.style.display = 'none';
+      searchLocalAlbumsGrid.style.display = 'grid';
+      matchedAlbums.forEach(alb => searchLocalAlbumsGrid.appendChild(createAlbumCard(alb)));
+    }
   }
 
-  if (state.currentView !== 'albums' && state.currentView !== 'tracks') {
-    document.querySelector('[data-view="albums"]').click();
-  }
+  // 2. Online Streaming Albums Catalog (Debounced)
+  if (streamingLoadingBox) streamingLoadingBox.style.display = 'flex';
+  if (streamingCatalogGrid) streamingCatalogGrid.innerHTML = '';
+  if (streamingCatalogCount) streamingCatalogCount.textContent = '檢索中...';
+  if (searchStatText) searchStatText.textContent = `(本機 ${matchedAlbums.length} 張 • 線上串流檢索中...)`;
+  if (albumsHeaderCount) albumsHeaderCount.textContent = `關鍵字「${q}」：本機 ${matchedAlbums.length} 張 • 線上串流檢索中`;
+
+  searchDebounceTimer = setTimeout(async () => {
+    const fetchedQuery = q;
+    const onlineAlbums = await fetchOnlineStreamingAlbums(fetchedQuery);
+
+    // If query has changed in the meantime, ignore this response
+    if (currentSearchQuery !== fetchedQuery) return;
+
+    renderOnlineStreamingAlbums(onlineAlbums, fetchedQuery);
+    if (searchStatText) {
+      searchStatText.textContent = `(本機端 ${matchedAlbums.length} 張 • 線上串流發現 ${onlineAlbums.length} 張作品)`;
+    }
+    if (albumsHeaderCount) {
+      albumsHeaderCount.textContent = `搜尋結果：本機 ${matchedAlbums.length} 張 • 線上 ${onlineAlbums.length} 張作品 (KKBOX • TIDAL • QOBUZ • SPOTIFY)`;
+    }
+  }, 350);
 }
 
 // ----------------- Scanner & Storage Events -----------------
@@ -3467,8 +4911,18 @@ function setupScannerEvents() {
   });
 
   document.getElementById('btnPlayAllTracks').addEventListener('click', () => {
-    if (state.tracks.length > 0) {
-      playTrackList(state.tracks, 0);
+    let displayTracks = [...state.tracks];
+    if (state.trackSortBy === 'playCount') {
+      displayTracks.sort((a, b) => getTrackPlayCount(b) - getTrackPlayCount(a));
+    } else if (state.trackSortBy === 'title') {
+      displayTracks.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    } else if (state.trackSortBy === 'artist') {
+      displayTracks.sort((a, b) => (a.artist || '').localeCompare(b.artist || ''));
+    } else if (state.trackSortBy === 'duration') {
+      displayTracks.sort((a, b) => (b.duration || 0) - (a.duration || 0));
+    }
+    if (displayTracks.length > 0) {
+      playTrackList(displayTracks, 0);
     }
   });
 
@@ -3560,9 +5014,57 @@ function setupPlayerControls() {
   btnRepeat.addEventListener('click', () => {
     cycleRepeatMode();
   });
+  // Now Playing Modal (Bottom-Left Cover trigger)
+  const playerCoverBox = document.getElementById('playerCoverBox');
+  if (playerCoverBox) {
+    playerCoverBox.addEventListener('click', openNowPlayingModal);
+  }
+  const btnCloseNP = document.getElementById('btnCloseNowPlaying');
+  if (btnCloseNP) {
+    btnCloseNP.addEventListener('click', closeNowPlayingModal);
+  }
+  const npModalEl = document.getElementById('nowPlayingModal');
+  if (npModalEl) {
+    npModalEl.addEventListener('click', (e) => {
+      if (e.target === npModalEl) closeNowPlayingModal();
+    });
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const npModal = document.getElementById('nowPlayingModal');
+      if (npModal && npModal.style.display !== 'none') {
+        closeNowPlayingModal();
+      }
+    }
+  });
+
+  const btnNPPrev = document.getElementById('btnNowPlayingPrev');
+  if (btnNPPrev) {
+    btnNPPrev.addEventListener('click', () => btnPrev.click());
+  }
+  const btnNPNext = document.getElementById('btnNowPlayingNext');
+  if (btnNPNext) {
+    btnNPNext.addEventListener('click', () => btnNext.click());
+  }
+  const btnNPPlayPause = document.getElementById('btnNowPlayingPlayPause');
+  if (btnNPPlayPause) {
+    btnNPPlayPause.addEventListener('click', () => togglePlayPause());
+  }
+  const npScrubber = document.getElementById('nowPlayingScrubber');
+  if (npScrubber) {
+    npScrubber.addEventListener('click', (e) => {
+      const track = state.queue[state.currentTrackIndex];
+      if (!track) return;
+      const rect = npScrubber.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const total = track.duration || (nativeAudio.duration || 300);
+      seekPlaybackTo(ratio * total);
+    });
+  }
 
   // Signal Path Modal
   btnSignalPath.addEventListener('click', () => {
+    updateSignalPathUI();
     signalPathModal.style.display = 'flex';
   });
   btnCloseSignalPath.addEventListener('click', () => {
@@ -3615,7 +5117,7 @@ function setupPlayerControls() {
       window.electronAPI.stopDlna(state.activeDlnaDevice.id).catch(() => {});
     }
     state.isPlaying = false;
-    btnPlayPause.textContent = '▶';
+    updatePlayPauseBtnUI();
     playerTitle.textContent = '未播放曲目';
     playerArtist.textContent = '點選任意曲目開始聆聽';
     renderQueue();
