@@ -2868,10 +2868,13 @@ function playCurrentTrack() {
           state.isPlaying = true;
           updatePlayPauseBtnUI();
           const dur = track.duration || 0;
-          totalTimeLabel.textContent = formatDuration(dur);
-          currentTimeLabel.textContent = '0:00';
-          scrubberFill.style.width = '0%';
-          showToast(`📡 正在串流至 ${state.activeDlnaDevice.name}: ${track.title}`);
+          if (dspOptions && dspOptions.dsdMode) {
+            showToast(`⚡ 正在以 1-bit ${dspOptions.dsdMode.toUpperCase()} 串流至 ${state.activeDlnaDevice.name}: ${track.title}`);
+          } else if (track.filePath && /\.dsf$/i.test(track.filePath) && (!dspOptions || !dspOptions.enabled)) {
+            showToast(`🎵 正在以 Native DSD 直通串流至 ${state.activeDlnaDevice.name}: ${track.title}`);
+          } else {
+            showToast(`📡 正在串流至 ${state.activeDlnaDevice.name}: ${track.title}`);
+          }
         } else if (res && res.cancelled) {
           console.log('[DLNA] Play superseded by newer track selection');
         } else {
@@ -3111,7 +3114,13 @@ function updateSignalPathUI(track = null) {
   if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
     if (signalOutputIcon) signalOutputIcon.textContent = '📡';
     if (signalOutputTitle) signalOutputTitle.textContent = `${state.activeDlnaDevice.name} (DLNA / UPnP)`;
-    if (signalOutputDesc) signalOutputDesc.textContent = `透過區網即時串流至 ${state.activeDlnaDevice.ip} (UPnP AVTransport)`;
+    if (signalOutputDesc) {
+      if (state.dsp && state.dsp.enabled && isDsdRateMode(state.dsp.rateMode)) {
+        signalOutputDesc.textContent = `透過區網即時傳輸 1-bit ${state.dsp.rateMode.toUpperCase()} DSF 串流至 ${state.activeDlnaDevice.ip} (UPnP AVTransport)`;
+      } else {
+        signalOutputDesc.textContent = `透過區網即時串流至 ${state.activeDlnaDevice.ip} (UPnP AVTransport)`;
+      }
+    }
   } else {
     if (signalOutputIcon) signalOutputIcon.textContent = '🔊';
     if (signalOutputTitle) signalOutputTitle.textContent = 'Windows WASAPI Exclusive / DirectSound';
@@ -3203,17 +3212,32 @@ function updateSignalPathUI(track = null) {
     }
   } else if (isNativeDsd) {
     const dsdRate = track.sampleRate ? `${(track.sampleRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
-    if (signalPathBadge) signalPathBadge.textContent = `ENHANCED | DSD ➔ 24/88.2kHz FLAC`;
-    if (sourceTitle) sourceTitle.textContent = `DSD (1-bit / ${dsdRate}) — ${track.title}`;
-    if (statusPill) statusPill.textContent = 'ENHANCED (HIGH PRECISION TRANSCODE)';
-    if (sourceDesc) sourceDesc.textContent = '原始 DSD 母帶碼流 (Bitstream 1-bit PDM)';
+    const isDlna = state.activeAudioZone !== 'local' && state.activeDlnaDevice;
+    if (isDlna) {
+      if (signalPathBadge) signalPathBadge.textContent = `BIT-PERFECT | Native DSD (1-bit / ${dsdRate}) ⚡`;
+      if (sourceTitle) sourceTitle.textContent = `DSD (1-bit / ${dsdRate}) — ${track.title}`;
+      if (statusPill) statusPill.textContent = 'BIT-PERFECT (DIRECT STREAMING)';
+      if (sourceDesc) sourceDesc.textContent = '原始 DSD 母帶碼流 (Bitstream 1-bit PDM)';
 
-    if (signalSoxArrow) signalSoxArrow.style.display = 'none';
-    if (signalSoxStage) signalSoxStage.style.display = 'none';
+      if (signalSoxArrow) signalSoxArrow.style.display = 'none';
+      if (signalSoxStage) signalSoxStage.style.display = 'none';
 
-    if (engineTitle) engineTitle.textContent = 'rooPlayer DSD-to-PCM Audio Engine';
-    if (engineDesc) engineDesc.textContent = '64-bit 浮點即時降採樣 (Decimation Filter) ➔ 24-bit 88.2kHz FLAC';
-    if (signalPathDot) signalPathDot.className = 'signal-dot purple';
+      if (engineTitle) engineTitle.textContent = 'rooPlayer Bit-Perfect DSD Streamer';
+      if (engineDesc) engineDesc.textContent = '原生 1-bit DSD (Sony DSF) 直通傳輸至網路渲染器，無重取樣或轉換';
+      if (signalPathDot) signalPathDot.className = 'signal-dot dsd-gold';
+    } else {
+      if (signalPathBadge) signalPathBadge.textContent = `ENHANCED | DSD ➔ 24/88.2kHz FLAC`;
+      if (sourceTitle) sourceTitle.textContent = `DSD (1-bit / ${dsdRate}) — ${track.title}`;
+      if (statusPill) statusPill.textContent = 'ENHANCED (HIGH PRECISION TRANSCODE)';
+      if (sourceDesc) sourceDesc.textContent = '原始 DSD 母帶碼流 (Bitstream 1-bit PDM)';
+
+      if (signalSoxArrow) signalSoxArrow.style.display = 'none';
+      if (signalSoxStage) signalSoxStage.style.display = 'none';
+
+      if (engineTitle) engineTitle.textContent = 'rooPlayer DSD-to-PCM Audio Engine';
+      if (engineDesc) engineDesc.textContent = '64-bit 浮點即時降採樣 (Decimation Filter) ➔ 24-bit 88.2kHz FLAC';
+      if (signalPathDot) signalPathDot.className = 'signal-dot purple';
+    }
   } else {
     const sampleKhz = track.sampleRate ? Math.round(track.sampleRate / 1000) : 44;
     const bitDepth = track.bitsPerSample || 16;
