@@ -334,14 +334,22 @@ const btnClearQueue = document.getElementById('btnClearQueue');
 const queueList = document.getElementById('queueList');
 const queueCount = document.getElementById('queueCount');
 
-// Storage / Scanner DOM
 const btnSelectFolder = document.getElementById('btnSelectFolder');
+const btnExportLibrary = document.getElementById('btnExportLibrary');
+const btnImportLibrary = document.getElementById('btnImportLibrary');
 const scanProgressBox = document.getElementById('scanProgressBox');
 const scanProgressBar = document.getElementById('scanProgressBar');
 const scanStatusLabel = document.getElementById('scanStatusLabel');
 const scanPercentLabel = document.getElementById('scanPercentLabel');
 const scanCurrentFile = document.getElementById('scanCurrentFile');
 const scannedFoldersList = document.getElementById('scannedFoldersList');
+
+// Import Report Modal DOM
+const importReportModal = document.getElementById('importReportModal');
+const btnCloseImportReport = document.getElementById('btnCloseImportReport');
+const btnConfirmImportReport = document.getElementById('btnConfirmImportReport');
+const importReportStats = document.getElementById('importReportStats');
+const importReportDetails = document.getElementById('importReportDetails');
 
 // ----------------- Initialization -----------------
 async function initApp() {
@@ -5354,6 +5362,70 @@ function setupScannerEvents() {
     }
   });
 
+  // Export Library Database
+  if (btnExportLibrary) {
+    btnExportLibrary.addEventListener('click', async () => {
+      if (!window.electronAPI || !window.electronAPI.exportLibrary) {
+        alert('請在 Electron 桌面環境中執行此功能');
+        return;
+      }
+
+      const res = await window.electronAPI.exportLibrary();
+      if (res && res.canceled) return;
+
+      if (res && res.success) {
+        alert(`🎉 資料庫匯出成功！\n\n已儲存至：${res.filePath}\n包含資料夾：${res.folderCount} 個\n包含音訊曲目：${res.trackCount} 首`);
+      } else {
+        alert(`❌ 資料庫匯出失敗：${(res && res.error) || '未知錯誤'}`);
+      }
+    });
+  }
+
+  // Import Library Database and Merge with Skip Report
+  if (btnImportLibrary) {
+    btnImportLibrary.addEventListener('click', async () => {
+      if (!window.electronAPI || !window.electronAPI.importLibrary) {
+        alert('請在 Electron 桌面環境中執行此功能');
+        return;
+      }
+
+      const res = await window.electronAPI.importLibrary();
+      if (res && res.canceled) return;
+
+      if (res && res.success) {
+        // Update local app state with merged data
+        state.tracks = res.data.tracks || state.tracks;
+        state.folders = res.data.folders || state.folders;
+        rebuildLibraryCollections();
+        renderAll();
+
+        // Show detailed import and skip report modal
+        showImportReportModal(res.report);
+      } else {
+        alert(`❌ 資料庫匯入失敗：${(res && res.error) || '未知錯誤'}`);
+      }
+    });
+  }
+
+  // Close Import Report Modal handlers
+  if (btnCloseImportReport) {
+    btnCloseImportReport.addEventListener('click', () => {
+      if (importReportModal) importReportModal.style.display = 'none';
+    });
+  }
+  if (btnConfirmImportReport) {
+    btnConfirmImportReport.addEventListener('click', () => {
+      if (importReportModal) importReportModal.style.display = 'none';
+    });
+  }
+  if (importReportModal) {
+    importReportModal.addEventListener('click', (e) => {
+      if (e.target === importReportModal) {
+        importReportModal.style.display = 'none';
+      }
+    });
+  }
+
   if (window.electronAPI) {
     window.electronAPI.onScanProgress((data) => {
       const pct = Math.round((data.current / data.total) * 100);
@@ -5362,6 +5434,93 @@ function setupScannerEvents() {
       scanCurrentFile.textContent = `檔案: ${data.currentFile}`;
     });
   }
+}
+
+// Helper: Show Import & Merge Report Modal
+function showImportReportModal(report) {
+  if (!importReportModal || !report) return;
+
+  const folderAdded = report.folders.added.length;
+  const folderSkipped = report.folders.skipped.length;
+  const trackAdded = report.tracks.addedCount;
+  const trackSkipped = report.tracks.skippedCount;
+
+  if (importReportStats) {
+    importReportStats.innerHTML = `
+      <div class="import-report-stat-box" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 14px; text-align: center;">
+        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">資料夾合併</div>
+        <div style="font-size: 20px; font-weight: 700; color: #10b981; margin: 4px 0;">+${folderAdded} <span style="font-size: 13px; font-weight: 400; color: var(--text-secondary);">新增</span></div>
+        <div style="font-size: 12px; color: #eab308;">略過重複：${folderSkipped} 個</div>
+      </div>
+      <div class="import-report-stat-box" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 14px; text-align: center;">
+        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">曲目資料合併</div>
+        <div style="font-size: 20px; font-weight: 700; color: #10b981; margin: 4px 0;">+${trackAdded} <span style="font-size: 13px; font-weight: 400; color: var(--text-secondary);">新增</span></div>
+        <div style="font-size: 12px; color: #eab308;">略過重複：${trackSkipped} 首</div>
+      </div>
+    `;
+  }
+
+  let detailsHtml = '';
+
+  // 1. Skipped Folders Section
+  if (folderSkipped > 0) {
+    detailsHtml += `
+      <div style="margin-bottom: 16px;">
+        <div style="font-weight: 600; font-size: 13px; color: #eab308; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+          <span>⚠️ 略過的資料夾 (${folderSkipped} 個)</span>
+        </div>
+        <div style="background: rgba(0,0,0,0.25); border-radius: 6px; padding: 8px 12px; max-height: 110px; overflow-y: auto; font-family: monospace; font-size: 11px;">
+          ${report.folders.skipped.map(f => `
+            <div style="margin-bottom: 4px; padding-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <div style="color: var(--text-main); word-break: break-all;">${escapeXml(f.path)}</div>
+              <div style="color: var(--text-muted); font-size: 10px;">➔ ${escapeXml(f.reason)}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  // 2. Skipped Tracks Section
+  if (trackSkipped > 0) {
+    const previewList = report.tracks.skipped.slice(0, 100);
+    const hasMore = report.tracks.skipped.length > 100;
+    detailsHtml += `
+      <div style="margin-bottom: 12px;">
+        <div style="font-weight: 600; font-size: 13px; color: #eab308; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+          <span>⚠️ 略過的重複曲目 (${trackSkipped} 首)</span>
+        </div>
+        <div style="background: rgba(0,0,0,0.25); border-radius: 6px; padding: 8px 12px; max-height: 200px; overflow-y: auto; font-size: 12px;">
+          ${previewList.map((t, idx) => `
+            <div style="margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                <span style="font-weight: 600; color: var(--text-main);">${idx + 1}. ${escapeXml(t.title)}</span>
+                <span style="font-size: 11px; color: var(--text-muted);">${escapeXml(t.artist)}</span>
+              </div>
+              <div style="color: #f59e0b; font-size: 11px; margin-top: 2px;">➔ ${escapeXml(t.reason)}</div>
+            </div>
+          `).join('')}
+          ${hasMore ? `<div style="text-align: center; color: var(--text-muted); padding: 4px; font-size: 11px;">... 尚有 ${report.tracks.skipped.length - 100} 首重複項目已自動略過</div>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  if (folderSkipped === 0 && trackSkipped === 0) {
+    detailsHtml = `
+      <div style="text-align: center; padding: 24px 12px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; color: #10b981;">
+        <div style="font-size: 28px; margin-bottom: 6px;">✨</div>
+        <div style="font-weight: 600; font-size: 14px;">全部項目順利匯入，無任何重複衝突！</div>
+        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">資料庫已即時完成整合與更新。</div>
+      </div>
+    `;
+  }
+
+  if (importReportDetails) {
+    importReportDetails.innerHTML = detailsHtml;
+  }
+
+  importReportModal.style.display = 'flex';
 }
 
 window.rescanSpecificFolder = async function(folderPath) {

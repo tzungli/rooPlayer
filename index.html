@@ -433,9 +433,15 @@
             <h3>掃描本機資料夾</h3>
             <p>支援格式：FLAC (24/192 Hi-Res), WAV, AIFF, DSD/DSF, MP3, M4A, AAC, OGG</p>
           </div>
-          <div class="storage-actions">
+          <div class="storage-actions" style="display: flex; gap: 12px; flex-wrap: wrap;">
             <button class="btn btn-primary" id="btnSelectFolder">
               <span>📂 選擇音樂資料夾並掃描</span>
+            </button>
+            <button class="btn btn-secondary" id="btnExportLibrary" title="匯出所有音樂資料及已加入的資料夾設定為 JSON 備份檔">
+              <span>💾 匯出資料庫</span>
+            </button>
+            <button class="btn btn-secondary" id="btnImportLibrary" title="匯入資料庫備份檔並合併（自動略過重複曲目與資料夾）">
+              <span>📥 匯入資料庫</span>
             </button>
           </div>
           
@@ -1170,6 +1176,32 @@
       </button>
     </div>
   </footer>
+
+  <!-- Database Import Report Modal -->
+  <div id="importReportModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card import-report-modal-card" style="width: 580px; max-width: 92vw; background: var(--bg-card, #171820); border: 1px solid var(--border-color, rgba(255,255,255,0.12)); border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); overflow: hidden;">
+      <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid rgba(255,255,255,0.08);">
+        <div class="modal-title-wrap" style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 20px;">📊</span>
+          <h3 style="margin: 0; font-size: 16px; font-weight: 600; color: var(--text-main);">資料庫匯入與合併報告</h3>
+        </div>
+        <button class="icon-btn" id="btnCloseImportReport" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px;">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 24px; max-height: 65vh; overflow-y: auto;">
+        <!-- Summary stats -->
+        <div id="importReportStats" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 20px;">
+          <!-- Injected via JS -->
+        </div>
+
+        <div id="importReportDetails" style="font-size: 13px; line-height: 1.6; color: var(--text-secondary);">
+          <!-- Injected via JS -->
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 16px 24px; display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid rgba(255,255,255,0.08); background: rgba(0,0,0,0.15);">
+        <button class="btn btn-primary" id="btnConfirmImportReport" style="padding: 8px 22px;">確定</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Hidden native HTML5 Audio element -->
   <audio id="nativeAudio"></audio>

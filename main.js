@@ -842,3 +842,201 @@ ipcMain.handle('library:updateAlbumArtist', async (event, albumTitle, artistName
   }
 });
 
+ipcMain.handle('library:export', async (event, defaultFilename) => {
+  try {
+    const existing = loadLibraryData();
+    const d = new Date();
+    const dateStr = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}_${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+    const defaultName = defaultFilename || `rooplayer_library_backup_${dateStr}.json`;
+
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '匯出音樂資料庫與資料夾設定',
+      defaultPath: defaultName,
+      filters: [
+        { name: 'JSON 資料庫備份 (*.json)', extensions: ['json'] },
+        { name: '所有檔案 (*.*)', extensions: ['*'] }
+      ]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { canceled: true };
+    }
+
+    const exportPayload = {
+      app: 'rooPlayer',
+      version: '1.0.0',
+      exportedAt: new Date().toISOString(),
+      folders: existing.folders || [],
+      tracks: existing.tracks || []
+    };
+
+    fs.writeFileSync(result.filePath, JSON.stringify(exportPayload, null, 2), 'utf-8');
+
+    return {
+      success: true,
+      filePath: result.filePath,
+      folderCount: (exportPayload.folders || []).length,
+      trackCount: (exportPayload.tracks || []).length
+    };
+  } catch (err) {
+    console.error('Failed to export library:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('library:import', async () => {
+  try {
+    const dialogRes = await dialog.showOpenDialog(mainWindow, {
+      title: '選取要匯入的音樂資料庫備份檔',
+      properties: ['openFile'],
+      filters: [
+        { name: 'JSON 資料庫備份 (*.json)', extensions: ['json'] },
+        { name: '所有檔案 (*.*)', extensions: ['*'] }
+      ]
+    });
+
+    if (dialogRes.canceled || !dialogRes.filePaths.length) {
+      return { canceled: true };
+    }
+
+    const importFilePath = dialogRes.filePaths[0];
+    const fileContent = fs.readFileSync(importFilePath, 'utf-8');
+    let importedData = null;
+    try {
+      importedData = JSON.parse(fileContent);
+    } catch (parseErr) {
+      return { success: false, error: '所選檔案不是有效的 JSON 格式！' };
+    }
+
+    if (!importedData || (!Array.isArray(importedData.tracks) && !Array.isArray(importedData.folders))) {
+      return { success: false, error: 'JSON 檔案中未發現有效的 tracks 或 folders 結構！' };
+    }
+
+    const currentLib = loadLibraryData();
+    const currentFolders = Array.isArray(currentLib.folders) ? currentLib.folders : [];
+    const currentTracks = Array.isArray(currentLib.tracks) ? currentLib.tracks : [];
+
+    // Folder deduplication map (normalized path)
+    const folderNormMap = new Map();
+    currentFolders.forEach(f => {
+      if (typeof f === 'string' && f.trim()) {
+        const norm = path.normalize(f.trim()).toLowerCase();
+        folderNormMap.set(norm, f);
+      }
+    });
+
+    // Track deduplication maps (by filePath and by artist + title)
+    const trackFilePathMap = new Map();
+    const trackMetaSet = new Set();
+
+    currentTracks.forEach(t => {
+      if (t) {
+        if (t.filePath) {
+          const normP = path.normalize(t.filePath).toLowerCase();
+          trackFilePathMap.set(normP, t);
+        }
+        const art = (t.artist || '').trim().toLowerCase();
+        const tit = (t.title || '').trim().toLowerCase();
+        if (art && tit) {
+          trackMetaSet.add(`${art}:::${tit}`);
+        }
+      }
+    });
+
+    // Detailed report structures
+    const report = {
+      importedFile: importFilePath,
+      folders: {
+        totalInImport: 0,
+        added: [],
+        skipped: [] // { path, reason }
+      },
+      tracks: {
+        totalInImport: 0,
+        addedCount: 0,
+        skippedCount: 0,
+        skipped: [] // { title, artist, filePath, reason }
+      }
+    };
+
+    const mergedFolders = [...currentFolders];
+    const mergedTracks = [...currentTracks];
+
+    // 1. Process imported folders
+    const importFolders = Array.isArray(importedData.folders) ? importedData.folders : [];
+    report.folders.totalInImport = importFolders.length;
+
+    for (const rawF of importFolders) {
+      if (!rawF || typeof rawF !== 'string' || !rawF.trim()) continue;
+      const trimmedF = rawF.trim();
+      const normF = path.normalize(trimmedF).toLowerCase();
+
+      if (folderNormMap.has(normF)) {
+        report.folders.skipped.push({
+          path: trimmedF,
+          reason: '資料夾已存在於目前音樂庫中'
+        });
+      } else {
+        folderNormMap.set(normF, trimmedF);
+        mergedFolders.push(trimmedF);
+        report.folders.added.push(trimmedF);
+      }
+    }
+
+    // 2. Process imported tracks
+    const importTracks = Array.isArray(importedData.tracks) ? importedData.tracks : [];
+    report.tracks.totalInImport = importTracks.length;
+
+    for (const t of importTracks) {
+      if (!t) continue;
+      const tPath = t.filePath ? path.normalize(t.filePath).toLowerCase() : '';
+      const tArt = (t.artist || '').trim().toLowerCase();
+      const tTit = (t.title || '').trim().toLowerCase();
+      const metaKey = (tArt && tTit) ? `${tArt}:::${tTit}` : '';
+
+      let isDuplicate = false;
+      let skipReason = '';
+
+      if (tPath && trackFilePathMap.has(tPath)) {
+        isDuplicate = true;
+        skipReason = `檔案路徑已存在 (${t.filePath})`;
+      } else if (metaKey && trackMetaSet.has(metaKey)) {
+        isDuplicate = true;
+        skipReason = `演出者與曲名重複 (${t.artist || '未知'} - ${t.title || '未知'})`;
+      }
+
+      if (isDuplicate) {
+        report.tracks.skippedCount++;
+        report.tracks.skipped.push({
+          title: t.title || t.fileName || '未知曲目',
+          artist: t.artist || '未知演出者',
+          album: t.album || '未知專輯',
+          filePath: t.filePath || '',
+          reason: skipReason
+        });
+      } else {
+        if (tPath) trackFilePathMap.set(tPath, t);
+        if (metaKey) trackMetaSet.add(metaKey);
+        mergedTracks.push(t);
+        report.tracks.addedCount++;
+      }
+    }
+
+    // Save merged result to LIBRARY_FILE
+    const finalLib = {
+      updatedAt: new Date().toISOString(),
+      folders: mergedFolders,
+      tracks: mergedTracks
+    };
+    fs.writeFileSync(LIBRARY_FILE, JSON.stringify(finalLib), 'utf-8');
+
+    return {
+      success: true,
+      data: finalLib,
+      report
+    };
+  } catch (err) {
+    console.error('Failed to import library:', err);
+    return { success: false, error: err.message };
+  }
+});
