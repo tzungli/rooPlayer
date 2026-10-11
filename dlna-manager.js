@@ -1400,18 +1400,36 @@ class DlnaManager extends EventEmitter {
     }
   }
 
-  // Query PositionInfo from DLNA renderer
+  // Query PositionInfo and TransportInfo from DLNA renderer
   async getPositionInfo(dev) {
-    const xml = await this.sendSoapRequest(
-      dev.avControlUrl,
-      'urn:schemas-upnp-org:service:AVTransport:1',
-      'GetPositionInfo',
-      `<InstanceID>0</InstanceID>`
-    );
+    let positionXml = '';
+    try {
+      positionXml = await this.sendSoapRequest(
+        dev.avControlUrl,
+        'urn:schemas-upnp-org:service:AVTransport:1',
+        'GetPositionInfo',
+        `<InstanceID>0</InstanceID>`
+      );
+    } catch (e) {
+      // Some renderers fail GetPositionInfo intermittently
+    }
 
-    const relTimeMatch = xml.match(/<RelTime>(.*?)<\/RelTime>/i);
-    const trackDurMatch = xml.match(/<TrackDuration>(.*?)<\/TrackDuration>/i);
-    const stateMatch = xml.match(/<CurrentTransportState>(.*?)<\/CurrentTransportState>/i);
+    let transportXml = '';
+    try {
+      transportXml = await this.sendSoapRequest(
+        dev.avControlUrl,
+        'urn:schemas-upnp-org:service:AVTransport:1',
+        'GetTransportInfo',
+        `<InstanceID>0</InstanceID>`
+      );
+    } catch (e) {
+      // GetTransportInfo optional fallback
+    }
+
+    const relTimeMatch = positionXml.match(/<RelTime>(.*?)<\/RelTime>/i);
+    const trackDurMatch = positionXml.match(/<TrackDuration>(.*?)<\/TrackDuration>/i);
+    const stateMatchPos = positionXml.match(/<CurrentTransportState>(.*?)<\/CurrentTransportState>/i);
+    const stateMatchTrans = transportXml.match(/<CurrentTransportState>(.*?)<\/CurrentTransportState>/i);
 
     const relTimeStr = relTimeMatch ? relTimeMatch[1].trim() : '0:00:00';
     const durStr = trackDurMatch ? trackDurMatch[1].trim() : '0:00:00';
@@ -1419,10 +1437,17 @@ class DlnaManager extends EventEmitter {
     const currentSec = parseHmsToSec(relTimeStr);
     const durationSec = parseHmsToSec(durStr);
 
+    let state = this.playbackState;
+    if (stateMatchTrans && stateMatchTrans[1]) {
+      state = stateMatchTrans[1].trim();
+    } else if (stateMatchPos && stateMatchPos[1]) {
+      state = stateMatchPos[1].trim();
+    }
+
     return {
       currentSec,
       durationSec,
-      state: stateMatch ? stateMatch[1].trim() : this.playbackState
+      state
     };
   }
 
@@ -1430,6 +1455,7 @@ class DlnaManager extends EventEmitter {
   startPositionPolling(dev) {
     this.stopPositionPolling();
     const sessionId = ++this._pollSessionCounter;
+    let nearEndCount = 0;
 
     this.positionTimer = setInterval(async () => {
       if (sessionId !== this._pollSessionCounter) {
@@ -1449,8 +1475,10 @@ class DlnaManager extends EventEmitter {
         this.currentPositionSec = actualSec;
         if (totalDurationSec > 0) this.currentDurationSec = totalDurationSec;
 
-        // Mark that device has successfully transitioned into PLAYING
-        if (info.state === 'PLAYING') {
+        const stateUpper = (info.state || '').toUpperCase();
+
+        // Mark that device has successfully transitioned into PLAYING or TRANSITIONING
+        if (stateUpper === 'PLAYING' || stateUpper === 'TRANSITIONING') {
           this.hasStartedPlaying = true;
         }
 
@@ -1460,18 +1488,40 @@ class DlnaManager extends EventEmitter {
           state: info.state
         });
 
-        // Detect track ending on DLNA device with startup protection guard:
-        // 1. Device must have reached PLAYING state at least once (or elapsed > 15s)
-        // 2. State must be STOPPED while rooPlayer expected PLAYING
-        // 3. At least 4 seconds must have elapsed since track start, preventing initial startup state false triggers
         const timeSinceStart = Date.now() - this.trackPlayTimestamp;
-        const canTriggerEnded = (this.hasStartedPlaying || timeSinceStart > 15000) && (timeSinceStart > 4000);
+        const canTriggerEnded = (this.hasStartedPlaying || timeSinceStart > 12000) && (timeSinceStart > 4000);
 
-        if (canTriggerEnded && info.state === 'STOPPED' && this.playbackState === 'PLAYING') {
-          console.log('[DLNA] Track finished on renderer, emitting track-ended');
+        // Condition A: Standard DLNA state change to STOPPED / NO_MEDIA_PRESENT / COMPLETED
+        const isDeviceStopped = (
+          stateUpper === 'STOPPED' ||
+          stateUpper === 'NO_MEDIA_PRESENT' ||
+          stateUpper === 'COMPLETED'
+        );
+
+        if (canTriggerEnded && isDeviceStopped && this.playbackState === 'PLAYING') {
+          console.log(`[DLNA] Track finished on renderer (state=${stateUpper}), triggering next track`);
           this.playbackState = 'STOPPED';
           this.stopPositionPolling();
           this.emit('track-ended');
+          return;
+        }
+
+        // Condition B: Time-based threshold guard
+        // If reported progress reaches total duration (or within 1.5s of end)
+        if (canTriggerEnded && this.playbackState === 'PLAYING' && totalDurationSec > 10) {
+          if (actualSec >= totalDurationSec || (totalDurationSec - actualSec <= 1.5 && actualSec > 0)) {
+            nearEndCount++;
+            // If near end for 2 consecutive ticks (2 seconds)
+            if (nearEndCount >= 2) {
+              console.log(`[DLNA] Track reached duration limit (${actualSec}/${totalDurationSec}s), triggering next track`);
+              this.playbackState = 'STOPPED';
+              this.stopPositionPolling();
+              this.emit('track-ended');
+              return;
+            }
+          } else {
+            nearEndCount = 0;
+          }
         }
       } catch (err) {
         // Polling fail ignored

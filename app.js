@@ -5697,6 +5697,12 @@ function handleDlnaProgress(prog) {
     scrubberFill.style.width = `${percent}%`;
     currentTimeLabel.textContent = formatDuration(currentSec);
     totalTimeLabel.textContent = formatDuration(totalSec);
+
+    // Front-end safety guard: if renderer reached track end and didn't fire event
+    if (state.isPlaying && totalSec > 8 && currentSec >= totalSec && !isTrackEndingHandled) {
+      console.log('[DLNA Frontend] Current track reached duration, triggering onTrackEnded');
+      onTrackEnded();
+    }
   }
 }
 
