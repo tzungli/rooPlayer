@@ -1,9 +1,21 @@
 const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const http = require('http');
 const { spawn } = require('child_process');
+
+// Increase V8 maximum heap limit to 4GB to handle large audiophile libraries smoothly
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
+
+// Global error handlers to prevent silent process termination
+process.on('uncaughtException', (err) => {
+  console.error('[rooplayer] Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[rooplayer] Unhandled Rejection:', reason);
+});
 
 const nativeAudioEngine = require('./native-audio-engine');
 const mm = require('music-metadata');
@@ -15,6 +27,53 @@ let dlnaManager = null;
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
+
+// Cover cache directory for lightweight, fast image handling (avoids storing huge base64 in JSON)
+const COVER_CACHE_DIR = path.join(app.getPath('userData'), 'cover_cache');
+if (!fs.existsSync(COVER_CACHE_DIR)) {
+  try { fs.mkdirSync(COVER_CACHE_DIR, { recursive: true }); } catch (e) {}
+}
+
+function toMediaUrl(filePath) {
+  if (!filePath) return null;
+  return 'media://' + filePath.replace(/\\/g, '/');
+}
+
+function saveCoverPicture(picBuffer, format) {
+  try {
+    if (!picBuffer || picBuffer.length === 0) return null;
+    const hash = crypto.createHash('md5').update(picBuffer).digest('hex');
+    const ext = (format && format.includes('png')) ? 'png' : 'jpg';
+    const filePath = path.join(COVER_CACHE_DIR, `${hash}.${ext}`);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, picBuffer);
+    }
+    return toMediaUrl(filePath);
+  } catch (e) {
+    console.warn('Failed to save cover picture:', e);
+    return null;
+  }
+}
+
+function sanitizeTrackCover(cover) {
+  if (!cover || typeof cover !== 'string') return null;
+  if (!cover.startsWith('data:image')) return cover;
+  try {
+    const match = cover.match(/^data:image\/([a-zA-Z0-9\+\-\.]+);base64,(.+)$/);
+    if (!match) return null;
+    const ext = match[1].includes('png') ? 'png' : 'jpg';
+    const base64Data = match[2];
+    const hash = crypto.createHash('md5').update(base64Data).digest('hex');
+    const filePath = path.join(COVER_CACHE_DIR, `${hash}.${ext}`);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+    }
+    return toMediaUrl(filePath);
+  } catch (e) {
+    console.warn('Failed to sanitize base64 cover:', e);
+    return null;
+  }
+}
 
 // Register custom media scheme for bit-perfect audio streaming from local drive
 protocol.registerSchemesAsPrivileged([
@@ -480,17 +539,6 @@ function getAllAudioFiles(dirPath, files = []) {
   return files;
 }
 
-function readImageAsDataUrl(imgFilePath) {
-  try {
-    const ext = path.extname(imgFilePath).toLowerCase();
-    const mime = (ext === '.png') ? 'image/png' : (ext === '.webp' ? 'image/webp' : 'image/jpeg');
-    const data = fs.readFileSync(imgFilePath);
-    return `data:${mime};base64,${data.toString('base64')}`;
-  } catch (e) {
-    return null;
-  }
-}
-
 function findFolderCover(filePath) {
   try {
     if (!filePath) return null;
@@ -507,175 +555,190 @@ function findFolderCover(filePath) {
     if (fs.existsSync(dir)) {
       for (const name of priorityNames) {
         const p = path.join(dir, name);
-        if (fs.existsSync(p)) return readImageAsDataUrl(p);
+        if (fs.existsSync(p)) return toMediaUrl(p);
       }
       const files = fs.readdirSync(dir);
       const matched = files.find(f => /\.(jpe?g|png|webp)$/i.test(f) && /cover|folder|front|art/i.test(f))
                    || files.find(f => /\.(jpe?g|png|webp)$/i.test(f));
-      if (matched) return readImageAsDataUrl(path.join(dir, matched));
+      if (matched) return toMediaUrl(path.join(dir, matched));
     }
 
     if (parentDir && parentDir !== dir && fs.existsSync(parentDir)) {
       for (const name of priorityNames) {
         const p = path.join(parentDir, name);
-        if (fs.existsSync(p)) return readImageAsDataUrl(p);
+        if (fs.existsSync(p)) return toMediaUrl(p);
       }
       const files = fs.readdirSync(parentDir);
       const matched = files.find(f => /\.(jpe?g|png|webp)$/i.test(f) && /cover|folder|front|art/i.test(f));
-      if (matched) return readImageAsDataUrl(path.join(parentDir, matched));
+      if (matched) return toMediaUrl(path.join(parentDir, matched));
     }
   } catch (e) {}
   return null;
 }
 
 ipcMain.handle('library:scanFolder', async (event, folderPath) => {
-  const { parseFile } = await import('music-metadata');
-  const allFiles = getAllAudioFiles(folderPath);
-  const total = allFiles.length;
-  const tracks = [];
+  try {
+    const { parseFile } = await import('music-metadata');
+    const allFiles = getAllAudioFiles(folderPath);
+    const total = allFiles.length;
+    const tracks = [];
+    const albumCoverCache = new Map();
 
-  for (let i = 0; i < total; i++) {
-    const filePath = allFiles[i];
-    const fileName = path.basename(filePath);
-    
-    // Notify progress every few items
-    if (i % 5 === 0 || i === total - 1) {
-      mainWindow.webContents.send('library:scanProgress', {
-        current: i + 1,
-        total,
-        currentFile: fileName
-      });
-    }
-
-    try {
-      const metadata = await parseFile(filePath, { skipCovers: false });
-      const common = metadata.common || {};
-      const format = metadata.format || {};
-
-      let coverDataUrl = null;
-      if (common.picture && common.picture.length > 0) {
-        const pic = common.picture[0];
-        const base64 = Buffer.from(pic.data).toString('base64');
-        coverDataUrl = `data:${pic.format};base64,${base64}`;
-      }
-      if (!coverDataUrl) {
-        coverDataUrl = findFolderCover(filePath);
+    for (let i = 0; i < total; i++) {
+      const filePath = allFiles[i];
+      const fileName = path.basename(filePath);
+      
+      // Notify progress safely to avoid IPC backpressure
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (i % 5 === 0 || i === total - 1) {
+          mainWindow.webContents.send('library:scanProgress', {
+            current: i + 1,
+            total,
+            currentFile: fileName
+          });
+        }
       }
 
-      const ext = path.extname(filePath).replace('.', '').toUpperCase();
-      let duration = format.duration || 0;
-      if (!duration && (ext === 'DSF' || ext === 'DFF')) {
-        duration = await getDurationWithFfmpeg(filePath);
-      }
-      const sampleRate = format.sampleRate || ((ext === 'DSF' || ext === 'DFF') ? 2822400 : 44100);
-      const bitsPerSample = format.bitsPerSample || ((ext === 'DSF' || ext === 'DFF') ? 1 : (ext === 'FLAC' ? 24 : 16));
-      const isLossless = format.lossless || ['FLAC', 'WAV', 'AIFF', 'DSF', 'DFF', 'ALAC'].includes(ext);
+      try {
+        const metadata = await parseFile(filePath, { skipCovers: false });
+        const common = metadata.common || {};
+        const format = metadata.format || {};
 
-      const labelStr = common.label ? (Array.isArray(common.label) ? common.label.join(', ') : common.label) : null;
-      const producerStr = common.producers ? (Array.isArray(common.producers) ? common.producers.join(', ') : common.producers) : (common.producer ? (Array.isArray(common.producer) ? common.producer.join(', ') : common.producer) : null);
-      const composerStr = common.composers ? (Array.isArray(common.composers) ? common.composers.join(', ') : common.composers) : (common.composer ? (Array.isArray(common.composer) ? common.composer.join(', ') : common.composer) : null);
-      const dateStr = common.date || (common.originalyear ? String(common.originalyear) : null);
+        let title = common.title || path.basename(filePath, path.extname(filePath));
+        let artist = common.artist || common.albumartist || null;
+        let album = common.album || path.basename(path.dirname(filePath)) || 'Unknown Album';
+        let year = common.year || null;
 
-      let title = common.title || path.basename(filePath, path.extname(filePath));
-      let artist = common.artist || common.albumartist || null;
-      let album = common.album || path.basename(path.dirname(filePath)) || 'Unknown Album';
-      let year = common.year || null;
+        // Smart filename extraction: "01. Artist _ Title" or "01 - Artist - Title"
+        const rawBaseName = path.basename(filePath, path.extname(filePath));
+        const filenameMatch = rawBaseName.match(/^\d+[\.\-\s]+\s*(.+?)\s*[_—\-]\s*(.+)$/);
+        if (filenameMatch) {
+          if (!artist || artist === 'Unknown Artist') {
+            artist = filenameMatch[1].trim();
+          }
+          if (!common.title) {
+            title = filenameMatch[2].trim();
+          }
+        }
 
-      // Smart filename extraction: "01. Artist _ Title" or "01 - Artist - Title"
-      const rawBaseName = path.basename(filePath, path.extname(filePath));
-      const filenameMatch = rawBaseName.match(/^\d+[\.\-\s]+\s*(.+?)\s*[_—\-]\s*(.+)$/);
-      if (filenameMatch) {
+        // If artist is still unknown, check parent directory name
         if (!artist || artist === 'Unknown Artist') {
-          artist = filenameMatch[1].trim();
+          const parentDir = path.dirname(path.dirname(filePath));
+          const parentBase = path.basename(parentDir);
+          if (parentBase && parentBase.toLowerCase() !== 'rippedalbums' && parentBase !== path.basename(folderPath)) {
+            artist = parentBase;
+          } else {
+            artist = 'Unknown Artist';
+          }
         }
-        if (!common.title) {
-          title = filenameMatch[2].trim();
-        }
-      }
 
-      // If artist is still unknown, check parent directory name
-      if (!artist || artist === 'Unknown Artist') {
-        const parentDir = path.dirname(path.dirname(filePath));
-        const parentBase = path.basename(parentDir);
-        if (parentBase && parentBase.toLowerCase() !== 'rippedalbums' && parentBase !== path.basename(folderPath)) {
-          artist = parentBase;
+        // If year is unknown, check 4-digit year in album or directory name
+        if (!year) {
+          const yearMatch = (album + ' ' + path.dirname(filePath)).match(/(?:^|\D)(19\d{2}|20\d{2})(?:\D|$)/);
+          if (yearMatch) {
+            year = parseInt(yearMatch[1], 10);
+          }
+        }
+
+        // Cache cover once per album/folder to avoid memory and disk duplication
+        let coverUrl = null;
+        const albumKey = `${artist || ''}___${album || ''}`.trim() || path.dirname(filePath);
+        if (albumCoverCache.has(albumKey)) {
+          coverUrl = albumCoverCache.get(albumKey);
         } else {
-          artist = 'Unknown Artist';
+          if (common.picture && common.picture.length > 0) {
+            coverUrl = saveCoverPicture(common.picture[0].data, common.picture[0].format);
+          }
+          if (!coverUrl) {
+            coverUrl = findFolderCover(filePath);
+          }
+          if (coverUrl) {
+            albumCoverCache.set(albumKey, coverUrl);
+          }
         }
-      }
 
-      // If year is unknown, check 4-digit year in album or directory name
-      if (!year) {
-        const yearMatch = (album + ' ' + path.dirname(filePath)).match(/(?:^|\D)(19\d{2}|20\d{2})(?:\D|$)/);
-        if (yearMatch) {
-          year = parseInt(yearMatch[1], 10);
+        const ext = path.extname(filePath).replace('.', '').toUpperCase();
+        let duration = format.duration || 0;
+        if (!duration && (ext === 'DSF' || ext === 'DFF')) {
+          duration = await getDurationWithFfmpeg(filePath);
         }
-      }
+        const sampleRate = format.sampleRate || ((ext === 'DSF' || ext === 'DFF') ? 2822400 : 44100);
+        const bitsPerSample = format.bitsPerSample || ((ext === 'DSF' || ext === 'DFF') ? 1 : (ext === 'FLAC' ? 24 : 16));
+        const isLossless = format.lossless || ['FLAC', 'WAV', 'AIFF', 'DSF', 'DFF', 'ALAC'].includes(ext);
 
-      tracks.push({
-        id: `track_${Date.now()}_${i}`,
-        filePath,
-        fileName,
-        title,
-        artist,
-        album,
-        albumArtist: common.albumartist || artist,
-        year,
-        date: dateStr,
-        genre: common.genre ? common.genre.join(', ') : 'Unknown',
-        trackNumber: common.track?.no || (i + 1),
-        diskNumber: common.disk?.no || 1,
-        duration,
-        sampleRate,
-        bitsPerSample,
-        bitrate: format.bitrate || 0,
-        codec: format.codec || ext,
-        formatName: ext,
-        isLossless,
-        cover: coverDataUrl,
-        label: labelStr,
-        producer: producerStr,
-        composer: composerStr,
-        copyright: common.copyright || null
-      });
-    } catch (err) {
-      console.warn(`Failed to parse metadata for ${filePath}:`, err);
-      // Fallback track info
-      const ext = path.extname(filePath).replace('.', '').toUpperCase();
-      let duration = 0;
-      if (ext === 'DSF' || ext === 'DFF') {
-        duration = await getDurationWithFfmpeg(filePath);
-      }
-      const rawBase = path.basename(filePath, path.extname(filePath));
-      const fnMatch = rawBase.match(/^\d+[\.\-\s]+\s*(.+?)\s*[_—\-]\s*(.+)$/);
-      const fallbackArtist = fnMatch ? fnMatch[1].trim() : 'Unknown Artist';
-      const fallbackTitle = fnMatch ? fnMatch[2].trim() : rawBase;
-      const fallbackCover = findFolderCover(filePath);
+        const labelStr = common.label ? (Array.isArray(common.label) ? common.label.join(', ') : common.label) : null;
+        const producerStr = common.producers ? (Array.isArray(common.producers) ? common.producers.join(', ') : common.producers) : (common.producer ? (Array.isArray(common.producer) ? common.producer.join(', ') : common.producer) : null);
+        const composerStr = common.composers ? (Array.isArray(common.composers) ? common.composers.join(', ') : common.composers) : (common.composer ? (Array.isArray(common.composer) ? common.composer.join(', ') : common.composer) : null);
+        const dateStr = common.date || (common.originalyear ? String(common.originalyear) : null);
 
-      tracks.push({
-        id: `track_${Date.now()}_${i}`,
-        filePath,
-        fileName,
-        title: fallbackTitle,
-        artist: fallbackArtist,
-        album: path.basename(path.dirname(filePath)),
-        year: null,
-        genre: 'Unknown',
-        trackNumber: i + 1,
-        duration,
-        sampleRate: (ext === 'DSF' || ext === 'DFF') ? 2822400 : 44100,
-        bitsPerSample: (ext === 'DSF' || ext === 'DFF') ? 1 : 16,
-        codec: ext,
-        formatName: ext,
-        isLossless: ['FLAC', 'WAV', 'AIFF', 'DSF', 'DFF'].includes(ext),
-        cover: fallbackCover
-      });
+        tracks.push({
+          id: `track_${Date.now()}_${i}`,
+          filePath,
+          fileName,
+          title,
+          artist,
+          album,
+          albumArtist: common.albumartist || artist,
+          year,
+          date: dateStr,
+          genre: common.genre ? common.genre.join(', ') : 'Unknown',
+          trackNumber: common.track?.no || (i + 1),
+          diskNumber: common.disk?.no || 1,
+          duration,
+          sampleRate,
+          bitsPerSample,
+          bitrate: format.bitrate || 0,
+          codec: format.codec || ext,
+          formatName: ext,
+          isLossless,
+          cover: coverUrl,
+          label: labelStr,
+          producer: producerStr,
+          composer: composerStr,
+          copyright: common.copyright || null
+        });
+      } catch (err) {
+        console.warn(`Failed to parse metadata for ${filePath}:`, err);
+        // Fallback track info
+        const ext = path.extname(filePath).replace('.', '').toUpperCase();
+        let duration = 0;
+        if (ext === 'DSF' || ext === 'DFF') {
+          duration = await getDurationWithFfmpeg(filePath);
+        }
+        const rawBase = path.basename(filePath, path.extname(filePath));
+        const fnMatch = rawBase.match(/^\d+[\.\-\s]+\s*(.+?)\s*[_—\-]\s*(.+)$/);
+        const fallbackArtist = fnMatch ? fnMatch[1].trim() : 'Unknown Artist';
+        const fallbackTitle = fnMatch ? fnMatch[2].trim() : rawBase;
+        const fallbackCover = findFolderCover(filePath);
+
+        tracks.push({
+          id: `track_${Date.now()}_${i}`,
+          filePath,
+          fileName,
+          title: fallbackTitle,
+          artist: fallbackArtist,
+          album: path.basename(path.dirname(filePath)),
+          year: null,
+          genre: 'Unknown',
+          trackNumber: i + 1,
+          duration,
+          sampleRate: (ext === 'DSF' || ext === 'DFF') ? 2822400 : 44100,
+          bitsPerSample: (ext === 'DSF' || ext === 'DFF') ? 1 : 16,
+          codec: ext,
+          formatName: ext,
+          isLossless: ['FLAC', 'WAV', 'AIFF', 'DSF', 'DFF'].includes(ext),
+          cover: fallbackCover
+        });
+      }
     }
-  }
 
-  // Save library data locally by merging with existing folders
-  const { combinedTracks, folders } = saveLibrary(tracks, folderPath);
-  return { tracks: combinedTracks, folders, folderPath, newCount: tracks.length };
+    // Save library data locally by merging with existing folders
+    const { combinedTracks, folders } = saveLibrary(tracks, folderPath);
+    return { tracks: combinedTracks, folders, folderPath, newCount: tracks.length };
+  } catch (error) {
+    console.error('Fatal error during scanFolder:', error);
+    return { error: error.message, tracks: [], folders: [] };
+  }
 });
 
 function saveLibrary(newTracks, folderPath) {
@@ -723,6 +786,7 @@ function loadLibraryData() {
 
     const trackPathMap = new Map();
     const folderSet = new Set();
+    let modified = false;
 
     for (const candPath of candidateFiles) {
       if (fs.existsSync(candPath)) {
@@ -733,6 +797,10 @@ function loadLibraryData() {
           (data.tracks || []).forEach(t => {
             if (t && t.filePath) {
               const normPath = path.normalize(t.filePath).toLowerCase();
+              if (t.cover && t.cover.startsWith('data:image')) {
+                t.cover = sanitizeTrackCover(t.cover);
+                modified = true;
+              }
               if (!trackPathMap.has(normPath)) {
                 trackPathMap.set(normPath, t);
               } else {
@@ -743,6 +811,10 @@ function loadLibraryData() {
               }
             }
           });
+          // If we read LIBRARY_FILE and found tracks, do not keep reading legacy files
+          if (candPath === LIBRARY_FILE && trackPathMap.size > 0) {
+            break;
+          }
         } catch (e) {
           console.warn(`Error reading candidate library ${candPath}:`, e);
         }
@@ -750,7 +822,6 @@ function loadLibraryData() {
     }
 
     const mergedTracks = Array.from(trackPathMap.values());
-    let modified = false;
 
     // Auto-enrich any track missing cover or smart title/artist
     for (const t of mergedTracks) {
@@ -783,7 +854,11 @@ function loadLibraryData() {
     };
 
     if (mergedTracks.length > 0 && modified) {
-      fs.writeFileSync(LIBRARY_FILE, JSON.stringify(finalResult), 'utf-8');
+      try {
+        fs.writeFileSync(LIBRARY_FILE, JSON.stringify(finalResult), 'utf-8');
+      } catch (err) {
+        console.warn('Failed to rewrite sanitized library file:', err);
+      }
     }
 
     return finalResult;
@@ -1025,6 +1100,7 @@ ipcMain.handle('library:import', async () => {
       } else {
         if (tPath) trackFilePathMap.set(tPath, t);
         if (metaKey) trackMetaSet.add(metaKey);
+        if (t.cover) t.cover = sanitizeTrackCover(t.cover);
         mergedTracks.push(t);
         report.tracks.addedCount++;
       }

@@ -5356,25 +5356,33 @@ function setupScannerEvents() {
     scanPercentLabel.textContent = '0%';
     scanCurrentFile.textContent = '準備中...';
 
-    const result = await window.electronAPI.scanFolder(folderPath);
+    try {
+      const result = await window.electronAPI.scanFolder(folderPath);
 
-    if (result && result.tracks) {
-      state.tracks = result.tracks;
-      state.folders = result.folders || state.folders;
-      if (!state.folders.includes(result.folderPath)) {
-        state.folders.push(result.folderPath);
+      if (result && result.tracks) {
+        state.tracks = result.tracks;
+        state.folders = result.folders || state.folders;
+        if (result.folderPath && !state.folders.includes(result.folderPath)) {
+          state.folders.push(result.folderPath);
+        }
+        rebuildLibraryCollections();
+        renderAll();
+
+        scanStatusLabel.textContent = `掃描完成！本資料夾新增/更新 ${result.newCount || 0} 首，目前音樂庫總計 ${state.tracks.length} 首音訊。`;
+        scanPercentLabel.textContent = '100%';
+        scanProgressBar.style.width = '100%';
+
+        setTimeout(() => {
+          scanProgressBox.style.display = 'none';
+          const albNav = document.querySelector('[data-view="albums"]');
+          if (albNav) albNav.click();
+        }, 1500);
+      } else if (result && result.error) {
+        scanStatusLabel.textContent = `掃描遭遇錯誤：${result.error}`;
       }
-      rebuildLibraryCollections();
-      renderAll();
-
-      scanStatusLabel.textContent = `掃描完成！本資料夾新增/更新 ${result.newCount || 0} 首，目前音樂庫總計 ${state.tracks.length} 首音訊。`;
-      scanPercentLabel.textContent = '100%';
-      scanProgressBar.style.width = '100%';
-
-      setTimeout(() => {
-        scanProgressBox.style.display = 'none';
-        document.querySelector('[data-view="albums"]').click();
-      }, 1500);
+    } catch (err) {
+      console.error('Scan folder failed:', err);
+      scanStatusLabel.textContent = `掃描中斷：${err.message || err}`;
     }
   });
 
@@ -5633,16 +5641,22 @@ function showImportReportModal(report) {
 
 window.rescanSpecificFolder = async function(folderPath) {
   if (!window.electronAPI) return;
-  document.querySelector('[data-view="storage"]').click();
+  const storageNav = document.querySelector('[data-view="storage"]');
+  if (storageNav) storageNav.click();
   scanProgressBox.style.display = 'block';
   scanProgressBar.style.width = '0%';
   scanStatusLabel.textContent = `正在重新掃描: ${folderPath}`;
-  const result = await window.electronAPI.scanFolder(folderPath);
-  if (result && result.tracks) {
-    state.tracks = result.tracks;
-    state.folders = result.folders || state.folders;
-    rebuildLibraryCollections();
-    renderAll();
+  try {
+    const result = await window.electronAPI.scanFolder(folderPath);
+    if (result && result.tracks) {
+      state.tracks = result.tracks;
+      state.folders = result.folders || state.folders;
+      rebuildLibraryCollections();
+      renderAll();
+      scanProgressBox.style.display = 'none';
+    }
+  } catch (err) {
+    console.error('Rescan failed:', err);
     scanProgressBox.style.display = 'none';
   }
 };
