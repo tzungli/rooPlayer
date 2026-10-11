@@ -3146,16 +3146,18 @@ let isCurrentSox = false;
 let currentSoxOffset = 0;
 
 function isDsdRateMode(mode) {
-  return ['dsd64', 'dsd128', 'dsd256', 'dsd512'].includes(mode);
+  if (!mode || typeof mode !== 'string') return false;
+  const m = mode.trim().toLowerCase();
+  return ['dsd64', 'dsd128', 'dsd256', 'dsd512'].includes(m);
 }
 
-function getDsdMhz(mode, srcRate = 44100) {
-  const is48kFamily = (Number(srcRate) % 48000 === 0);
-  switch (mode) {
-    case 'dsd64': return is48kFamily ? '3.072 MHz' : '2.8224 MHz';
-    case 'dsd128': return is48kFamily ? '6.144 MHz' : '5.6448 MHz';
-    case 'dsd256': return is48kFamily ? '12.288 MHz' : '11.2896 MHz';
-    case 'dsd512': return is48kFamily ? '24.576 MHz' : '22.5792 MHz';
+function getDsdMhz(mode) {
+  const m = (mode || 'dsd64').trim().toLowerCase();
+  switch (m) {
+    case 'dsd64': return '2.8224 MHz';
+    case 'dsd128': return '5.6448 MHz';
+    case 'dsd256': return '11.2896 MHz';
+    case 'dsd512': return '22.5792 MHz';
     default: return '2.8224 MHz';
   }
 }
@@ -3221,7 +3223,7 @@ async function playSoxTrack(track, startSec = 0) {
       state.isPlaying = true;
       btnPlayPause.textContent = '⏸';
       if (isDsd) {
-        const mhz = getDsdMhz(state.dsp.rateMode, track.sampleRate || 44100);
+        const mhz = getDsdMhz(state.dsp.rateMode);
         showToast(`⚡ 1-bit DSD 調變啟用: PCM ➔ ${state.dsp.rateMode.toUpperCase()} (1-bit / ${mhz})`);
       } else {
         const trkFmt = getAudioFormatFromPath(track.filePath || track.fileName, track.formatName || 'PCM').toUpperCase();
@@ -3331,7 +3333,7 @@ function updateSignalPathUI(track = null) {
     const targetKhz = formatKhz(targetRate);
 
     if (isDsdRateMode(state.dsp.rateMode)) {
-      const mhz = getDsdMhz(state.dsp.rateMode, srcRate);
+      const mhz = getDsdMhz(state.dsp.rateMode);
       const modeUpper = state.dsp.rateMode.toUpperCase();
 
       if (signalPathBadge) signalPathBadge.textContent = `DSP (${modeUpper}) | 1-bit / ${mhz} ⚡`;
@@ -3869,6 +3871,7 @@ function updateNowPlayingModalContent() {
 
   const trackFmt = getAudioFormatFromPath(track.filePath || track.fileName, track.formatName || 'PCM').toUpperCase();
   const isTrkDsd = trackFmt === 'DSF' || trackFmt === 'DFF' || trackFmt === 'DSD';
+  const isDspDsd = state.dsp && state.dsp.enabled && isDsdRateMode(state.dsp.rateMode);
   const sampleRateKhz = formatKhz(track.sampleRate || 44100);
   const bitDepth = track.bitsPerSample || (isTrkDsd ? 1 : 16);
   const formatBadge = document.getElementById('nowPlayingFormatBadge');
@@ -3876,6 +3879,10 @@ function updateNowPlayingModalContent() {
     if (isTrkDsd) {
       const dsdMhz = track.sampleRate ? `${(track.sampleRate / 1000000).toFixed(1)}M` : '2.8M';
       formatBadge.textContent = `${trackFmt} 1b/${dsdMhz}`;
+    } else if (isDspDsd) {
+      const modeUpper = state.dsp.rateMode.toUpperCase();
+      const mhz = getDsdMhz(state.dsp.rateMode);
+      formatBadge.textContent = `${modeUpper} 1b/${mhz.replace(' MHz', 'M')}`;
     } else {
       formatBadge.textContent = `${trackFmt} ${bitDepth}/${sampleRateKhz}`;
     }

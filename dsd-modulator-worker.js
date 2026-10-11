@@ -20,13 +20,13 @@ function run() {
   const right = new Float32Array(rightBuffer);
   const inLen = left.length;
 
-  const is48k = (sampleRate % 48000 === 0);
-  let dsdRate = is48k ? 3072000 : 2822400; // dsd64
-  if (dsdMode === 'dsd128') dsdRate = is48k ? 6144000 : 5644800;
-  else if (dsdMode === 'dsd256') dsdRate = is48k ? 12288000 : 11289600;
-  else if (dsdMode === 'dsd512') dsdRate = is48k ? 24576000 : 22579200;
+  const mode = (dsdMode || 'dsd64').toLowerCase();
+  let dsdRate = 2822400; // Standard Sony DSD64 (44.1kHz * 64)
+  if (mode === 'dsd128') dsdRate = 5644800; // Standard DSD128 (44.1kHz * 128)
+  else if (mode === 'dsd256') dsdRate = 11289600; // Standard DSD256 (44.1kHz * 256)
+  else if (mode === 'dsd512') dsdRate = 22579200; // Standard DSD512 (44.1kHz * 512)
 
-  const ratio = (dsdRate / sampleRate) | 0;
+  const ratio = dsdRate / sampleRate;
   const invRatio = 1.0 / ratio;
   const outBits = Math.floor(inLen * ratio);
 

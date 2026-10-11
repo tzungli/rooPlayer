@@ -1120,8 +1120,26 @@ class DlnaManager extends EventEmitter {
       `    <upnp:albumArtURI dlna:profileID="JPEG_MED">${coverUrl}</upnp:albumArtURI>`,
       `    <upnp:albumArtURI dlna:profileID="JPEG_LRG">${coverUrl}</upnp:albumArtURI>`,
       `    <upnp:albumArtURI>${coverUrl}</upnp:albumArtURI>`,
-      `    <upnp:class>object.item.audioItem.musicTrack</upnp:class>`,
-      `    <res protocolInfo="${protocolInfo}" ${durationAttr}>${streamUrl}</res>`,
+      `    <upnp:class>object.item.audioItem.musicTrack</upnp:class>`
+    );
+
+    if (isNativeDsf || isDsdUpsample) {
+      let dsdHz = 2822400;
+      if (dspOptions && dspOptions.dsdMode) {
+        const m = dspOptions.dsdMode.toLowerCase();
+        if (m === 'dsd128') dsdHz = 5644800;
+        else if (m === 'dsd256') dsdHz = 11289600;
+        else if (m === 'dsd512') dsdHz = 22579200;
+      }
+      didlParts.push(
+        `    <res protocolInfo="http-get:*:audio/x-dsf:*" sampleFrequency="${dsdHz}" bitsPerSample="1" nrAudioChannels="2" ${durationAttr}>${streamUrl}</res>`,
+        `    <res protocolInfo="http-get:*:audio/dsf:*" sampleFrequency="${dsdHz}" bitsPerSample="1" nrAudioChannels="2" ${durationAttr}>${streamUrl}</res>`
+      );
+    } else {
+      didlParts.push(`    <res protocolInfo="${protocolInfo}" ${durationAttr}>${streamUrl}</res>`);
+    }
+
+    didlParts.push(
       '  </item>',
       '</DIDL-Lite>'
     );

@@ -60,7 +60,11 @@ class ProgressiveFileStream extends stream.Readable {
       return;
     }
 
-    const availableEnd = this.session ? Math.min(this.endPos + 1, this.session.bytesWritten) : (this.endPos + 1);
+    // Allow tail metadata probes (e.g. ID3 tags at end of file) to read directly without blocking
+    const isTailProbe = this.session && this.session.totalFileBytes && (this.currentPos > this.session.totalFileBytes - 256 * 1024);
+    const availableEnd = (this.session && !isTailProbe)
+      ? Math.min(this.endPos + 1, this.session.bytesWritten)
+      : (this.endPos + 1);
     const available = availableEnd - this.currentPos;
 
     if (available <= 0) {
@@ -73,7 +77,7 @@ class ProgressiveFileStream extends stream.Readable {
     }
 
     const readBytes = Math.min(size, available);
-    const buf = Buffer.allocUnsafe(readBytes);
+    const buf = Buffer.alloc(readBytes);
     try {
       const bytesRead = fs.readSync(this.fd, buf, 0, readBytes, this.currentPos);
       if (bytesRead <= 0) {

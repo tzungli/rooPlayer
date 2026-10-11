@@ -20,8 +20,6 @@ const { FLACDecoder } = require('@wasm-audio-decoders/flac');
 class NativeAudioEngine {
   constructor() {
     this.name = 'rooPlayer Native Audiophile Engine';
-    this.flacDecoder = new FLACDecoder();
-    this.flacDecoderReady = this.flacDecoder.ready;
   }
 
   // ----------------------------------------------------
@@ -178,11 +176,13 @@ class NativeAudioEngine {
 
     // 4.1 FLAC Native WASM Decoding
     if (ext === '.flac') {
+      const decoder = new FLACDecoder();
       try {
-        await this.flacDecoderReady;
+        await decoder.ready;
         const fileBuf = fs.readFileSync(filePath);
-        const decoded = await this.flacDecoder.decodeFile(fileBuf);
+        const decoded = await decoder.decodeFile(fileBuf);
         if (!decoded || !decoded.channelData || decoded.channelData.length === 0) {
+          try { decoder.free(); } catch (e) {}
           return null;
         }
 
@@ -199,6 +199,8 @@ class NativeAudioEngine {
           ? decoded.channelData[1].subarray(startFrame, startFrame + frameCount)
           : left;
 
+        try { decoder.free(); } catch (e) {}
+
         return {
           sampleRate,
           channels: Math.min(2, channels),
@@ -207,6 +209,7 @@ class NativeAudioEngine {
           right
         };
       } catch (err) {
+        try { decoder.free(); } catch (e) {}
         console.error('[NativeAudioEngine] FLAC WASM decode error:', err);
         return null;
       }
@@ -359,11 +362,11 @@ class NativeAudioEngine {
   // 7. 高頻噪聲整形 1-bit Delta-Sigma Modulator (PCM ➔ DSD DSF)
   // ----------------------------------------------------
   encodeDsdDsf(left, right, srcRate, dsdMode = 'dsd64', maxDurationSec = 300) {
-    const is48k = (srcRate % 48000 === 0);
-    let dsdRate = is48k ? 3072000 : 2822400; // default dsd64
-    if (dsdMode === 'dsd128') dsdRate = is48k ? 6144000 : 5644800;
-    else if (dsdMode === 'dsd256') dsdRate = is48k ? 12288000 : 11289600;
-    else if (dsdMode === 'dsd512') dsdRate = is48k ? 24576000 : 22579200;
+    const mode = (dsdMode || 'dsd64').toLowerCase();
+    let dsdRate = 2822400; // Standard Sony DSD64 (44.1kHz * 64)
+    if (mode === 'dsd128') dsdRate = 5644800; // Standard DSD128 (44.1kHz * 128)
+    else if (mode === 'dsd256') dsdRate = 11289600; // Standard DSD256 (44.1kHz * 256)
+    else if (mode === 'dsd512') dsdRate = 22579200; // Standard DSD512 (44.1kHz * 512)
 
     const maxFrames = Math.floor(maxDurationSec * srcRate);
     const inLen = Math.min(left.length, maxFrames);
