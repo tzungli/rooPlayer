@@ -383,6 +383,7 @@ async function initApp() {
   setupPlayerControls();
   setupScannerEvents();
   setupFavoritesEvents();
+  setupHistoryEvents();
   setupSearch();
   setupCoverSizeControls();
   initAudioZones();
@@ -481,6 +482,92 @@ function recordRecentlyPlayed(album) {
   if (recent.length > 30) recent = recent.slice(0, 30);
   localStorage.setItem('roon_recent_albums', JSON.stringify(recent));
   state.recentlyPlayedAlbums = recent;
+}
+
+// ----------------- Playback History Tracker (Recent 100 Tracks) -----------------
+function getPlaybackHistory() {
+  try {
+    const raw = localStorage.getItem('rooplayer_playback_history');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return [];
+}
+
+function recordTrackPlaybackHistory(track, foundAlbum) {
+  if (!track || !track.title) return;
+  let history = getPlaybackHistory();
+
+  // Deduplicate and move to top: remove any previous entry of this track
+  const trackArtist = (track.artist || (foundAlbum ? foundAlbum.artist : '')).toLowerCase().trim();
+  const trackTitle = (track.title || '').toLowerCase().trim();
+  history = history.filter(h => !( (h.title || '').toLowerCase().trim() === trackTitle && (h.artist || '').toLowerCase().trim() === trackArtist ));
+
+  const historyItem = {
+    id: track.id || `${track.title}___${track.artist}`,
+    title: track.title,
+    artist: track.artist || (foundAlbum ? foundAlbum.artist : '未知演出者'),
+    album: track.album || (foundAlbum ? foundAlbum.title : '未知專輯'),
+    duration: track.duration || 0,
+    filePath: track.filePath || '',
+    formatName: track.formatName || (foundAlbum ? foundAlbum.formatName : 'PCM'),
+    sampleRate: track.sampleRate || (foundAlbum ? foundAlbum.sampleRate : 44100),
+    bitsPerSample: track.bitsPerSample || (foundAlbum ? foundAlbum.bitsPerSample : 16),
+    isLossless: track.isLossless || (foundAlbum ? foundAlbum.isLossless : false),
+    cover: track.cover || (foundAlbum ? foundAlbum.cover : null),
+    playedAt: Date.now()
+  };
+
+  history.unshift(historyItem);
+  if (history.length > 100) {
+    history = history.slice(0, 100);
+  }
+
+  try {
+    localStorage.setItem('rooplayer_playback_history', JSON.stringify(history));
+  } catch (e) {}
+
+  updateHistoryCountBadges();
+
+  if (state.currentView === 'history') {
+    renderPlaybackHistory();
+  }
+}
+
+function clearPlaybackHistory() {
+  try {
+    localStorage.removeItem('rooplayer_playback_history');
+  } catch (e) {}
+  updateHistoryCountBadges();
+  if (state.currentView === 'history') {
+    renderPlaybackHistory();
+  }
+}
+
+function updateHistoryCountBadges() {
+  const count = getPlaybackHistory().length;
+  const historyBadge = document.getElementById('historyCountBadge');
+  if (historyBadge) historyBadge.textContent = count;
+  const heroBadge = document.getElementById('heroHistoryCount');
+  if (heroBadge) heroBadge.textContent = count;
+}
+
+function formatTimeAgo(timestamp) {
+  if (!timestamp) return '剛才';
+  const now = Date.now();
+  const diffSec = Math.floor((now - timestamp) / 1000);
+  if (diffSec < 60) return '剛才';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} 分鐘前`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour} 小時前`;
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay < 7) return `${diffDay} 天前`;
+  const d = new Date(timestamp);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${m}/${day} ${h}:${min}`;
 }
 
 // ----------------- Play Count Tracker -----------------
@@ -1203,6 +1290,7 @@ function updateBadgesAndStats() {
   document.getElementById('heroAlbumCount').textContent = totalAlbums;
   document.getElementById('heroTrackCount').textContent = totalTracks;
   document.getElementById('heroHiresCount').textContent = hiresCount;
+  updateHistoryCountBadges();
 
   document.getElementById('albumsHeaderCount').textContent = `共 ${totalAlbums} 張專輯`;
   document.getElementById('artistsHeaderCount').textContent = `共 ${totalArtists} 位演出者`;
@@ -2644,7 +2732,7 @@ function renderAlbumMetadata(album) {
       html += `
         <div class="meta-card meta-card-wide">
           <div class="meta-icon-label"><span class="meta-icon">📜</span> 版權宣告與出版型號 (Copyright & Publishing)</div>
-          <div class="meta-value" id="metaCopyrightVal" style="font-weight: 500; font-size: 13px; color: var(--text-sub);">${escapeXml(curCopyright)}</div>
+          <div class="meta-value" id="metaCopyrightVal" style="font-weight: 400; font-size: 13px; color: var(--text-sub);">${escapeXml(curCopyright)}</div>
         </div>
       `;
     }
@@ -3057,6 +3145,9 @@ function playCurrentTrack() {
 
   // Record play count statistics
   recordPlayCount(track, foundAlbum);
+
+  // Record playback history (Recent 100 tracks, sorted newest to oldest)
+  recordTrackPlaybackHistory(track, foundAlbum);
 
   // Stop previous synth or native audio
   stopDemoSynth();
@@ -4827,6 +4918,8 @@ function applyView(viewId, updateNav = true) {
     renderFavTracks();
   } else if (viewId === 'favArtists') {
     renderFavArtists();
+  } else if (viewId === 'history') {
+    renderPlaybackHistory();
   } else if (viewId === 'kkbox') {
     onOpenKkboxView();
   }
@@ -4840,6 +4933,77 @@ function applyView(viewId, updateNav = true) {
 
 function capitalize(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// ----------------- Playback History View Rendering -----------------
+function renderPlaybackHistory() {
+  const tbody = document.getElementById('historyTracksTbody');
+  const emptyHint = document.getElementById('historyEmptyHint');
+  const tableContainer = document.querySelector('#viewHistory .tracklist-table-container');
+  const countBadge = document.getElementById('historyHeaderCount');
+  if (!tbody) return;
+
+  tbody.innerHTML = '';
+  const historyList = getPlaybackHistory();
+  if (countBadge) {
+    countBadge.textContent = `最近播放的 ${historyList.length} 首歌曲 (依時間由最近到最久排序)`;
+  }
+
+  updateHistoryCountBadges();
+
+  if (historyList.length === 0) {
+    if (emptyHint) emptyHint.style.display = 'block';
+    if (tableContainer) tableContainer.style.display = 'none';
+  } else {
+    if (emptyHint) emptyHint.style.display = 'none';
+    if (tableContainer) tableContainer.style.display = 'block';
+
+    historyList.forEach((track, idx) => {
+      const tr = document.createElement('tr');
+      const isHires = (track.bitsPerSample >= 24) || (track.sampleRate > 48000);
+      const isFav = isTrackFavorite(track);
+      const specLabel = `${track.formatName || 'PCM'} ${track.bitsPerSample ? track.bitsPerSample + 'b/' : ''}${Math.round((track.sampleRate || 44100)/1000)}k`;
+      const onlineLinksHtml = generateTrackOnlineLinks(track);
+
+      tr.innerHTML = `
+        <td>${idx + 1}</td>
+        <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button></td>
+        <td class="track-title-cell">
+          <div class="track-title-text">${escapeXml(track.title)}</div>
+          ${onlineLinksHtml}
+        </td>
+        <td>${escapeXml(track.artist || '未知演出者')}</td>
+        <td>${escapeXml(track.album || '未知專輯')}</td>
+        <td style="color: var(--text-muted); font-size: 12px;">${formatTimeAgo(track.playedAt)}</td>
+        <td><span class="format-chip ${isHires ? 'hires' : ''}">${specLabel}</span></td>
+        <td style="text-align: right;">${formatDuration(track.duration)}</td>
+      `;
+
+      tr.addEventListener('click', (e) => {
+        const extLink = e.target.closest('.track-ext-link');
+        if (extLink) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleTrackExternalLinkClick(extLink);
+          return;
+        }
+        if (e.target.closest('.btn-track-fav')) {
+          e.stopPropagation();
+          toggleTrackFavorite(track);
+          const favBtn = tr.querySelector('.btn-track-fav');
+          if (favBtn) {
+            const nowFav = isTrackFavorite(track);
+            favBtn.classList.toggle('active', nowFav);
+            favBtn.textContent = nowFav ? '♥' : '♡';
+          }
+          return;
+        }
+        playTrackList(historyList, idx);
+      });
+
+      tbody.appendChild(tr);
+    });
+  }
 }
 
 // ----------------- Favorites Views Rendering -----------------
@@ -5034,6 +5198,59 @@ function setupFavoritesEvents() {
       } else {
         showToast('尚未收藏任何最愛演出者');
       }
+    });
+  }
+}
+
+function setupHistoryEvents() {
+  const btnPlayAllHistory = document.getElementById('btnPlayAllHistory');
+  if (btnPlayAllHistory) {
+    btnPlayAllHistory.addEventListener('click', () => {
+      const historyList = getPlaybackHistory();
+      if (historyList.length > 0) {
+        setShuffleState(false);
+        playTrackList(historyList, 0);
+        showToast('▶ 開始依序播放最近播放紀錄 (由最近到最久)');
+      } else {
+        showToast('尚無播放紀錄');
+      }
+    });
+  }
+
+  const btnShuffleHistory = document.getElementById('btnShuffleHistory');
+  if (btnShuffleHistory) {
+    btnShuffleHistory.addEventListener('click', () => {
+      const historyList = getPlaybackHistory();
+      if (historyList.length > 0) {
+        setShuffleState(true);
+        const randIdx = Math.floor(Math.random() * historyList.length);
+        playTrackList(historyList, randIdx);
+        showToast('🔀 隨機播放最近播放紀錄');
+      } else {
+        showToast('尚無播放紀錄');
+      }
+    });
+  }
+
+  const btnClearHistory = document.getElementById('btnClearHistory');
+  if (btnClearHistory) {
+    btnClearHistory.addEventListener('click', () => {
+      const historyList = getPlaybackHistory();
+      if (historyList.length === 0) {
+        showToast('目前尚無播放紀錄');
+        return;
+      }
+      if (confirm('確定要清空所有最近播放紀錄嗎？')) {
+        clearPlaybackHistory();
+        showToast('🗑️ 已清空播放紀錄');
+      }
+    });
+  }
+
+  const heroHistoryPill = document.getElementById('heroHistoryPill');
+  if (heroHistoryPill) {
+    heroHistoryPill.addEventListener('click', () => {
+      navigateTo('history');
     });
   }
 }

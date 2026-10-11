@@ -56,6 +56,11 @@
           <span class="nav-icon">☷</span>
           <span class="nav-label">總覽 Overview</span>
         </button>
+        <button class="nav-item" data-view="history">
+          <span class="nav-icon">🕒</span>
+          <span class="nav-label">播放紀錄</span>
+          <span class="badge" id="historyCountBadge">0</span>
+        </button>
         <button class="nav-item" data-view="albums">
           <span class="nav-icon">💿</span>
           <span class="nav-label">專輯 Albums</span>
@@ -133,6 +138,7 @@
               <div class="stat-pill"><span id="heroAlbumCount">0</span> 專輯</div>
               <div class="stat-pill"><span id="heroTrackCount">0</span> 曲目</div>
               <div class="stat-pill highlight"><span id="heroHiresCount">0</span> Hi-Res 無損音樂</div>
+              <div class="stat-pill" id="heroHistoryPill" style="cursor: pointer;" title="點擊檢視播放紀錄">🕒 <span id="heroHistoryCount">0</span> 播放紀錄</div>
             </div>
             <div class="hero-actions">
               <button class="btn btn-primary" id="btnHeroScan">➕ 新增本機音樂目錄</button>
@@ -159,6 +165,45 @@
           <div class="artist-grid" id="overviewArtistsGrid">
             <!-- Injected via JS -->
           </div>
+        </div>
+      </section>
+
+      <!-- PLAYBACK HISTORY VIEW (Recent 100 Tracks) -->
+      <section id="viewHistory" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">播放紀錄 Playback History</h1>
+            <span class="page-subtitle" id="historyHeaderCount">最近播放的 0 首歌曲 (依時間由最近到最久排序)</span>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-primary btn-sm" id="btnPlayAllHistory">▶ 依序播放</button>
+            <button class="btn btn-secondary btn-sm" id="btnShuffleHistory">🔀 隨機播放</button>
+            <button class="btn btn-secondary btn-sm" id="btnClearHistory" title="清空播放紀錄">🗑️ 清除紀錄</button>
+          </div>
+        </div>
+        <div class="tracklist-table-container">
+          <table class="tracklist-table" id="historyTracksTable">
+            <thead>
+              <tr>
+                <th style="width: 45px;">#</th>
+                <th style="width: 38px;"></th>
+                <th>曲目名稱</th>
+                <th>演出者</th>
+                <th>專輯</th>
+                <th style="width: 130px;">播放時間</th>
+                <th style="width: 140px;">格式規格</th>
+                <th style="width: 80px; text-align: right;">時長</th>
+              </tr>
+            </thead>
+            <tbody id="historyTracksTbody">
+              <!-- Injected via JS -->
+            </tbody>
+          </table>
+        </div>
+        <div class="empty-hint" id="historyEmptyHint" style="display: none; padding: 48px; text-align: center;">
+          <div style="font-size: 36px; margin-bottom: 12px;">🕒</div>
+          <div style="font-size: 15px; font-weight: 600; color: var(--text-main);">尚未有任何播放紀錄</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">開始播放歌曲後，系統將自動記錄最近播放的 100 首曲目並由最近到最久排序。</div>
         </div>
       </section>
 
