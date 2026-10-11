@@ -1976,7 +1976,7 @@ body {
 .dsp-pill {
   background: #333846; /* 沒被選擇的按鈕底色設定成灰色 */
   border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #94a3b8;
+  color: #94a3b8; /* 沒被選擇的按鈕字體設定成灰色 */
   padding: 5px 11px;
   border-radius: 14px;
   font-size: 11px;
@@ -2001,14 +2001,14 @@ body {
 
 .dsp-pill.pill-dsd {
   background: #333846; /* 沒被選擇的按鈕底色設定成灰色 */
-  border-color: rgba(245, 158, 11, 0.35);
-  color: #fbbf24;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #94a3b8; /* 沒被選擇的按鈕字體設定成灰色 */
 }
 
 .dsp-pill.pill-dsd:hover {
   background: #424959;
-  color: #fef08a;
-  border-color: rgba(245, 158, 11, 0.6);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.25);
 }
 
 .dsp-pill.pill-dsd.active {
@@ -2060,7 +2060,7 @@ body {
 [data-theme="light"] .dsp-pill {
   background: #e2e8f0; /* 沒被選擇的按鈕底色設定成灰色 */
   border-color: #cbd5e1;
-  color: #475569;
+  color: #64748b; /* 沒被選擇的按鈕字體設定成灰色 */
 }
 [data-theme="light"] .dsp-pill:hover {
   background: #cbd5e1;
@@ -2073,13 +2073,13 @@ body {
 }
 [data-theme="light"] .dsp-pill.pill-dsd {
   background: #e2e8f0; /* 沒被選擇的按鈕底色設定成灰色 */
-  border-color: rgba(245, 158, 11, 0.4);
-  color: #b45309;
+  border-color: #cbd5e1;
+  color: #64748b; /* 沒被選擇的按鈕字體設定成灰色 */
 }
 [data-theme="light"] .dsp-pill.pill-dsd:hover {
   background: #cbd5e1;
-  color: #92400e;
-  border-color: rgba(245, 158, 11, 0.6);
+  color: #111827;
+  border-color: #94a3b8;
 }
 [data-theme="light"] .dsp-pill.pill-dsd.active {
   background: rgba(245, 158, 11, 0.22);
