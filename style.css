@@ -1974,9 +1974,9 @@ body {
 }
 
 .dsp-pill {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border-color);
-  color: var(--text-sub);
+  background: #333846; /* 沒被選擇的按鈕底色設定成灰色 */
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #94a3b8;
   padding: 5px 11px;
   border-radius: 14px;
   font-size: 11px;
@@ -1987,25 +1987,26 @@ body {
 }
 
 .dsp-pill:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: #424959;
   color: #fff;
   border-color: rgba(255, 255, 255, 0.25);
 }
 
 .dsp-pill.active {
-  background: rgba(139, 92, 246, 0.25);
+  background: rgba(139, 92, 246, 0.32);
   color: #d8b4fe;
   border-color: var(--accent-purple);
   box-shadow: 0 0 8px rgba(139, 92, 246, 0.3);
 }
 
 .dsp-pill.pill-dsd {
+  background: #333846; /* 沒被選擇的按鈕底色設定成灰色 */
   border-color: rgba(245, 158, 11, 0.35);
   color: #fbbf24;
 }
 
 .dsp-pill.pill-dsd:hover {
-  background: rgba(245, 158, 11, 0.15);
+  background: #424959;
   color: #fef08a;
   border-color: rgba(245, 158, 11, 0.6);
 }
@@ -2057,27 +2058,28 @@ body {
   color: #1e1e24;
 }
 [data-theme="light"] .dsp-pill {
-  background: rgba(0, 0, 0, 0.04);
-  border-color: rgba(0, 0, 0, 0.1);
-  color: #4b5563;
+  background: #e2e8f0; /* 沒被選擇的按鈕底色設定成灰色 */
+  border-color: #cbd5e1;
+  color: #475569;
 }
 [data-theme="light"] .dsp-pill:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: #cbd5e1;
   color: #111827;
 }
 [data-theme="light"] .dsp-pill.active {
-  background: rgba(139, 92, 246, 0.18);
+  background: rgba(139, 92, 246, 0.2);
   color: #7c3aed;
   border-color: #8b5cf6;
 }
 [data-theme="light"] .dsp-pill.pill-dsd {
-  background: rgba(245, 158, 11, 0.08);
-  border-color: rgba(245, 158, 11, 0.35);
+  background: #e2e8f0; /* 沒被選擇的按鈕底色設定成灰色 */
+  border-color: rgba(245, 158, 11, 0.4);
   color: #b45309;
 }
 [data-theme="light"] .dsp-pill.pill-dsd:hover {
-  background: rgba(245, 158, 11, 0.16);
+  background: #cbd5e1;
   color: #92400e;
+  border-color: rgba(245, 158, 11, 0.6);
 }
 [data-theme="light"] .dsp-pill.pill-dsd.active {
   background: rgba(245, 158, 11, 0.22);
