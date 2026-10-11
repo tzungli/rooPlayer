@@ -404,9 +404,9 @@ class NativeAudioEngine {
     buf.write('data', off); off += 4;
     buf.writeBigUInt64LE(BigInt(12 + totalDataBytes), off); off += 8;
 
-    // Optimized High-Efficiency Noise-Shaping 1-bit Delta-Sigma Modulator
-    let a1_L = 0, a2_L = 0, a3_L = 0, y_L = 0;
-    let a1_R = 0, a2_R = 0, a3_R = 0, y_R = 0;
+    // Audio-Grade 2nd-Order Boser-Wooley Delta-Sigma Modulator with Anti-Windup Clamping
+    let s1_L = 0, s2_L = 0, y_L = 0;
+    let s1_R = 0, s2_R = 0, y_R = 0;
 
     for (let b = 0; b < totalBlocks; b++) {
       const leftBlockOffset = 92 + b * 2 * blockSize;
@@ -425,27 +425,27 @@ class NativeAudioEngine {
 
           let xL = 0, xR = 0;
           if (idx < inLen - 1) {
-            xL = left[idx] + t * (left[idx + 1] - left[idx]);
-            xR = right[idx] + t * (right[idx + 1] - right[idx]);
+            xL = (left[idx] + t * (left[idx + 1] - left[idx])) * 0.75;
+            xR = (right[idx] + t * (right[idx + 1] - right[idx])) * 0.75;
           } else if (idx < inLen) {
-            xL = left[idx];
-            xR = right[idx];
+            xL = left[idx] * 0.75;
+            xR = right[idx] * 0.75;
           }
 
-          // Left channel 3rd order noise-shaping modulation
-          const diffL = (xL * 0.85) - y_L;
-          a1_L += diffL;
-          a2_L += a1_L - 0.05 * y_L;
-          a3_L += a2_L;
-          y_L = (a3_L >= 0) ? 1.0 : -1.0;
+          // Left channel 2nd-order SDM
+          s1_L += xL - y_L;
+          if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
+          s2_L += s1_L - 0.5 * y_L;
+          if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
+          y_L = (s2_L >= 0) ? 1.0 : -1.0;
           if (y_L > 0) byteValL |= (1 << bit);
 
-          // Right channel 3rd order noise-shaping modulation
-          const diffR = (xR * 0.85) - y_R;
-          a1_R += diffR;
-          a2_R += a1_R - 0.05 * y_R;
-          a3_R += a2_R;
-          y_R = (a3_R >= 0) ? 1.0 : -1.0;
+          // Right channel 2nd-order SDM
+          s1_R += xR - y_R;
+          if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
+          s2_R += s1_R - 0.5 * y_R;
+          if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
+          y_R = (s2_R >= 0) ? 1.0 : -1.0;
           if (y_R > 0) byteValR |= (1 << bit);
         }
 
