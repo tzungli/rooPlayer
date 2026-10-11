@@ -24,6 +24,7 @@ function run() {
   let dsdRate = is48k ? 3072000 : 2822400; // dsd64
   if (dsdMode === 'dsd128') dsdRate = is48k ? 6144000 : 5644800;
   else if (dsdMode === 'dsd256') dsdRate = is48k ? 12288000 : 11289600;
+  else if (dsdMode === 'dsd512') dsdRate = is48k ? 24576000 : 22579200;
 
   const ratio = (dsdRate / sampleRate) | 0;
   const invRatio = 1.0 / ratio;

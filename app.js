@@ -1236,7 +1236,11 @@ function renderAlbums() {
   if (state.activeFilter === 'hires') {
     filtered = filtered.filter(a => (a.bitsPerSample >= 24) || (a.sampleRate > 48000));
   } else if (state.activeFilter === 'flac') {
-    filtered = filtered.filter(a => a.formatName === 'FLAC');
+    filtered = filtered.filter(a => {
+      const fTrack = (a.tracks && a.tracks[0]) || {};
+      const fPath = fTrack.filePath || fTrack.fileName || a.filePath || '';
+      return getAudioFormatFromPath(fPath, a.formatName || '').toUpperCase() === 'FLAC';
+    });
   }
 
   // Sort
@@ -1274,11 +1278,24 @@ function createAlbumCard(album) {
   const defaultCover = createSvgCover(album.title, album.artist, '#27272a', '#09090b');
   const coverSrc = album.cover || defaultCover;
 
+  const firstTrack = (album.tracks && album.tracks[0]) || {};
+  const rawPath = firstTrack.filePath || firstTrack.fileName || album.filePath || '';
+  const fmt = getAudioFormatFromPath(rawPath, album.formatName || 'PCM').toUpperCase();
+  const isDsd = fmt === 'DSF' || fmt === 'DFF' || fmt === 'DSD';
+
   let qualityTagHtml = '';
-  if (album.bitsPerSample >= 24 || album.sampleRate > 48000) {
-    qualityTagHtml = `<span class="album-quality-tag tag-hires">HI-RES 24b</span>`;
-  } else if (album.isLossless || album.formatName === 'FLAC') {
+  if (isDsd) {
+    qualityTagHtml = `<span class="album-quality-tag tag-dsd">DSD</span>`;
+  } else if (album.bitsPerSample >= 24 || album.sampleRate > 48000) {
+    qualityTagHtml = `<span class="album-quality-tag tag-hires">${fmt} 24b</span>`;
+  } else if (fmt === 'WAV') {
+    qualityTagHtml = `<span class="album-quality-tag tag-wav">WAV</span>`;
+  } else if (fmt === 'AIFF') {
+    qualityTagHtml = `<span class="album-quality-tag tag-aiff">AIFF</span>`;
+  } else if (fmt === 'FLAC') {
     qualityTagHtml = `<span class="album-quality-tag tag-flac">FLAC</span>`;
+  } else if (album.isLossless) {
+    qualityTagHtml = `<span class="album-quality-tag tag-lossless">${fmt}</span>`;
   }
 
   const isFav = isAlbumFavorite(album);
@@ -2366,6 +2383,16 @@ async function fetchOnlineAlbumCredits(album) {
   return result;
 }
 
+function getAudioFormatFromPath(filePath, fallback = 'PCM') {
+  if (!filePath || typeof filePath !== 'string') return fallback;
+  const match = filePath.match(/\.([a-zA-Z0-9]+)(?:[\?#]|$)/);
+  if (!match) return fallback;
+  const ext = match[1].toUpperCase();
+  if (ext === 'WAVE') return 'WAV';
+  if (ext === 'AIF') return 'AIFF';
+  return ext;
+}
+
 function renderAlbumMetadata(album) {
   const metaGrid = document.getElementById('albumMetaGrid');
   const sourceBadge = document.getElementById('albumMetaSourceBadge');
@@ -2389,15 +2416,19 @@ function renderAlbumMetadata(album) {
     if ((!releaseDate || releaseDate === '未載明') && t.date) releaseDate = t.date;
   });
 
-  const ext = (album.formatName || 'FLAC').toUpperCase();
-  const isDsd = ext === 'DSF' || ext === 'DFF';
+  const firstTrack = (album.tracks && album.tracks[0]) || {};
+  const rawPath = firstTrack.filePath || firstTrack.fileName || album.filePath || '';
+  const ext = getAudioFormatFromPath(rawPath, album.formatName || 'PCM').toUpperCase();
+  const isDsd = ext === 'DSF' || ext === 'DFF' || ext === 'DSD';
   let specsText = '';
   if (isDsd) {
-    specsText = 'DSD 2.8MHz 1-bit Direct Stream Digital (無損母帶)';
+    const dsdMhz = album.sampleRate ? `${(album.sampleRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
+    specsText = `DSD ${dsdMhz} 1-bit Direct Stream Digital (無損母帶)`;
   } else {
-    const bitDepth = album.bitsPerSample || 16;
-    const sampleRateKhz = album.sampleRate ? Math.round(album.sampleRate / 1000) : 44.1;
-    specsText = `${ext} ${bitDepth}-bit / ${sampleRateKhz}kHz ${album.isLossless ? '發燒無損母帶' : '數位音訊'}`;
+    const bitDepth = album.bitsPerSample || firstTrack.bitsPerSample || 16;
+    const sampleRateKhz = formatKhz(album.sampleRate || firstTrack.sampleRate || 44100);
+    const isLossless = album.isLossless || ['WAV', 'FLAC', 'AIFF', 'ALAC', 'APE'].includes(ext);
+    specsText = `${ext} ${bitDepth}-bit / ${sampleRateKhz} ${isLossless ? '發燒無損母帶' : '數位音訊'}`;
   }
 
   const tracksDurationText = `${album.tracks.length} 首歌曲 • ${formatTotalAlbumDuration(album.tracks)}`;
@@ -2602,9 +2633,12 @@ function renderAlbumRecommendations(album) {
 
     const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
     const coverSrc = alb.cover || defaultCover;
-    const sampleKhz = alb.sampleRate ? Math.round(alb.sampleRate / 1000) : 44;
-    const bitDepth = alb.bitsPerSample || 16;
-    const specLabel = `${alb.formatName || 'FLAC'} ${bitDepth}b/${sampleKhz}k`;
+    const firstTrk = (alb.tracks && alb.tracks[0]) || {};
+    const albFmt = getAudioFormatFromPath(firstTrk.filePath || firstTrk.fileName || alb.filePath, alb.formatName || 'PCM').toUpperCase();
+    const isAlbDsd = albFmt === 'DSF' || albFmt === 'DFF' || albFmt === 'DSD';
+    const sampleKhz = formatKhz(alb.sampleRate || firstTrk.sampleRate || 44100);
+    const bitDepth = alb.bitsPerSample || firstTrk.bitsPerSample || (isAlbDsd ? 1 : 16);
+    const specLabel = isAlbDsd ? `DSD 1b/${sampleKhz}` : `${albFmt} ${bitDepth}b/${sampleKhz}`;
 
     card.innerHTML = `
       <div class="recommend-art-wrap">
@@ -2636,6 +2670,12 @@ function renderDetailTracklist(album) {
     const trackWithArtist = t.artist ? t : { ...t, artist: album.artist };
     const onlineLinksHtml = generateTrackOnlineLinks(trackWithArtist);
 
+    const trackFmt = getAudioFormatFromPath(t.filePath || t.fileName, t.formatName || 'PCM').toUpperCase();
+    const isTrackDsd = trackFmt === 'DSF' || trackFmt === 'DFF' || trackFmt === 'DSD';
+    const trackChipText = isTrackDsd
+      ? `DSD 1b`
+      : `${trackFmt} ${t.bitsPerSample || 16}b`;
+
     tr.innerHTML = `
       <td>${t.trackNumber || (idx + 1)}</td>
       <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button></td>
@@ -2643,7 +2683,7 @@ function renderDetailTracklist(album) {
         <div class="track-title-text">${escapeXml(t.title)}</div>
         ${onlineLinksHtml}
       </td>
-      <td><span class="format-chip">${t.formatName} ${t.bitsPerSample || 16}b</span></td>
+      <td><span class="format-chip">${trackChipText}</span></td>
       <td style="text-align: right;">${formatDuration(t.duration)}</td>
     `;
     tr.addEventListener('click', (e) => {
@@ -2701,9 +2741,40 @@ function openAlbumDetail(album) {
     detailArtist.textContent = album.artist;
   }
   
-  const sampleRateKhz = album.sampleRate ? Math.round(album.sampleRate / 1000) : 44.1;
-  const bitDepth = album.bitsPerSample || 16;
-  detailFormatBadge.textContent = `${album.formatName || 'FLAC'} ${bitDepth}/${sampleRateKhz}`;
+  const firstTrack = (album.tracks && album.tracks[0]) || {};
+  const rawPath = firstTrack.filePath || firstTrack.fileName || album.filePath || '';
+  const fmt = getAudioFormatFromPath(rawPath, album.formatName || 'PCM').toUpperCase();
+  const isDsd = fmt === 'DSF' || fmt === 'DFF' || fmt === 'DSD';
+  const effectiveRate = album.sampleRate || firstTrack.sampleRate || 44100;
+  const bitDepth = album.bitsPerSample || firstTrack.bitsPerSample || (isDsd ? 1 : 16);
+  const sampleRateKhz = formatKhz(effectiveRate);
+
+  if (detailFormatBadge) {
+    if (isDsd) {
+      const dsdMhz = effectiveRate ? `${(effectiveRate / 1000000).toFixed(1)}M` : '2.8M';
+      detailFormatBadge.textContent = `${fmt} 1b/${dsdMhz}`;
+    } else {
+      detailFormatBadge.textContent = `${fmt} ${bitDepth}/${sampleRateKhz}`;
+    }
+  }
+
+  const detailFormatSpec = document.getElementById('detailFormatSpec');
+  if (detailFormatSpec) {
+    if (isDsd) {
+      const dsdMhz = effectiveRate ? `${(effectiveRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
+      detailFormatSpec.textContent = `DSD 1-bit / ${dsdMhz} Direct Stream Digital`;
+    } else {
+      const isLossless = album.isLossless || ['WAV', 'FLAC', 'AIFF', 'ALAC', 'APE'].includes(fmt);
+      detailFormatSpec.textContent = `${fmt} ${bitDepth}-bit / ${sampleRateKhz} ${isLossless ? 'Lossless' : ''}`.trim();
+    }
+  }
+
+  const detailChannelsSpec = document.getElementById('detailChannelsSpec');
+  if (detailChannelsSpec) {
+    const channels = album.channels || firstTrack.channels || 2;
+    detailChannelsSpec.textContent = channels === 1 ? '1 Channel (Mono)' : (channels === 2 ? '2 Channels (Stereo)' : `${channels} Channels (Surround)`);
+  }
+
   detailTrackCount.textContent = album.tracks.length;
 
   renderDetailTracklist(album);
@@ -3114,7 +3185,8 @@ async function playSoxTrack(track, startSec = 0) {
         const mhz = getDsdMhz(state.dsp.rateMode, track.sampleRate || 44100);
         showToast(`⚡ 1-bit DSD 調變啟用: PCM ➔ ${state.dsp.rateMode.toUpperCase()} (1-bit / ${mhz})`);
       } else {
-        showToast(`🎛️ SoX 升頻啟用: ${formatKhz(track.sampleRate || 44100)} ➔ ${formatKhz(targetRate)} (24-bit Hi-Res FLAC)`);
+        const trkFmt = getAudioFormatFromPath(track.filePath || track.fileName, track.formatName || 'PCM').toUpperCase();
+        showToast(`🎛️ SoX 升頻啟用: ${formatKhz(track.sampleRate || 44100)} ➔ ${formatKhz(targetRate)} (24-bit Hi-Res ${trkFmt})`);
       }
     }).catch(err => {
       console.error('SoX play error:', err);
@@ -3208,8 +3280,9 @@ function updateSignalPathUI(track = null) {
 
   if (!track) return;
 
-  const ext = (track.formatName || '').toUpperCase();
-  const isNativeDsd = ext === 'DSF' || ext === 'DFF' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
+  const trkFmt = getAudioFormatFromPath(track.filePath || track.fileName, track.formatName || 'PCM').toUpperCase();
+  const ext = trkFmt;
+  const isNativeDsd = ext === 'DSF' || ext === 'DFF' || ext === 'DSD' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
   const isDspActive = !track.isDemo && state.dsp && state.dsp.enabled;
 
   if (isDspActive) {
@@ -3224,7 +3297,7 @@ function updateSignalPathUI(track = null) {
 
       if (signalPathBadge) signalPathBadge.textContent = `DSP (${modeUpper}) | 1-bit / ${mhz} ⚡`;
       if (statusPill) statusPill.textContent = `DSP ENHANCED (PCM ➔ ${modeUpper})`;
-      if (sourceTitle) sourceTitle.textContent = `${track.formatName || 'PCM'} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
+      if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
       if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless Input)';
 
       if (signalSoxArrow) signalSoxArrow.style.display = 'block';
@@ -3238,13 +3311,13 @@ function updateSignalPathUI(track = null) {
     } else {
       if (signalPathBadge) signalPathBadge.textContent = `DSP (${state.dsp.rateMode.toUpperCase()}) | 24/${targetKhz} ⚡`;
       if (statusPill) statusPill.textContent = 'DSP ENHANCED (SOX RESAMPLER)';
-      if (sourceTitle) sourceTitle.textContent = `${track.formatName || 'PCM'} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
+      if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
       if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless Input)';
 
       if (signalSoxArrow) signalSoxArrow.style.display = 'block';
       if (signalSoxStage) signalSoxStage.style.display = 'flex';
       if (signalSoxTitle) signalSoxTitle.textContent = 'SoX Resampler (libsoxr VHQ)';
-      if (signalSoxDesc) signalSoxDesc.textContent = `${state.dsp.precision}-bit VHQ 浮點升頻：${srcKhz} ➔ ${targetKhz} (24-bit Hi-Res FLAC)`;
+      if (signalSoxDesc) signalSoxDesc.textContent = `${state.dsp.precision}-bit VHQ 浮點升頻：${srcKhz} ➔ ${targetKhz} (24-bit Hi-Res ${trkFmt})`;
 
       if (engineTitle) engineTitle.textContent = 'rooPlayer Core Audio Engine';
       if (engineDesc) engineDesc.textContent = `64-bit 浮點即時超取樣升頻核心 ➔ 輸出至 24-bit ${targetKhz}`;
@@ -3266,7 +3339,7 @@ function updateSignalPathUI(track = null) {
       if (engineDesc) engineDesc.textContent = '原生 1-bit DSD (Sony DSF) 直通傳輸至網路渲染器，無重取樣或轉換';
       if (signalPathDot) signalPathDot.className = 'signal-dot dsd-gold';
     } else {
-      if (signalPathBadge) signalPathBadge.textContent = `ENHANCED | DSD ➔ 24/88.2kHz FLAC`;
+      if (signalPathBadge) signalPathBadge.textContent = `ENHANCED | DSD ➔ 24/88.2kHz PCM`;
       if (sourceTitle) sourceTitle.textContent = `DSD (1-bit / ${dsdRate}) — ${track.title}`;
       if (statusPill) statusPill.textContent = 'ENHANCED (HIGH PRECISION TRANSCODE)';
       if (sourceDesc) sourceDesc.textContent = '原始 DSD 母帶碼流 (Bitstream 1-bit PDM)';
@@ -3275,16 +3348,16 @@ function updateSignalPathUI(track = null) {
       if (signalSoxStage) signalSoxStage.style.display = 'none';
 
       if (engineTitle) engineTitle.textContent = 'rooPlayer DSD-to-PCM Audio Engine';
-      if (engineDesc) engineDesc.textContent = '64-bit 浮點即時降採樣 (Decimation Filter) ➔ 24-bit 88.2kHz FLAC';
+      if (engineDesc) engineDesc.textContent = '64-bit 浮點即時降採樣 (Decimation Filter) ➔ 24-bit 88.2kHz PCM';
       if (signalPathDot) signalPathDot.className = 'signal-dot purple';
     }
   } else {
-    const sampleKhz = track.sampleRate ? Math.round(track.sampleRate / 1000) : 44;
+    const sampleKhz = formatKhz(track.sampleRate || 44100);
     const bitDepth = track.bitsPerSample || 16;
-    const isLossless = track.isLossless || track.formatName === 'FLAC';
+    const isLossless = track.isLossless || ['WAV', 'FLAC', 'AIFF', 'ALAC', 'APE'].includes(trkFmt);
 
-    if (signalPathBadge) signalPathBadge.textContent = `${isLossless ? 'LOSSLESS' : 'ENHANCED'} | ${track.formatName} ${bitDepth}/${sampleKhz}kHz`;
-    if (sourceTitle) sourceTitle.textContent = `${track.formatName} ${bitDepth}-bit / ${sampleKhz}kHz (${track.title})`;
+    if (signalPathBadge) signalPathBadge.textContent = `${isLossless ? 'LOSSLESS' : 'ENHANCED'} | ${trkFmt} ${bitDepth}/${sampleKhz}`;
+    if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${bitDepth}-bit / ${sampleKhz} (${track.title})`;
     if (statusPill) statusPill.textContent = isLossless ? 'LOSSLESS BIT-PERFECT' : 'ENHANCED';
     if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless)';
 
@@ -3755,11 +3828,18 @@ function updateNowPlayingModalContent() {
     };
   }
 
-  const sampleRateKhz = track.sampleRate ? Math.round(track.sampleRate / 1000) : 44.1;
-  const bitDepth = track.bitsPerSample || 16;
+  const trackFmt = getAudioFormatFromPath(track.filePath || track.fileName, track.formatName || 'PCM').toUpperCase();
+  const isTrkDsd = trackFmt === 'DSF' || trackFmt === 'DFF' || trackFmt === 'DSD';
+  const sampleRateKhz = formatKhz(track.sampleRate || 44100);
+  const bitDepth = track.bitsPerSample || (isTrkDsd ? 1 : 16);
   const formatBadge = document.getElementById('nowPlayingFormatBadge');
   if (formatBadge) {
-    formatBadge.textContent = `${track.formatName || 'FLAC'} ${bitDepth}/${sampleRateKhz}`;
+    if (isTrkDsd) {
+      const dsdMhz = track.sampleRate ? `${(track.sampleRate / 1000000).toFixed(1)}M` : '2.8M';
+      formatBadge.textContent = `${trackFmt} 1b/${dsdMhz}`;
+    } else {
+      formatBadge.textContent = `${trackFmt} ${bitDepth}/${sampleRateKhz}`;
+    }
   }
 
   updatePlayPauseBtnUI();
