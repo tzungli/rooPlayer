@@ -40,6 +40,7 @@ const state = {
   },
   albumCoverSize: localStorage.getItem('rooplayer_album_cover_size') || 'medium',
   detailCoverSize: localStorage.getItem('rooplayer_detail_cover_size') || 'medium',
+  artistCardSize: localStorage.getItem('rooplayer_artist_card_size') || 'medium',
   dsp: (() => {
     try {
       const saved = JSON.parse(localStorage.getItem('rooplayer_dsp_settings') || '{}');
@@ -308,6 +309,7 @@ function stopDemoSynth() {
 // ----------------- DOM Elements -----------------
 const nativeAudio = document.getElementById('nativeAudio');
 const overviewGrid = document.getElementById('overviewGrid');
+const dailyRecommendGrid = document.getElementById('dailyRecommendGrid');
 const overviewArtistsGrid = document.getElementById('overviewArtistsGrid');
 const allAlbumsGrid = document.getElementById('allAlbumsGrid');
 const artistsGrid = document.getElementById('artistsGrid');
@@ -374,9 +376,33 @@ const btnConfirmImportReport = document.getElementById('btnConfirmImportReport')
 const importReportStats = document.getElementById('importReportStats');
 const importReportDetails = document.getElementById('importReportDetails');
 
+// ----------------- Dynamic Light Pastel Gradient for Overview Hero Banner -----------------
+function applyRandomHeroGradient() {
+  const heroBanner = document.getElementById('overviewHeroBanner') || document.querySelector('.hero-banner');
+  if (!heroBanner) return;
+
+  const pastelGradients = [
+    'linear-gradient(135deg, #e0e7ff 0%, #f3e8ff 50%, #fce7f3 100%)', // 薰衣草粉紫
+    'linear-gradient(135deg, #dbeafe 0%, #e0e7ff 45%, #ede9fe 100%)', // 天空冰藍粉紫
+    'linear-gradient(135deg, #fef3c7 0%, #fee2e2 50%, #fce7f3 100%)', // 暖陽蜜桃粉杏
+    'linear-gradient(135deg, #ccfbf1 0%, #e0f2fe 50%, #ede9fe 100%)', // 薄荷清爽冰川藍
+    'linear-gradient(135deg, #dcfce7 0%, #e0f2fe 50%, #f3e8ff 100%)', // 鼠尾草晨光清新
+    'linear-gradient(135deg, #ffedd5 0%, #fce7f3 50%, #ede9fe 100%)', // 晨曦朝霞柔粉
+    'linear-gradient(135deg, #fae8ff 0%, #f5d0fe 40%, #e0e7ff 100%)', // 夢幻紫丁香
+    'linear-gradient(135deg, #e0f2fe 0%, #f0fdf4 50%, #fef9c3 100%)', // 晨露微光湖綠黃
+    'linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 45%, #ede9fe 100%)', // 高級月光銀霧紫
+    'linear-gradient(135deg, #fce7f3 0%, #ffe4e6 50%, #fed7aa 100%)'  // 櫻花初綻暖杏粉
+  ];
+
+  const randomIndex = Math.floor(Math.random() * pastelGradients.length);
+  const selectedGradient = pastelGradients[randomIndex];
+  heroBanner.style.background = selectedGradient;
+}
+
 // ----------------- Initialization -----------------
 async function initApp() {
   initTheme();
+  applyRandomHeroGradient();
   initFavorites();
   setupWindowControls();
   setupNavigation();
@@ -531,6 +557,9 @@ function recordTrackPlaybackHistory(track, foundAlbum) {
   if (state.currentView === 'history') {
     renderPlaybackHistory();
   }
+  if (state.currentView === 'overview') {
+    renderRecentPlayedAlbums();
+  }
 }
 
 function clearPlaybackHistory() {
@@ -540,6 +569,9 @@ function clearPlaybackHistory() {
   updateHistoryCountBadges();
   if (state.currentView === 'history') {
     renderPlaybackHistory();
+  }
+  if (state.currentView === 'overview') {
+    renderRecentPlayedAlbums();
   }
 }
 
@@ -1297,16 +1329,472 @@ function updateBadgesAndStats() {
   document.getElementById('tracksHeaderCount').textContent = `共 ${totalTracks} 首曲目`;
 }
 
+// ----------------- Daily Recommendations Engine -----------------
+// Updates once per day on first app launch, randomly recommending 5 albums referencing recent playback history
+function getDailyRecommendedAlbums() {
+  if (!state.albums || state.albums.length === 0) return [];
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const storageKey = 'rooplayer_daily_recommendations';
+
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && data.date === todayStr && Array.isArray(data.albumIds) && data.albumIds.length > 0) {
+        // Find cached albums
+        const cachedAlbums = [];
+        data.albumIds.forEach(id => {
+          const found = state.albums.find(a => (a.title + ':::' + a.artist) === id || a.title === id);
+          if (found && !cachedAlbums.includes(found)) cachedAlbums.push(found);
+        });
+        if (cachedAlbums.length >= Math.min(5, state.albums.length)) {
+          return cachedAlbums.slice(0, 5);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Error reading daily recommendations cache:', e);
+  }
+
+  // Generate new daily recommendations for today
+  const historyList = getPlaybackHistory();
+  const recentGenres = new Set();
+  const recentArtists = new Set();
+  const recentAlbums = new Set();
+
+  historyList.slice(0, 30).forEach(trk => {
+    if (trk.genre && trk.genre !== 'Various') recentGenres.add(trk.genre.toLowerCase().trim());
+    if (trk.artist && !isUnknownArtist(trk.artist)) recentArtists.add(trk.artist.toLowerCase().trim());
+    if (trk.album) recentAlbums.add(trk.album.toLowerCase().trim());
+  });
+
+  // Score candidate albums
+  const scoredCandidates = state.albums.map(alb => {
+    let score = 10; // base score for randomness
+    const albGenre = (alb.genre || '').toLowerCase().trim();
+    const albArtist = (alb.artist || '').toLowerCase().trim();
+    const albTitle = (alb.title || '').toLowerCase().trim();
+
+    // Preference for genres in recent history
+    if (recentGenres.has(albGenre)) score += 50;
+
+    // Preference for artists in recent history
+    if (recentArtists.has(albArtist)) score += 40;
+
+    // Bonus for albums recently listened to, but give room for discovery
+    if (recentAlbums.has(albTitle)) score += 20;
+
+    // Small bonus for lossless / hires
+    if (alb.isLossless) score += 10;
+
+    // Random jitter so every day has fresh variety
+    score += Math.random() * 60;
+
+    return { album: alb, score };
+  });
+
+  // Sort by score descending
+  scoredCandidates.sort((a, b) => b.score - a.score);
+
+  // Take top 5 unique albums
+  const chosen = scoredCandidates.slice(0, 5).map(item => item.album);
+
+  // Fallback if less than 5
+  if (chosen.length < 5 && state.albums.length > chosen.length) {
+    const remainders = state.albums.filter(a => !chosen.includes(a));
+    // shuffle remainders
+    remainders.sort(() => Math.random() - 0.5);
+    chosen.push(...remainders.slice(0, 5 - chosen.length));
+  }
+
+  // Persist to localStorage for today
+  try {
+    const albumIds = chosen.map(a => a.title + ':::' + a.artist);
+    localStorage.setItem(storageKey, JSON.stringify({
+      date: todayStr,
+      albumIds: albumIds
+    }));
+  } catch (e) {
+    console.warn('Error saving daily recommendations cache:', e);
+  }
+
+  return chosen;
+}
+
+function renderDailyRecommendations() {
+  if (!dailyRecommendGrid) return;
+  dailyRecommendGrid.innerHTML = '';
+
+  const dailyAlbums = getDailyRecommendedAlbums();
+  const section = document.getElementById('dailyRecommendSection');
+
+  if (!dailyAlbums || dailyAlbums.length === 0) {
+    if (section) section.style.display = 'none';
+    return;
+  }
+
+  if (section) section.style.display = 'block';
+
+  const dateBadge = document.getElementById('dailyRecommendDateBadge');
+  if (dateBadge) {
+    const today = new Date();
+    const m = today.getMonth() + 1;
+    const d = today.getDate();
+    dateBadge.textContent = `📅 ${m}月${d}日 今日推薦 (依聆聽歷史精選)`;
+  }
+
+  dailyAlbums.forEach(alb => {
+    dailyRecommendGrid.appendChild(createAlbumCard(alb));
+  });
+}
+
+// ----------------- 藝人生活誌 Artist Spotlight Engine -----------------
+let currentSpotlightArtistName = null;
+
+async function renderArtistSpotlight(forceRefresh = false) {
+  const section = document.getElementById('artistSpotlightSection');
+  const avatarImg = document.getElementById('spotlightAvatarImg');
+  const avatarPlaceholder = document.getElementById('spotlightAvatarPlaceholder');
+  const nameEl = document.getElementById('spotlightName');
+  const genresEl = document.getElementById('spotlightGenres');
+  const bioEl = document.getElementById('spotlightBio');
+  const albumsGrid = document.getElementById('spotlightAlbumsGrid');
+  const btnViewArtist = document.getElementById('btnSpotlightViewArtist');
+  const btnPlayArtist = document.getElementById('btnSpotlightPlayArtist');
+  const btnRefresh = document.getElementById('btnRefreshSpotlight');
+
+  if (!section) return;
+
+  const validArtists = (state.artists || []).filter(art => {
+    return art && art.name && !isUnknownArtist(art.name);
+  });
+
+  if (validArtists.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = 'block';
+
+  // Bind refresh button once
+  if (btnRefresh && !btnRefresh.dataset.bound) {
+    btnRefresh.dataset.bound = 'true';
+    btnRefresh.onclick = () => {
+      renderArtistSpotlight(true);
+      showToast('已隨機更換藝人生活誌');
+    };
+  }
+
+  // Choose a random artist
+  let chosenArt = null;
+  if (!forceRefresh && currentSpotlightArtistName) {
+    chosenArt = validArtists.find(a => a.name.toLowerCase() === currentSpotlightArtistName.toLowerCase());
+  }
+
+  if (!chosenArt) {
+    // Pick different from current if possible
+    const candidates = validArtists.filter(a => a.name !== currentSpotlightArtistName);
+    const pool = candidates.length > 0 ? candidates : validArtists;
+    chosenArt = pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  currentSpotlightArtistName = chosenArt.name;
+  const artistName = chosenArt.name;
+
+  // 1. Basic Info
+  nameEl.textContent = artistName;
+  nameEl.onclick = () => openArtistDetail(artistName);
+
+  // Genres
+  if (genresEl) {
+    genresEl.innerHTML = '';
+    const artistGenres = new Set();
+    const artistAlbums = state.albums.filter(a => (a.artist || '').toLowerCase().trim() === artistName.toLowerCase().trim());
+    artistAlbums.forEach(a => { if (a.genre && a.genre !== 'Various') artistGenres.add(a.genre); });
+    (chosenArt.tracks || []).forEach(t => { if (t.genre && t.genre !== 'Various') artistGenres.add(t.genre); });
+
+    const genreList = Array.from(artistGenres).slice(0, 3);
+    if (genreList.length === 0) genreList.push('流行音樂');
+    genreList.forEach(g => {
+      const chip = document.createElement('span');
+      chip.className = 'spec-chip';
+      chip.style.fontSize = '11px';
+      chip.style.padding = '2px 8px';
+      chip.textContent = g;
+      genresEl.appendChild(chip);
+    });
+  }
+
+  // Actions
+  if (btnViewArtist) {
+    btnViewArtist.onclick = () => openArtistDetail(artistName);
+  }
+  if (btnPlayArtist) {
+    btnPlayArtist.onclick = () => {
+      const artistTracks = state.tracks.filter(t => (t.artist || '').toLowerCase().trim() === artistName.toLowerCase().trim());
+      if (artistTracks.length > 0) {
+        playTrackList(artistTracks, 0);
+        showToast(`▶ 開始播放 ${artistName} 的所有曲目`);
+      } else {
+        showToast('此演出者暫無本機曲目');
+      }
+    };
+  }
+
+  // Reset Avatar & Bio
+  avatarImg.style.display = 'none';
+  avatarPlaceholder.style.display = 'flex';
+  avatarPlaceholder.textContent = artistName.charAt(0).toUpperCase();
+  bioEl.textContent = '正在連線維基百科取得演出者生平介紹與照片...';
+
+  // 2. 關聯精選專輯（依資料庫內容最多顯示 3 張；若只有 1 張就顯示 1 張，以此類推，不補其他歌手的專輯）
+  if (albumsGrid) {
+    albumsGrid.innerHTML = '';
+    let artistAlbums = state.albums.filter(a => (a.artist || '').toLowerCase().trim() === artistName.toLowerCase().trim());
+    
+    // 若該演出者無獨立專輯，但有收錄在合輯/多曲目專輯中，補上包含該演出者曲目的專輯
+    if (artistAlbums.length === 0) {
+      artistAlbums = state.albums.filter(a => a.tracks && a.tracks.some(t => (t.artist || '').toLowerCase().trim() === artistName.toLowerCase().trim()));
+    }
+
+    // 依資料庫內容最多顯示 3 張，有幾張就顯示幾張（不填補其他歌手專輯）
+    const selectedAlbums = artistAlbums.slice(0, 3);
+    const albumsWrap = document.getElementById('spotlightAlbumsWrap') || albumsGrid.closest('.spotlight-albums-wrap');
+    const albumsTitle = document.getElementById('spotlightAlbumsTitle') || albumsWrap?.querySelector('.spotlight-albums-title');
+
+    if (selectedAlbums.length === 0) {
+      if (albumsWrap) albumsWrap.style.display = 'none';
+    } else {
+      if (albumsWrap) albumsWrap.style.display = 'block';
+      if (albumsTitle) {
+        albumsTitle.textContent = `📀 相關精選專輯 Selected Albums (${selectedAlbums.length} 張)`;
+      }
+      selectedAlbums.forEach(alb => {
+        albumsGrid.appendChild(createAlbumCard(alb));
+      });
+    }
+  }
+
+  // 3. Fetch Bio & Photo from Wikipedia / Online API
+  try {
+    let bioText = '';
+    let avatarUrl = '';
+
+    // Check cache first
+    if (artistBioTranslationCache.has(artistName)) {
+      const cached = artistBioTranslationCache.get(artistName);
+      bioText = cached.translatedText || cached.originalText;
+      avatarUrl = cached.originalImageUrl || cached.avatarUrl;
+      if (bioText && !cached.translatedText) {
+        bioText = await translateTextToZhTw(bioText);
+        cached.translatedText = bioText;
+      }
+    } else {
+      // 1. Try Chinese Wikipedia
+      try {
+        const zhUrl = `https://zh.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(artistName)}`;
+        const res = await fetch(zhUrl, {
+          headers: { 'User-Agent': 'rooPlayer/1.0', 'Accept-Language': 'zh-tw,zh-hant;q=0.9' }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.extract && data.type !== 'disambiguation') {
+            bioText = data.extract;
+            if (data.originalimage?.source) avatarUrl = data.originalimage.source;
+            else if (data.thumbnail?.source) avatarUrl = data.thumbnail.source;
+          }
+        }
+      } catch (e) {}
+
+      // 1-b. If Chinese Wikipedia summary is under 450 characters, fetch query prop=extracts for fuller introduction
+      if (bioText.length < 450) {
+        try {
+          const zhQueryUrl = `https://zh.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&redirects=1&titles=${encodeURIComponent(artistName)}&format=json&origin=*`;
+          const qRes = await fetch(zhQueryUrl, {
+            headers: { 'User-Agent': 'rooPlayer/1.0', 'Accept-Language': 'zh-tw,zh-hant;q=0.9' }
+          });
+          if (qRes.ok) {
+            const qData = await qRes.json();
+            const pages = qData?.query?.pages;
+            if (pages) {
+              const firstPage = Object.values(pages)[0];
+              if (firstPage && firstPage.extract && firstPage.extract.length > bioText.length) {
+                bioText = firstPage.extract;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // 2. Try English Wikipedia fallback
+      if (!bioText || !avatarUrl) {
+        try {
+          const enUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(artistName)}`;
+          const res = await fetch(enUrl, { headers: { 'User-Agent': 'rooPlayer/1.0' } });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.extract && data.type !== 'disambiguation') {
+              if (!bioText) bioText = data.extract;
+              if (!avatarUrl) {
+                if (data.originalimage?.source) avatarUrl = data.originalimage.source;
+                else if (data.thumbnail?.source) avatarUrl = data.thumbnail.source;
+              }
+            }
+          }
+        } catch (e) {}
+
+        if (bioText.length < 450) {
+          try {
+            const enQueryUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&redirects=1&titles=${encodeURIComponent(artistName)}&format=json&origin=*`;
+            const qRes = await fetch(enQueryUrl, { headers: { 'User-Agent': 'rooPlayer/1.0' } });
+            if (qRes.ok) {
+              const qData = await qRes.json();
+              const pages = qData?.query?.pages;
+              if (pages) {
+                const firstPage = Object.values(pages)[0];
+                if (firstPage && firstPage.extract && firstPage.extract.length > bioText.length) {
+                  bioText = firstPage.extract;
+                }
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      // 自動翻譯為繁體中文 (Traditional Chinese)
+      if (bioText) {
+        bioText = await translateTextToZhTw(bioText);
+      }
+
+      // Cache results
+      if (bioText || avatarUrl) {
+        artistBioTranslationCache.set(artistName, {
+          originalText: bioText,
+          translatedText: bioText,
+          avatarUrl,
+          originalImageUrl: avatarUrl
+        });
+      }
+    }
+
+    // Only update if current spotlight artist hasn't changed
+    if (currentSpotlightArtistName === artistName) {
+      if (avatarUrl) {
+        avatarImg.src = avatarUrl;
+        avatarImg.onload = () => {
+          avatarImg.style.display = 'block';
+          avatarPlaceholder.style.display = 'none';
+        };
+        avatarImg.onerror = () => {
+          avatarImg.style.display = 'none';
+          avatarPlaceholder.style.display = 'flex';
+        };
+      }
+
+      if (bioText) {
+        // 擴增至 500 字以內，若超過則截斷至 495 字並加上省略號
+        let trimmed = bioText.replace(/\s+/g, ' ').trim();
+        if (trimmed.length > 500) {
+          trimmed = trimmed.substring(0, 495) + '...';
+        }
+        bioEl.textContent = trimmed;
+      } else {
+        bioEl.textContent = `${artistName} 是深受當代樂迷喜愛與推崇的經典音樂創作者，在發燒音響與高解析錄音領域擁有豐富代表作。本機音樂庫中已完整收錄多張珍貴母帶與熱門曲目，點擊「查看演出者主頁」即可探索其專屬生平介紹、發行專輯與完整串流曲庫。`;
+      }
+    }
+  } catch (err) {
+    if (currentSpotlightArtistName === artistName) {
+      bioEl.textContent = `${artistName} 是一位優秀的音樂創作者與演出者，在發燒音樂領域具備卓越表現。點擊查看更多個人專輯與作品。`;
+    }
+  }
+}
+
+// ----------------- 最近聆聽 Recent Played Albums -----------------
+function getRecentlyPlayedAlbums(maxCount = 5) {
+  const history = getPlaybackHistory();
+  const seenAlbumKeys = new Set();
+  const recentAlbums = [];
+
+  for (const trk of history) {
+    if (recentAlbums.length >= maxCount) break;
+    let album = findAlbumForTrack(trk);
+    if (!album && trk.album) {
+      album = state.albums.find(a => (a.title || '').trim().toLowerCase() === (trk.album || '').trim().toLowerCase());
+    }
+    if (!album && trk.album) {
+      album = {
+        title: trk.album,
+        artist: trk.artist || '未知演出者',
+        cover: trk.cover || '',
+        year: trk.year || '',
+        genre: trk.genre || 'Various',
+        formatName: trk.formatName || 'PCM',
+        sampleRate: trk.sampleRate || 44100,
+        bitsPerSample: trk.bitsPerSample || 16,
+        isLossless: trk.isLossless || false,
+        tracks: [trk]
+      };
+    }
+    if (album) {
+      const key = `${(album.title || '').toLowerCase().trim()}|${(album.artist || '').toLowerCase().trim()}`;
+      if (!seenAlbumKeys.has(key)) {
+        seenAlbumKeys.add(key);
+        recentAlbums.push(album);
+      }
+    }
+  }
+
+  return recentAlbums;
+}
+
+function renderRecentPlayedAlbums() {
+  const grid = document.getElementById('recentAlbumsGrid');
+  if (!grid) return;
+
+  grid.innerHTML = '';
+  const curSize = state.albumCoverSize || 'medium';
+  grid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
+  grid.classList.add(`cover-size-${curSize}`);
+
+  const recentAlbums = getRecentlyPlayedAlbums(5);
+
+  if (recentAlbums.length === 0) {
+    grid.innerHTML = `
+      <div style="grid-column: 1 / -1; padding: 24px; text-align: center; color: var(--text-muted); background: var(--bg-card); border-radius: 12px; border: 1px dashed var(--border-color); font-size: 13px;">
+        🎵 尚無最近聆聽紀錄，點擊播放任一歌曲後，將在此自動列出最近聽過的專輯。
+      </div>
+    `;
+    return;
+  }
+
+  recentAlbums.forEach(alb => {
+    grid.appendChild(createAlbumCard(alb));
+  });
+}
+
 // Render Overview
 function renderOverview() {
+  // 1. Render Daily Recommendations (Top of Overview)
+  renderDailyRecommendations();
+
+  // 2. Render 藝人生活誌 Artist Spotlight
+  renderArtistSpotlight();
+
+  // 3. Render 最近聆聽 Recent Played Albums (最多 5 張專輯)
+  renderRecentPlayedAlbums();
+
+  // 4. Render 精選與最近新增 (最多呈現 5 張專輯)
   overviewGrid.innerHTML = '';
-  // Show up to 8 albums
-  const featured = state.albums.slice(0, 8);
+  const curSize = state.albumCoverSize || 'medium';
+  overviewGrid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
+  overviewGrid.classList.add(`cover-size-${curSize}`);
+  const featured = state.albums.slice(0, 5);
   featured.forEach(alb => {
     overviewGrid.appendChild(createAlbumCard(alb));
   });
 
-  // Featured Artists in Overview
+  // 5. Featured Artists in Overview
   if (overviewArtistsGrid) {
     overviewArtistsGrid.innerHTML = '';
     const featuredArtists = state.artists.slice(0, 6);
@@ -1483,6 +1971,9 @@ function createArtistCard(art) {
 // Render Artists Tab
 function renderArtists() {
   artistsGrid.innerHTML = '';
+  const curSize = state.artistCardSize || 'medium';
+  artistsGrid.classList.remove('artist-size-small', 'artist-size-medium', 'artist-size-large');
+  artistsGrid.classList.add(`artist-size-${curSize}`);
   state.artists.forEach(art => {
     artistsGrid.appendChild(createArtistCard(art));
   });
@@ -1952,7 +2443,7 @@ async function fetchArtistMissingAlbums(artistName, localAlbums) {
   });
 }
 
-// Generate external streaming hyperlinks (YouTube & YouTube Music) for track
+// Generate external YouTube icon link for track (placed inline next to track title)
 function generateTrackOnlineLinks(track) {
   if (!track || !track.title) return '';
   const title = String(track.title || '').trim();
@@ -1961,18 +2452,8 @@ function generateTrackOnlineLinks(track) {
   if (!query) return '';
 
   const ytUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-  const ytmUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
 
-  return `
-    <div class="track-stream-links">
-      <a href="${ytUrl}" class="track-ext-link yt" target="_blank" title="在 YouTube 搜尋播放「${escapeXml(title)}」" data-url="${ytUrl}" data-platform="YouTube">
-        <span class="ext-icon">▶</span> YouTube
-      </a>
-      <a href="${ytmUrl}" class="track-ext-link ytm" target="_blank" title="在 YouTube Music 搜尋播放「${escapeXml(title)}」" data-url="${ytmUrl}" data-platform="YT Music">
-        <span class="ext-icon">🎵</span> YT Music
-      </a>
-    </div>
-  `;
+  return `<a href="${ytUrl}" class="track-ext-link yt" target="_blank" title="在 YouTube 搜尋播放「${escapeXml(title)}」" data-url="${ytUrl}" data-platform="YouTube"><svg class="yt-svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg></a>`;
 }
 
 function handleTrackExternalLinkClick(extLink) {
@@ -2021,8 +2502,9 @@ function renderTracks() {
       <td>${idx + 1}</td>
       <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button></td>
       <td class="track-title-cell">
-        <div class="track-title-text">${escapeXml(track.title)}${playBadge}</div>
-        ${onlineLinksHtml}
+        <div class="track-title-text">
+          <span class="track-name-span">${escapeXml(track.title)}</span>${onlineLinksHtml}${playBadge}
+        </div>
       </td>
       <td>${escapeXml(track.artist)}</td>
       <td>${escapeXml(track.album)}</td>
@@ -2914,6 +3396,124 @@ function renderAlbumRecommendations(album) {
   });
 }
 
+// ----------------- Recommended Artists Engine (Genre-based Random Sampling) -----------------
+function renderAlbumArtistRecommendations(album) {
+  const container = document.getElementById('albumArtistRecommendationsGrid');
+  const countBadge = document.getElementById('recommendArtistCountBadge');
+  const genreTag = document.getElementById('recommendArtistGenreTag');
+
+  if (!container) return;
+  container.innerHTML = '';
+
+  const currentGenre = (album.genre || '').trim();
+  if (genreTag) {
+    genreTag.textContent = currentGenre && currentGenre !== 'Various' ? currentGenre : '多元曲風';
+  }
+
+  // Tokenize genres helper
+  const tokenizeGenre = (g) => {
+    if (!g) return [];
+    return g.toLowerCase()
+      .replace(/[\/,\-\_\&]/g, ' ')
+      .split(/\s+/)
+      .map(w => w.trim())
+      .filter(w => w.length > 1 && !['and', 'the', 'various', 'music'].includes(w));
+  };
+
+  const albumGenreTokens = new Set(tokenizeGenre(currentGenre));
+  (album.tracks || []).forEach(t => {
+    tokenizeGenre(t.genre).forEach(w => albumGenreTokens.add(w));
+  });
+
+  const curArtist = (album.artist || '').trim().toLowerCase();
+
+  // Find all candidate artists from state.artists excluding current album artist
+  const candidateArtists = (state.artists || []).filter(art => {
+    if (!art || !art.name) return false;
+    if (isUnknownArtist(art.name)) return false;
+    if (art.name.toLowerCase().trim() === curArtist) return false;
+    return true;
+  });
+
+  // Calculate genre relevance for each artist
+  const matchingArtists = [];
+  const otherArtists = [];
+
+  candidateArtists.forEach(art => {
+    // Collect all genre tokens and raw genre strings across artist's tracks and albums
+    let hasGenreMatch = false;
+    const artTracks = art.tracks || [];
+    const artAlbums = state.albums.filter(a => (a.artist || '').toLowerCase().trim() === art.name.toLowerCase().trim());
+
+    // Check with matchItemGenre first (handles classical, jazz, rock, pop, vocal, etc.)
+    if (currentGenre && currentGenre !== 'Various') {
+      if (matchItemGenre({ genre: currentGenre, artist: art.name }, currentGenre)) {
+        // check if artist's albums/tracks match
+        const anyMatch = artAlbums.some(a => matchItemGenre(a, currentGenre)) || artTracks.some(t => matchItemGenre(t, currentGenre));
+        if (anyMatch) hasGenreMatch = true;
+      }
+    }
+
+    if (!hasGenreMatch && albumGenreTokens.size > 0) {
+      const artTokens = new Set();
+      artAlbums.forEach(a => tokenizeGenre(a.genre).forEach(tok => artTokens.add(tok)));
+      artTracks.forEach(t => tokenizeGenre(t.genre).forEach(tok => artTokens.add(tok)));
+
+      for (const tok of albumGenreTokens) {
+        if (artTokens.has(tok)) {
+          hasGenreMatch = true;
+          break;
+        }
+      }
+    }
+
+    if (hasGenreMatch) {
+      matchingArtists.push(art);
+    } else {
+      otherArtists.push(art);
+    }
+  });
+
+  // Fisher-Yates shuffle
+  const shuffleArray = (arr) => {
+    const res = [...arr];
+    for (let i = res.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [res[i], res[j]] = [res[j], res[i]];
+    }
+    return res;
+  };
+
+  let chosenArtists = [];
+  if (matchingArtists.length > 0) {
+    const shuffledMatching = shuffleArray(matchingArtists);
+    chosenArtists = shuffledMatching.slice(0, 6);
+  }
+
+  // Fallback: if not enough matching artists, fill with random artists
+  if (chosenArtists.length < 6 && otherArtists.length > 0) {
+    const shuffledOthers = shuffleArray(otherArtists);
+    const needed = 6 - chosenArtists.length;
+    chosenArtists.push(...shuffledOthers.slice(0, needed));
+  }
+
+  if (countBadge) {
+    countBadge.textContent = `${chosenArtists.length} 位推薦`;
+  }
+
+  if (chosenArtists.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'recommend-empty-hint';
+    empty.textContent = `目前本機音樂庫中暫無其他 ${currentGenre || '同類型'} 演出者，匯入更多演出者作品即可自動擴充風格比對推薦！`;
+    container.appendChild(empty);
+    return;
+  }
+
+  chosenArtists.forEach(art => {
+    container.appendChild(createArtistCard(art));
+  });
+}
+
 function renderDetailTracklist(album) {
   detailTracklistTbody.innerHTML = '';
   album.tracks.forEach((t, idx) => {
@@ -2932,8 +3532,9 @@ function renderDetailTracklist(album) {
       <td>${t.trackNumber || (idx + 1)}</td>
       <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button></td>
       <td class="track-title-cell">
-        <div class="track-title-text">${escapeXml(t.title)}</div>
-        ${onlineLinksHtml}
+        <div class="track-title-text">
+          <span class="track-name-span">${escapeXml(t.title)}</span>${onlineLinksHtml}
+        </div>
       </td>
       <td><span class="format-chip">${trackChipText}</span></td>
       <td style="text-align: right;">${formatDuration(t.duration)}</td>
@@ -3043,16 +3644,11 @@ function openAlbumDetail(album) {
     };
   }
 
-  // Clicking artist in detail modal opens artist page
+  // Clicking artist in detail view opens artist page
   detailArtist.style.cursor = 'pointer';
   detailArtist.onclick = () => {
-    closeAlbumDetail();
     openArtistDetail(album.artist);
   };
-
-  // Scroll modal back to top
-  const modalContent = albumDetailModal.querySelector('.modal-content');
-  if (modalContent) modalContent.scrollTop = 0;
 
   // 1. Fetch Album Bio (Online search + Auto Traditional Chinese Translation)
   updateAlbumIntroCollapseUI();
@@ -3064,12 +3660,21 @@ function openAlbumDetail(album) {
   // 3. Render Recommended Albums (Based on metadata & same genre)
   renderAlbumRecommendations(album);
 
-  albumDetailModal.style.display = 'flex';
+  // 4. Render Recommended Artists (Genre-based random sampling)
+  renderAlbumArtistRecommendations(album);
+
+  navigateTo('albumDetail');
+  const mainContentEl = document.getElementById('mainContent');
+  if (mainContentEl) mainContentEl.scrollTop = 0;
 }
 
 function closeAlbumDetail() {
-  albumDetailModal.style.display = 'none';
-  state.activeAlbumDetail = null;
+  if (state.historyIndex > 0) {
+    state.historyIndex--;
+    applyView(state.history[state.historyIndex], false);
+  } else {
+    navigateTo('albums');
+  }
 }
 
 // ----------------- Player & Audio Engine -----------------
@@ -4857,6 +5462,13 @@ function setupNavigation() {
     });
   }
 
+  const btnSeeAllHistory = document.getElementById('btnSeeAllHistory');
+  if (btnSeeAllHistory) {
+    btnSeeAllHistory.addEventListener('click', () => {
+      document.querySelector('[data-view="history"]').click();
+    });
+  }
+
   document.getElementById('btnNavBack').addEventListener('click', () => {
     if (state.historyIndex > 0) {
       state.historyIndex--;
@@ -4967,13 +5579,15 @@ function renderPlaybackHistory() {
 
       tr.innerHTML = `
         <td>${idx + 1}</td>
+        <td style="text-align: center;"><button class="btn-history-play" title="播放此曲目">▶</button></td>
         <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button></td>
         <td class="track-title-cell">
-          <div class="track-title-text">${escapeXml(track.title)}</div>
-          ${onlineLinksHtml}
+          <div class="track-title-text">
+            <span class="track-name-span">${escapeXml(track.title)}</span>${onlineLinksHtml}
+          </div>
         </td>
-        <td>${escapeXml(track.artist || '未知演出者')}</td>
-        <td>${escapeXml(track.album || '未知專輯')}</td>
+        <td><span class="history-artist-link" title="前往演出者頁面">${escapeXml(track.artist || '未知演出者')}</span></td>
+        <td><span class="history-album-link" title="前往專輯頁面">${escapeXml(track.album || '未知專輯')}</span></td>
         <td style="color: var(--text-muted); font-size: 12px;">${formatTimeAgo(track.playedAt)}</td>
         <td><span class="format-chip ${isHires ? 'hires' : ''}">${specLabel}</span></td>
         <td style="text-align: right;">${formatDuration(track.duration)}</td>
@@ -4995,6 +5609,42 @@ function renderPlaybackHistory() {
             const nowFav = isTrackFavorite(track);
             favBtn.classList.toggle('active', nowFav);
             favBtn.textContent = nowFav ? '♥' : '♡';
+          }
+          return;
+        }
+        if (e.target.closest('.btn-history-play')) {
+          e.stopPropagation();
+          playTrackList(historyList, idx);
+          return;
+        }
+        if (e.target.closest('.history-artist-link')) {
+          e.stopPropagation();
+          if (track.artist && !isUnknownArtist(track.artist)) {
+            openArtistDetail(track.artist);
+          } else {
+            showToast('未知的演出者');
+          }
+          return;
+        }
+        if (e.target.closest('.history-album-link')) {
+          e.stopPropagation();
+          const foundAlbum = findAlbumForTrack(track);
+          if (foundAlbum) {
+            openAlbumDetail(foundAlbum);
+          } else {
+            const fallbackAlbum = {
+              title: track.album || track.title || '未知專輯',
+              artist: track.artist || '未知演出者',
+              cover: track.cover || '',
+              year: track.year || '',
+              genre: track.genre || 'Various',
+              formatName: track.formatName || 'PCM',
+              sampleRate: track.sampleRate || 44100,
+              bitsPerSample: track.bitsPerSample || 16,
+              isLossless: track.isLossless || false,
+              tracks: [track]
+            };
+            openAlbumDetail(fallbackAlbum);
           }
           return;
         }
@@ -5057,8 +5707,9 @@ function renderFavTracks() {
         <td>${idx + 1}</td>
         <td style="text-align: center;"><button class="btn-track-fav active" title="取消最愛歌曲">♥</button></td>
         <td class="track-title-cell">
-          <div class="track-title-text">${escapeXml(track.title)}</div>
-          ${onlineLinksHtml}
+          <div class="track-title-text">
+            <span class="track-name-span">${escapeXml(track.title)}</span>${onlineLinksHtml}
+          </div>
         </td>
         <td>${escapeXml(track.artist)}</td>
         <td>${escapeXml(track.album)}</td>
@@ -5094,6 +5745,9 @@ function renderFavArtists() {
   if (!grid) return;
 
   grid.innerHTML = '';
+  const curSize = state.artistCardSize || 'medium';
+  grid.classList.remove('artist-size-small', 'artist-size-medium', 'artist-size-large');
+  grid.classList.add(`artist-size-${curSize}`);
   const favList = getFavoriteArtistsList();
   if (countBadge) countBadge.textContent = `共 ${favList.length} 位最愛演出者`;
 
@@ -5414,7 +6068,10 @@ function applyAlbumCoverSize(size) {
   const grids = [
     document.getElementById('allAlbumsGrid'),
     document.getElementById('searchLocalAlbumsGrid'),
-    document.getElementById('favAlbumsGrid')
+    document.getElementById('favAlbumsGrid'),
+    document.getElementById('dailyRecommendGrid'),
+    document.getElementById('recentAlbumsGrid'),
+    document.getElementById('overviewGrid')
   ];
 
   grids.forEach(grid => {
@@ -5441,6 +6098,28 @@ function applyDetailCoverSize(size) {
   }
 }
 
+function applyArtistSize(size) {
+  state.artistCardSize = size;
+  try {
+    localStorage.setItem('rooplayer_artist_card_size', size);
+  } catch (e) {}
+
+  document.querySelectorAll('#artistSizePills .size-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-artist-size') === size);
+  });
+
+  const artistGrids = [
+    document.getElementById('artistsGrid'),
+    document.getElementById('favArtistsGrid')
+  ];
+
+  artistGrids.forEach(grid => {
+    if (!grid) return;
+    grid.classList.remove('artist-size-small', 'artist-size-medium', 'artist-size-large');
+    grid.classList.add(`artist-size-${size}`);
+  });
+}
+
 function setupCoverSizeControls() {
   // 1. Album Library Grid Size Controls
   const gridPills = document.querySelectorAll('#albumCoverSizePills .size-pill');
@@ -5462,9 +6141,20 @@ function setupCoverSizeControls() {
     });
   });
 
+  // 3. Artists Page Avatar Size Controls
+  const artistPills = document.querySelectorAll('#artistSizePills .size-pill');
+  artistPills.forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const size = pill.getAttribute('data-artist-size');
+      applyArtistSize(size);
+    });
+  });
+
   // Apply initial saved sizes
   applyAlbumCoverSize(state.albumCoverSize || 'medium');
   applyDetailCoverSize(state.detailCoverSize || 'medium');
+  applyArtistSize(state.artistCardSize || 'medium');
 }
 
 async function fetchOnlineStreamingAlbums(query) {
@@ -5686,18 +6376,24 @@ function handleSearch(query) {
 
 // ----------------- Scanner & Storage Events -----------------
 function setupScannerEvents() {
-  document.getElementById('btnHeroScan').addEventListener('click', () => {
-    document.querySelector('[data-view="storage"]').click();
-  });
+  const btnHeroScan = document.getElementById('btnHeroScan');
+  if (btnHeroScan) {
+    btnHeroScan.addEventListener('click', () => {
+      document.querySelector('[data-view="storage"]').click();
+    });
+  }
 
-  document.getElementById('btnHeroPlayRandom').addEventListener('click', () => {
-    if (state.tracks.length > 0) {
-      setShuffleState(true);
-      const randIdx = Math.floor(Math.random() * state.tracks.length);
-      playTrackList(state.tracks, randIdx);
-      showToast('🔀 隨機播放音樂庫');
-    }
-  });
+  const btnHeroPlayRandom = document.getElementById('btnHeroPlayRandom');
+  if (btnHeroPlayRandom) {
+    btnHeroPlayRandom.addEventListener('click', () => {
+      if (state.tracks.length > 0) {
+        setShuffleState(true);
+        const randIdx = Math.floor(Math.random() * state.tracks.length);
+        playTrackList(state.tracks, randIdx);
+        showToast('🔀 隨機播放音樂庫');
+      }
+    });
+  }
 
   document.getElementById('btnPlayAllTracks').addEventListener('click', () => {
     let displayTracks = [...state.tracks];
@@ -6119,15 +6815,23 @@ function setupPlayerControls() {
     if (e.target === signalPathModal) signalPathModal.style.display = 'none';
   });
 
-  // Album Detail Modal
-  btnCloseAlbumDetail.addEventListener('click', closeAlbumDetail);
-  albumDetailModal.addEventListener('click', (e) => {
-    if (e.target === albumDetailModal) closeAlbumDetail();
-  });
+  // Album Detail View
+  const btnBackFromAlbumDetail = document.getElementById('btnBackFromAlbumDetail');
+  if (btnBackFromAlbumDetail) {
+    btnBackFromAlbumDetail.addEventListener('click', closeAlbumDetail);
+  }
+  if (btnCloseAlbumDetail) {
+    btnCloseAlbumDetail.addEventListener('click', closeAlbumDetail);
+  }
+  if (albumDetailModal) {
+    albumDetailModal.addEventListener('click', (e) => {
+      if (e.target === albumDetailModal) closeAlbumDetail();
+    });
+  }
   btnPlayAlbumNow.addEventListener('click', () => {
     if (state.activeAlbumDetail) {
       playAlbum(state.activeAlbumDetail);
-      closeAlbumDetail();
+      showToast(`▶ 正在播放專輯《${state.activeAlbumDetail.title}》`);
     }
   });
   btnShuffleAlbum.addEventListener('click', () => {
@@ -6135,7 +6839,6 @@ function setupPlayerControls() {
       setShuffleState(true);
       const randIdx = Math.floor(Math.random() * state.activeAlbumDetail.tracks.length);
       playTrackList(state.activeAlbumDetail.tracks, randIdx);
-      closeAlbumDetail();
       showToast(`🔀 隨機播放專輯《${state.activeAlbumDetail.title}》`);
     }
   });

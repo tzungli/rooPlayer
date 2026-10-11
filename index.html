@@ -56,11 +56,6 @@
           <span class="nav-icon">☷</span>
           <span class="nav-label">總覽 Overview</span>
         </button>
-        <button class="nav-item" data-view="history">
-          <span class="nav-icon">🕒</span>
-          <span class="nav-label">播放紀錄</span>
-          <span class="badge" id="historyCountBadge">0</span>
-        </button>
         <button class="nav-item" data-view="albums">
           <span class="nav-icon">💿</span>
           <span class="nav-label">專輯 Albums</span>
@@ -80,6 +75,11 @@
           <span class="nav-icon">🏷️</span>
           <span class="nav-label">曲風流派 Genres</span>
           <span class="badge" id="genreCountBadge">0</span>
+        </button>
+        <button class="nav-item" data-view="history">
+          <span class="nav-icon">🕒</span>
+          <span class="nav-label">播放紀錄</span>
+          <span class="badge" id="historyCountBadge">0</span>
         </button>
       </div>
 
@@ -128,7 +128,7 @@
     <main id="mainContent">
       <!-- 1. OVERVIEW VIEW -->
       <section id="viewOverview" class="content-view active">
-        <div class="hero-banner">
+        <div class="hero-banner" id="overviewHeroBanner">
           <div class="hero-overlay"></div>
           <div class="hero-content">
             <span class="hero-tag">AUDIOPHILE MEDIA HUB</span>
@@ -140,10 +140,75 @@
               <div class="stat-pill highlight"><span id="heroHiresCount">0</span> Hi-Res 無損音樂</div>
               <div class="stat-pill" id="heroHistoryPill" style="cursor: pointer;" title="點擊檢視播放紀錄">🕒 <span id="heroHistoryCount">0</span> 播放紀錄</div>
             </div>
-            <div class="hero-actions">
-              <button class="btn btn-primary" id="btnHeroScan">➕ 新增本機音樂目錄</button>
-              <button class="btn btn-secondary" id="btnHeroPlayRandom">🔀 隨機播放精選</button>
+          </div>
+        </div>
+
+        <!-- 每日推薦 Daily Picks (參考最近播放紀錄每日隨機推薦五張專輯) -->
+        <div class="section-block" id="dailyRecommendSection" style="margin-bottom: 32px;">
+          <div class="section-header">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <h2>🌟 每日推薦 Daily Recommendation</h2>
+              <span class="recommend-reason-badge" id="dailyRecommendDateBadge" style="background: rgba(124, 58, 237, 0.12); color: var(--accent-purple); border: 1px solid rgba(124, 58, 237, 0.3); font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 600;">依聆聽喜好每日更新</span>
             </div>
+            <span style="font-size: 12px; color: var(--text-muted);">精選 5 張發燒專輯</span>
+          </div>
+          <div class="album-grid" id="dailyRecommendGrid">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+
+        <!-- 藝人生活誌 Artist Spotlight (隨機推薦一位藝人，含生平簡介、照片與3張關聯專輯) -->
+        <div class="section-block" id="artistSpotlightSection" style="margin-top: 32px; margin-bottom: 32px;">
+          <div class="section-header">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <h2>📖 藝人生活誌 Artist Spotlight</h2>
+              <span class="recommend-reason-badge" id="spotlightBadge" style="background: rgba(124, 58, 237, 0.12); color: var(--accent-purple); border: 1px solid rgba(124, 58, 237, 0.3); font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 600;">深度探索</span>
+            </div>
+            <button class="btn-text" id="btnRefreshSpotlight" title="隨機換一位藝人">隨機換一位 ↻</button>
+          </div>
+          
+          <div class="artist-spotlight-card" id="artistSpotlightCard">
+            <div class="spotlight-top-wrap">
+              <div class="spotlight-avatar-col">
+                <div class="spotlight-avatar-box" id="spotlightAvatarBox">
+                  <img src="" alt="Artist Photo" class="spotlight-avatar-img" id="spotlightAvatarImg" style="display: none;">
+                  <div class="spotlight-avatar-placeholder" id="spotlightAvatarPlaceholder">🎤</div>
+                </div>
+              </div>
+              <div class="spotlight-info-col">
+                <div class="spotlight-tag">FEATURED ARTIST</div>
+                <h3 class="spotlight-name" id="spotlightName">演出者名稱</h3>
+                <div class="spotlight-genres" id="spotlightGenres"></div>
+                <div class="spotlight-bio-box">
+                  <p class="spotlight-bio" id="spotlightBio">正在載入藝人生平簡介...</p>
+                </div>
+                <div class="spotlight-actions">
+                  <button class="btn btn-primary btn-sm" id="btnSpotlightViewArtist">查看演出者主頁 ➔</button>
+                  <button class="btn btn-secondary btn-sm" id="btnSpotlightPlayArtist">▶ 播放該歌手所有歌曲</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="spotlight-albums-wrap" id="spotlightAlbumsWrap">
+              <div class="spotlight-albums-title" id="spotlightAlbumsTitle">📀 相關精選專輯 Selected Albums</div>
+              <div class="album-grid spotlight-album-grid" id="spotlightAlbumsGrid">
+                <!-- Injected via JS -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 最近聆聽 Recent Played (顯示最近聽的 5 張專輯) -->
+        <div class="section-block" id="recentAlbumsSection" style="margin-top: 32px; margin-bottom: 32px;">
+          <div class="section-header">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <h2>🕒 最近聆聽 Recent Played</h2>
+              <span class="recommend-reason-badge" id="recentAlbumsBadge" style="background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 600;">播放歷史記錄</span>
+            </div>
+            <button class="btn-text" id="btnSeeAllHistory">檢視完整播放紀錄 ➔</button>
+          </div>
+          <div class="album-grid" id="recentAlbumsGrid">
+            <!-- Injected via JS -->
           </div>
         </div>
 
@@ -186,6 +251,7 @@
             <thead>
               <tr>
                 <th style="width: 45px;">#</th>
+                <th style="width: 40px; text-align: center;">播放</th>
                 <th style="width: 38px;"></th>
                 <th>曲目名稱</th>
                 <th>演出者</th>
@@ -305,12 +371,151 @@
         </div>
       </section>
 
+      <!-- 2.5 ALBUM DETAIL VIEW (Standard Full Page) -->
+      <section id="viewAlbumDetail" class="content-view">
+        <div class="view-back-bar" style="margin-bottom: 20px;">
+          <button class="btn btn-secondary btn-sm" id="btnBackFromAlbumDetail" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; font-size: 13px; font-weight: 500;">
+            <span>←</span> 返回上一頁
+          </button>
+        </div>
+
+        <div class="album-detail-container">
+          <div class="album-detail-header">
+            <div class="detail-cover-column">
+              <div class="album-detail-art-box" id="detailCoverArtBox">
+                <img id="detailCoverImg" src="" alt="Album Artwork" class="album-detail-art">
+                <span class="detail-format-badge" id="detailFormatBadge">FLAC 24/96</span>
+              </div>
+              <div class="detail-cover-size-bar">
+                <span class="detail-size-label">封面尺寸：</span>
+                <div class="pill-group detail-size-pills" id="detailCoverSizePills">
+                  <button class="pill size-pill" data-detail-size="small" title="小尺寸封面">小</button>
+                  <button class="pill size-pill active" data-detail-size="medium" title="中尺寸封面 (預設)">中</button>
+                  <button class="pill size-pill" data-detail-size="large" title="大尺寸封面">大</button>
+                </div>
+              </div>
+            </div>
+            <div class="album-detail-meta">
+              <div class="detail-tag">ALBUM</div>
+              <h1 class="detail-title" id="detailTitle">Album Title</h1>
+              <div class="detail-artist" id="detailArtist">Artist Name</div>
+              <div class="detail-specs" id="detailSpecs">
+                <span class="spec-chip" id="detailFormatSpec">24-bit / 96kHz Lossless</span>
+                <span class="spec-chip" id="detailChannelsSpec">2 Channels (Stereo)</span>
+                <span class="spec-chip" id="detailGenre">Classical</span>
+              </div>
+              <div class="detail-actions">
+                <button class="btn btn-primary" id="btnPlayAlbumNow">▶ 播放專輯</button>
+                <button class="btn btn-secondary" id="btnShuffleAlbum">🔀 隨機播放</button>
+                <button class="btn btn-secondary" id="btnFavAlbumDetail">♡ 加入最愛</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 簡短專輯介紹 (網路上搜尋，轉換成繁體中文) -->
+          <div class="album-intro-section" id="albumIntroSection">
+            <div class="album-intro-header" id="albumIntroHeader">
+              <div class="album-intro-title-wrap" title="點擊展開或縮小專輯介紹">
+                <h3 class="album-intro-title">📖 專輯介紹 Album Review</h3>
+                <span class="data-source-badge" id="albumIntroSourceBadge">資料來源：維基百科音樂資料庫</span>
+              </div>
+              <div class="album-intro-actions">
+                <button class="btn-toggle-lang" id="btnToggleAlbumBioLang" style="display: none;" title="切換檢視原文或繁體中文翻譯">檢視原文</button>
+                <button class="btn-toggle-collapse" id="btnToggleAlbumIntroCollapse" title="縮小或展開專輯介紹">
+                  <span class="collapse-icon" id="albumIntroCollapseIcon">▲</span>
+                  <span class="collapse-text" id="albumIntroCollapseText">縮小</span>
+                </button>
+              </div>
+            </div>
+            <div class="album-intro-card" id="albumIntroCard">
+              <div class="bio-loading" id="albumBioLoading">
+                <span class="spinner"></span> 正在搜尋專輯背景資料並自動翻譯為繁體中文...
+              </div>
+              <p class="bio-text" id="albumBioText" style="display: none;"></p>
+            </div>
+          </div>
+
+          <div class="album-detail-tracklist">
+            <h3>曲目清單 (<span id="detailTrackCount">0</span> 首)</h3>
+            <table class="tracklist-table">
+              <thead>
+                <tr>
+                  <th style="width: 45px;">#</th>
+                  <th style="width: 38px;"></th>
+                  <th>曲目名稱</th>
+                  <th style="width: 140px;">格式</th>
+                  <th style="width: 80px; text-align: right;">時長</th>
+                </tr>
+              </thead>
+              <tbody id="detailTracklistTbody">
+                <!-- Injected via JS -->
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 專輯元資料與製作資訊 (Album Credits & Metadata) -->
+          <div class="album-metadata-section" id="albumMetadataSection">
+            <div class="section-header" style="margin-bottom: 12px;">
+              <div class="header-with-tag">
+                <h3 style="font-size: 16px;">📀 專輯元資料與製作資訊 Album Credits & Metadata</h3>
+                <span class="metadata-source-badge" id="albumMetaSourceBadge">Audio Metadata</span>
+              </div>
+            </div>
+            <div class="album-meta-grid" id="albumMetaGrid">
+              <!-- Injected via JS -->
+            </div>
+          </div>
+
+          <!-- 同類型推薦專輯 (由歌曲 meta 資料判斷) -->
+          <div class="album-recommendations-section" id="albumRecommendationsSection">
+            <div class="section-header" style="margin-bottom: 12px;">
+              <div class="header-with-tag">
+                <h3 style="font-size: 16px;">✨ 同類型推薦專輯 Recommended Albums</h3>
+                <span class="recommend-reason-badge" id="recommendReasonBadge">依曲風與音樂類型推薦</span>
+              </div>
+              <span class="section-count-badge" id="recommendCountBadge">0 張推薦</span>
+            </div>
+            <p class="section-desc" id="recommendDesc" style="margin-bottom: 16px; font-size: 12px; color: var(--text-muted);">
+              根據此專輯的曲風標籤（<span id="recommendGenreTag" style="color: var(--accent-purple); font-weight: 600;">Genre</span>）與音訊元資料，為您發掘同風格精彩專輯。
+            </p>
+            <div class="album-grid recommend-album-grid" id="albumRecommendationsGrid">
+              <!-- Injected via JS -->
+            </div>
+          </div>
+
+          <!-- 推薦演出者 (參考相同流派隨機推薦) -->
+          <div class="album-recommendations-section" id="albumArtistsRecommendationsSection" style="margin-top: 36px;">
+            <div class="section-header" style="margin-bottom: 12px;">
+              <div class="header-with-tag">
+                <h3 style="font-size: 16px;">🎤 推薦演出者 Recommended Artists</h3>
+                <span class="recommend-reason-badge" id="recommendArtistReasonBadge" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; border-color: rgba(245, 158, 11, 0.3);">相同風格流派推薦</span>
+              </div>
+              <span class="section-count-badge" id="recommendArtistCountBadge">0 位推薦</span>
+            </div>
+            <p class="section-desc" id="recommendArtistDesc" style="margin-bottom: 16px; font-size: 12px; color: var(--text-muted);">
+              為您隨機探索具備相同音樂流派（<span id="recommendArtistGenreTag" style="color: var(--accent-purple); font-weight: 600;">Genre</span>）的經典演出者與音樂家。
+            </p>
+            <div class="artist-grid recommend-artist-grid" id="albumArtistRecommendationsGrid">
+              <!-- Injected via JS -->
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- 3. ARTISTS VIEW -->
       <section id="viewArtists" class="content-view">
-        <div class="view-header">
+        <div class="view-header" id="artistsViewHeader">
           <div>
             <h1 class="page-title">演出者 Artists</h1>
             <span class="page-subtitle" id="artistsHeaderCount">共 0 位演出者</span>
+          </div>
+          <div class="cover-size-control" id="artistSizeControl">
+            <span class="size-control-label">頭像尺寸：</span>
+            <div class="pill-group size-pill-group" id="artistSizePills">
+              <button class="pill size-pill" data-artist-size="small" title="小尺寸頭像">小</button>
+              <button class="pill size-pill active" data-artist-size="medium" title="中尺寸頭像 (預設)">中</button>
+              <button class="pill size-pill" data-artist-size="large" title="大尺寸頭像">大</button>
+            </div>
           </div>
         </div>
         <div class="artist-grid" id="artistsGrid">
@@ -1049,116 +1254,6 @@
       <div class="modal-footer" style="padding: 16px 24px; display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid rgba(255,255,255,0.08);">
         <button class="btn btn-secondary" id="btnCancelKkboxLogin">取消</button>
         <button class="btn btn-primary" id="btnSubmitKkboxLogin" style="background: #25d5ff; color: #000; font-weight: 600; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer;">儲存會員帳號</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Album Detail Overlay Modal (Roon Style) -->
-  <div id="albumDetailModal" class="modal-overlay" style="display: none;">
-    <div class="modal-content album-detail-container">
-      <button class="btn-close-modal" id="btnCloseAlbumDetail">✕</button>
-      
-      <div class="album-detail-header">
-        <div class="detail-cover-column">
-          <div class="album-detail-art-box" id="detailCoverArtBox">
-            <img id="detailCoverImg" src="" alt="Album Artwork" class="album-detail-art">
-            <span class="detail-format-badge" id="detailFormatBadge">FLAC 24/96</span>
-          </div>
-          <div class="detail-cover-size-bar">
-            <span class="detail-size-label">封面尺寸：</span>
-            <div class="pill-group detail-size-pills" id="detailCoverSizePills">
-              <button class="pill size-pill" data-detail-size="small" title="小尺寸封面">小</button>
-              <button class="pill size-pill active" data-detail-size="medium" title="中尺寸封面 (預設)">中</button>
-              <button class="pill size-pill" data-detail-size="large" title="大尺寸封面">大</button>
-            </div>
-          </div>
-        </div>
-        <div class="album-detail-meta">
-          <div class="detail-tag">ALBUM</div>
-          <h1 class="detail-title" id="detailTitle">Album Title</h1>
-          <div class="detail-artist" id="detailArtist">Artist Name</div>
-          <div class="detail-specs" id="detailSpecs">
-            <span class="spec-chip" id="detailFormatSpec">24-bit / 96kHz Lossless</span>
-            <span class="spec-chip" id="detailChannelsSpec">2 Channels (Stereo)</span>
-            <span class="spec-chip" id="detailGenre">Classical</span>
-          </div>
-          <div class="detail-actions">
-            <button class="btn btn-primary" id="btnPlayAlbumNow">▶ 播放專輯</button>
-            <button class="btn btn-secondary" id="btnShuffleAlbum">🔀 隨機播放</button>
-            <button class="btn btn-secondary" id="btnFavAlbumDetail">♡ 加入最愛</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 簡短專輯介紹 (網路上搜尋，轉換成繁體中文) -->
-      <div class="album-intro-section" id="albumIntroSection">
-        <div class="album-intro-header" id="albumIntroHeader">
-          <div class="album-intro-title-wrap" title="點擊展開或縮小專輯介紹">
-            <h3 class="album-intro-title">📖 專輯介紹 Album Review</h3>
-            <span class="data-source-badge" id="albumIntroSourceBadge">資料來源：維基百科音樂資料庫</span>
-          </div>
-          <div class="album-intro-actions">
-            <button class="btn-toggle-lang" id="btnToggleAlbumBioLang" style="display: none;" title="切換檢視原文或繁體中文翻譯">檢視原文</button>
-            <button class="btn-toggle-collapse" id="btnToggleAlbumIntroCollapse" title="縮小或展開專輯介紹">
-              <span class="collapse-icon" id="albumIntroCollapseIcon">▲</span>
-              <span class="collapse-text" id="albumIntroCollapseText">縮小</span>
-            </button>
-          </div>
-        </div>
-        <div class="album-intro-card" id="albumIntroCard">
-          <div class="bio-loading" id="albumBioLoading">
-            <span class="spinner"></span> 正在搜尋專輯背景資料並自動翻譯為繁體中文...
-          </div>
-          <p class="bio-text" id="albumBioText" style="display: none;"></p>
-        </div>
-      </div>
-
-      <div class="album-detail-tracklist">
-        <h3>曲目清單 (<span id="detailTrackCount">0</span> 首)</h3>
-        <table class="tracklist-table">
-          <thead>
-            <tr>
-              <th style="width: 45px;">#</th>
-              <th style="width: 38px;"></th>
-              <th>曲目名稱</th>
-              <th style="width: 140px;">格式</th>
-              <th style="width: 80px; text-align: right;">時長</th>
-            </tr>
-          </thead>
-          <tbody id="detailTracklistTbody">
-            <!-- Injected via JS -->
-          </tbody>
-        </table>
-      </div>
-
-      <!-- 專輯元資料與製作資訊 (Album Credits & Metadata) -->
-      <div class="album-metadata-section" id="albumMetadataSection">
-        <div class="section-header" style="margin-bottom: 12px;">
-          <div class="header-with-tag">
-            <h3 style="font-size: 16px;">📀 專輯元資料與製作資訊 Album Credits & Metadata</h3>
-            <span class="metadata-source-badge" id="albumMetaSourceBadge">Audio Metadata</span>
-          </div>
-        </div>
-        <div class="album-meta-grid" id="albumMetaGrid">
-          <!-- Injected via JS -->
-        </div>
-      </div>
-
-      <!-- 同類型推薦專輯 (由歌曲 meta 資料判斷) -->
-      <div class="album-recommendations-section" id="albumRecommendationsSection">
-        <div class="section-header" style="margin-bottom: 12px;">
-          <div class="header-with-tag">
-            <h3 style="font-size: 16px;">✨ 同類型推薦專輯 Recommended Albums</h3>
-            <span class="recommend-reason-badge" id="recommendReasonBadge">依曲風與音樂類型推薦</span>
-          </div>
-          <span class="section-count-badge" id="recommendCountBadge">0 張推薦</span>
-        </div>
-        <p class="section-desc" id="recommendDesc" style="margin-bottom: 16px; font-size: 12px; color: var(--text-muted);">
-          根據此專輯的曲風標籤（<span id="recommendGenreTag" style="color: var(--accent-purple); font-weight: 600;">Genre</span>）與音訊元資料，為您發掘同風格精彩專輯。
-        </p>
-        <div class="album-grid recommend-album-grid" id="albumRecommendationsGrid">
-          <!-- Injected via JS -->
-        </div>
       </div>
     </div>
   </div>

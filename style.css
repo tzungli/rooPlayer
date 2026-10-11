@@ -377,15 +377,14 @@ body {
 /* ----------------- Overview View ----------------- */
 .hero-banner {
   position: relative;
-  border-radius: 16px;
-  background-image: url('hero_hiend_bg.jpg');
-  background-size: cover;
-  background-position: center right;
-  border: 1px solid rgba(139, 92, 246, 0.25);
-  padding: 40px;
-  margin-bottom: 36px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #e0e7ff 0%, #f3e8ff 50%, #fce7f3 100%);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  padding: 14px 22px;
+  margin-bottom: 20px;
   overflow: hidden;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  box-shadow: none !important;
+  transition: background 0.5s ease;
 }
 
 .hero-overlay {
@@ -396,7 +395,7 @@ body {
   bottom: 0;
   width: 100%;
   height: 100%;
-  background: linear-gradient(90deg, rgba(14, 15, 20, 0.88) 0%, rgba(14, 15, 20, 0.72) 48%, rgba(14, 15, 20, 0.38) 100%);
+  background: radial-gradient(circle at 85% 15%, rgba(255, 255, 255, 0.5) 0%, transparent 60%);
   pointer-events: none;
   z-index: 1;
 }
@@ -407,45 +406,52 @@ body {
 }
 
 .hero-tag {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  color: var(--accent-purple);
-  letter-spacing: 2px;
+  color: #6366f1;
+  letter-spacing: 1.5px;
+  display: inline-block;
+  margin-bottom: 1px;
 }
 
 .hero-title {
-  font-size: 32px;
+  font-size: 20px;
   font-weight: 800;
-  margin: 8px 0 10px 0;
-  color: #ffffff;
-  letter-spacing: -0.5px;
+  margin: 1px 0 4px 0;
+  color: #1e1b4b;
+  letter-spacing: -0.3px;
+  line-height: 1.25;
 }
 
 .hero-desc {
-  font-size: 14px;
-  color: var(--text-sub);
-  max-width: 500px;
-  margin-bottom: 20px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  color: #334155;
+  max-width: 650px;
+  margin-bottom: 9px;
+  line-height: 1.35;
 }
 
 .hero-stats {
   display: flex;
-  gap: 12px;
-  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 0;
 }
 
 .stat-pill {
-  background-color: rgba(255, 255, 255, 0.07);
-  padding: 6px 14px;
-  border-radius: 20px;
-  font-size: 12px;
-  color: var(--text-sub);
+  background-color: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-size: 11.5px;
+  color: #334155;
+  font-weight: 500;
 }
 
 .stat-pill span {
   font-weight: 700;
-  color: #fff;
+  color: #0f172a;
 }
 
 #heroHistoryPill {
@@ -453,32 +459,33 @@ body {
 }
 
 #heroHistoryPill:hover {
-  background-color: rgba(255, 255, 255, 0.16);
-  color: #fff;
+  background-color: #ffffff;
+  color: #000;
   transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 [data-theme="light"] #heroHistoryPill:hover {
-  background-color: rgba(0, 0, 0, 0.12);
+  background-color: #ffffff;
   color: #000;
 }
 
 .stat-pill.highlight {
-  background-color: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(0, 0, 0, 0.2);
-  color: #000000 !important;
+  background-color: #ffffff !important;
+  border: 1px solid rgba(99, 102, 241, 0.4) !important;
+  color: #1e1b4b !important;
   font-weight: 700;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.12);
 }
 
 .stat-pill.highlight span {
-  color: #000000 !important;
+  color: #4338ca !important;
   font-weight: 800;
 }
 
 .hero-actions {
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 
 /* Buttons */
@@ -820,6 +827,226 @@ body {
   margin-top: 2px;
 }
 
+/* ----------------- Artist Grid Size Modes ----------------- */
+.artist-grid.artist-size-small {
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)) !important;
+  gap: 14px !important;
+}
+.artist-grid.artist-size-small .artist-card {
+  padding: 8px !important;
+  border-radius: 10px !important;
+}
+.artist-grid.artist-size-small .artist-avatar-wrap {
+  width: 80px !important;
+  height: 80px !important;
+  margin: 0 auto 8px auto !important;
+}
+.artist-grid.artist-size-small .artist-avatar {
+  font-size: 26px !important;
+}
+.artist-grid.artist-size-small .artist-fav-btn {
+  width: 24px !important;
+  height: 24px !important;
+  font-size: 11px !important;
+}
+.artist-grid.artist-size-small .artist-name {
+  font-size: 12px !important;
+  margin-bottom: 2px !important;
+}
+.artist-grid.artist-size-small .artist-sub {
+  font-size: 11px !important;
+}
+
+.artist-grid.artist-size-medium {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)) !important;
+  gap: 24px !important;
+}
+
+.artist-grid.artist-size-large {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important;
+  gap: 28px !important;
+}
+.artist-grid.artist-size-large .artist-card {
+  padding: 16px !important;
+  border-radius: 14px !important;
+}
+.artist-grid.artist-size-large .artist-avatar-wrap {
+  width: 170px !important;
+  height: 170px !important;
+  margin: 0 auto 16px auto !important;
+}
+.artist-grid.artist-size-large .artist-avatar {
+  font-size: 52px !important;
+}
+.artist-grid.artist-size-large .artist-fav-btn {
+  width: 40px !important;
+  height: 40px !important;
+  font-size: 16px !important;
+}
+.artist-grid.artist-size-large .artist-name {
+  font-size: 17px !important;
+  font-weight: 700 !important;
+  margin-bottom: 4px !important;
+}
+.artist-grid.artist-size-large .artist-sub {
+  font-size: 13px !important;
+}
+
+/* ----------------- 藝人生活誌 Artist Spotlight ----------------- */
+.artist-spotlight-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 24px;
+  transition: all 0.25s ease;
+}
+
+.artist-spotlight-card:hover {
+  border-color: rgba(139, 92, 246, 0.35);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+.spotlight-top-wrap {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.spotlight-avatar-col {
+  flex-shrink: 0;
+}
+
+.spotlight-avatar-box {
+  width: 130px;
+  height: 130px;
+  border-radius: 14px;
+  overflow: hidden;
+  position: relative;
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.2), rgba(99, 102, 241, 0.3));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.spotlight-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.spotlight-avatar-placeholder {
+  font-size: 42px;
+  color: rgba(255, 255, 255, 0.7);
+  user-select: none;
+}
+
+.spotlight-info-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.spotlight-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--accent-purple);
+  margin-bottom: 2px;
+}
+
+.spotlight-name {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-main);
+  margin: 0 0 6px 0;
+  cursor: pointer;
+  display: inline-block;
+  transition: color 0.15s ease;
+}
+
+.spotlight-name:hover {
+  color: var(--accent-purple);
+  text-decoration: underline;
+}
+
+.spotlight-genres {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.spotlight-bio-box {
+  margin-bottom: 14px;
+}
+
+.spotlight-bio {
+  font-size: 13.5px;
+  color: var(--text-sub);
+  line-height: 1.68;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 15;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+}
+
+.spotlight-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.spotlight-albums-wrap {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 18px;
+}
+
+.spotlight-albums-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.spotlight-album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 220px));
+  gap: 18px;
+}
+
+/* Light Theme Overrides for Spotlight */
+[data-theme="light"] .artist-spotlight-card {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .spotlight-avatar-box {
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .spotlight-albums-wrap {
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+@media (max-width: 768px) {
+  .spotlight-top-wrap {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  .spotlight-album-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+}
+
 /* ----------------- Tracklist Table ----------------- */
 .tracklist-table-container {
   background-color: var(--bg-card);
@@ -868,63 +1095,46 @@ body {
   font-weight: 600;
   color: var(--text-main);
   line-height: 1.35;
-  margin-bottom: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   word-break: break-word;
 }
 
-.track-stream-links {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+.track-name-span {
+  display: inline;
 }
 
 .track-ext-link {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 1px 7px;
-  border-radius: 4px;
+  justify-content: center;
   text-decoration: none;
-  line-height: 1.5;
   transition: all 0.18s ease;
   cursor: pointer;
   user-select: none;
+  vertical-align: middle;
 }
 
 .track-ext-link.yt {
-  background: rgba(255, 0, 0, 0.12);
-  color: #ff6b6b;
-  border: 1px solid rgba(255, 0, 0, 0.28);
+  background: transparent;
+  color: #ef4444;
+  border: none;
+  padding: 0;
+  border-radius: 4px;
+  opacity: 0.82;
 }
 
 .track-ext-link.yt:hover {
-  background: rgba(255, 0, 0, 0.28);
-  color: #fff;
-  border-color: rgba(255, 0, 0, 0.6);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(255, 0, 0, 0.2);
+  color: #ff0000;
+  opacity: 1;
+  transform: scale(1.18);
+  filter: drop-shadow(0 0 6px rgba(255, 0, 0, 0.45));
 }
 
-.track-ext-link.ytm {
-  background: rgba(234, 67, 53, 0.12);
-  color: #fb7185;
-  border: 1px solid rgba(234, 67, 53, 0.28);
-}
-
-.track-ext-link.ytm:hover {
-  background: rgba(234, 67, 53, 0.28);
-  color: #fff;
-  border-color: rgba(234, 67, 53, 0.6);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(234, 67, 53, 0.2);
-}
-
-.track-ext-link .ext-icon {
-  font-size: 9px;
-  display: inline-block;
+.track-ext-link.yt .yt-svg-icon {
+  display: block;
 }
 
 .format-chip {
@@ -1068,10 +1278,12 @@ body {
   background: rgba(255, 255, 255, 0.2);
 }
 
-/* Album Detail Modal */
+/* Album Detail Page View */
 .album-detail-container {
-  width: 860px;
-  padding: 32px;
+  width: 100%;
+  max-width: 1160px;
+  padding: 0 4px 40px 4px;
+  margin: 0;
 }
 
 .album-detail-header {
@@ -2309,17 +2521,12 @@ body {
 }
 
 [data-theme="light"] .hero-banner {
-  background-image: url('hero_hiend_bg.jpg') !important;
-  background-size: cover !important;
-  background-position: center right !important;
   border-color: rgba(0, 0, 0, 0.08);
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.06);
+  box-shadow: none !important;
 }
 
 [data-theme="light"] .hero-overlay {
-  display: block !important;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.82) 48%, rgba(255, 255, 255, 0.45) 100%) !important;
-  backdrop-filter: blur(1px);
+  display: block;
 }
 
 [data-theme="light"] .stat-pill.highlight {
@@ -3224,6 +3431,48 @@ body {
 .btn-track-fav.active {
   color: #ef4444;
   text-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+}
+
+/* Playback History Table Interactive Elements */
+.btn-history-play {
+  background: rgba(124, 58, 237, 0.15);
+  border: 1px solid rgba(124, 58, 237, 0.35);
+  color: var(--accent-purple);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s ease;
+  padding: 0 0 0 2px;
+}
+
+.btn-history-play:hover {
+  background: var(--accent-purple);
+  color: #fff;
+  border-color: var(--accent-purple);
+  transform: scale(1.15);
+  box-shadow: 0 0 10px rgba(124, 58, 237, 0.5);
+}
+
+.history-artist-link,
+.history-album-link {
+  cursor: pointer;
+  transition: color 0.15s ease, text-decoration 0.15s ease;
+}
+
+.history-artist-link:hover {
+  color: var(--accent-purple) !important;
+  text-decoration: underline;
+}
+
+.history-album-link:hover {
+  color: var(--accent-gold, #f59e0b) !important;
+  text-decoration: underline;
 }
 
 #btnFavAlbumDetail.active {
