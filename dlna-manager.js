@@ -329,6 +329,7 @@ class DlnaManager extends EventEmitter {
       ffmpegArgs.push('-ss', startSec.toString());
     }
     ffmpegArgs.push(
+      '-threads', '2',
       '-i', filePath,
       '-af', `aresample=resampler=soxr:precision=${precision}:cheby=1:osr=${dsdSampleRate}`,
       '-f', 's16le',
@@ -345,52 +346,63 @@ class DlnaManager extends EventEmitter {
     let s1_L = 0, s2_L = 0, y_L = 0;
     let s1_R = 0, s2_R = 0, y_R = 0;
     const INPUT_CHUNK_BYTES = samplesPerBlock * 4; // 131072 bytes per stereo block
-    let pendingBuf = Buffer.alloc(0);
     const blockBuf = Buffer.alloc(blockSize * 2); // 8192 bytes (4096 Left + 4096 Right)
+    const scale = 0.85 / 32768.0;
+
+    // Use pre-allocated accumulator buffer to eliminate Buffer.concat overhead and GC pauses
+    let ringBuf = Buffer.alloc(INPUT_CHUNK_BYTES * 3);
+    let ringLen = 0;
 
     proc.stdout.on('data', chunk => {
-      pendingBuf = Buffer.concat([pendingBuf, chunk]);
+      if (ringLen + chunk.length > ringBuf.length) {
+        const newBuf = Buffer.alloc(Math.max(ringBuf.length * 2, ringLen + chunk.length));
+        ringBuf.copy(newBuf, 0, 0, ringLen);
+        ringBuf = newBuf;
+      }
+      chunk.copy(ringBuf, ringLen);
+      ringLen += chunk.length;
 
-      while (pendingBuf.length >= INPUT_CHUNK_BYTES) {
-        // Process Left channel block (first 4096 bytes)
-        let inOffset = 0;
+      while (ringLen >= INPUT_CHUNK_BYTES) {
+        // Optimized Delta-Sigma modulation loop: direct offset read with single pass & hoist scaling
+        let inOffsetL = 0;
+        let inOffsetR = 2;
+
         for (let b = 0; b < blockSize; b++) {
-          let byteVal = 0;
-          for (let bit = 0; bit < 8; bit++) {
-            const rawL = pendingBuf.readInt16LE(inOffset);
-            inOffset += 4;
-            const x = (rawL * 0.85) / 32768.0;
+          let byteValL = 0;
+          let byteValR = 0;
 
-            const e = x - y_L;
-            s1_L += e;
+          for (let bit = 0; bit < 8; bit++) {
+            // Left Channel
+            const xL = ringBuf.readInt16LE(inOffsetL) * scale;
+            inOffsetL += 4;
+            s1_L += xL - y_L;
             s2_L += s1_L - y_L;
-            y_L = (s2_L >= 0) ? 1.0 : -1.0;
-            const bitVal = (y_L > 0) ? 1 : 0;
-            byteVal |= (bitVal << bit); // LSB first
-          }
-          blockBuf[b] = byteVal;
-        }
+            if (s2_L >= 0) {
+              y_L = 1.0;
+              byteValL |= (1 << bit);
+            } else {
+              y_L = -1.0;
+            }
 
-        // Process Right channel block (second 4096 bytes)
-        inOffset = 2;
-        for (let b = 0; b < blockSize; b++) {
-          let byteVal = 0;
-          for (let bit = 0; bit < 8; bit++) {
-            const rawR = pendingBuf.readInt16LE(inOffset);
-            inOffset += 4;
-            const x = (rawR * 0.85) / 32768.0;
-
-            const e = x - y_R;
-            s1_R += e;
+            // Right Channel
+            const xR = ringBuf.readInt16LE(inOffsetR) * scale;
+            inOffsetR += 4;
+            s1_R += xR - y_R;
             s2_R += s1_R - y_R;
-            y_R = (s2_R >= 0) ? 1.0 : -1.0;
-            const bitVal = (y_R > 0) ? 1 : 0;
-            byteVal |= (bitVal << bit);
+            if (s2_R >= 0) {
+              y_R = 1.0;
+              byteValR |= (1 << bit);
+            } else {
+              y_R = -1.0;
+            }
           }
-          blockBuf[blockSize + b] = byteVal;
+          blockBuf[b] = byteValL;
+          blockBuf[blockSize + b] = byteValR;
         }
 
-        pendingBuf = pendingBuf.slice(INPUT_CHUNK_BYTES);
+        // Shift remaining bytes in ring buffer
+        ringBuf.copy(ringBuf, 0, INPUT_CHUNK_BYTES, ringLen);
+        ringLen -= INPUT_CHUNK_BYTES;
 
         if (!res.writableEnded) {
           res.write(blockBuf);
@@ -443,9 +455,11 @@ class DlnaManager extends EventEmitter {
       ffmpegArgs.push('-ss', startSec.toString());
     }
     ffmpegArgs.push(
+      '-threads', '2',
       '-i', filePath,
       '-af', 'volume=6dB',
       '-c:a', 'flac',
+      '-compression_level', '0',
       '-ar', '88200'
     );
 
@@ -490,7 +504,7 @@ class DlnaManager extends EventEmitter {
   }
 
   // Handle SoX Resampler (libsoxr) on-the-fly audiophile upsampling or 1-bit DSD modulation to 24-bit Hi-Res FLAC
-  handleSoxTranscodeStream(req, res, filePath, startSec = 0, sampleRate = 192000, precision = 28, dsdMode = '', track = null) {
+  handleSoxTranscodeStream(req, res, filePath, startSec = 0, sampleRate = 192000, precision = 24, dsdMode = '', track = null) {
     if (!this.ffmpegPath) {
       res.writeHead(500);
       res.end('FFmpeg not available for SoX Resampling');
@@ -523,9 +537,11 @@ class DlnaManager extends EventEmitter {
       ffmpegArgs.push('-ss', startSec.toString());
     }
     ffmpegArgs.push(
+      '-threads', '2',
       '-i', filePath,
       '-af', afFilter,
       '-c:a', 'flac',
+      '-compression_level', '0',
       '-sample_fmt', 's32',
       '-ar', sampleRate.toString()
     );

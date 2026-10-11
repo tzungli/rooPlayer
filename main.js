@@ -20,6 +20,11 @@ if (fs.existsSync(customBinFfmpeg)) {
 const DlnaManager = require('./dlna-manager');
 let dlnaManager = null;
 
+// Optimize Chromium GPU rendering and process responsiveness for high-resolution audio processing
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('ignore-gpu-blocklist');
+
 // Register custom media scheme for bit-perfect audio streaming from local drive
 protocol.registerSchemesAsPrivileged([
   {
@@ -149,6 +154,8 @@ app.on('window-all-closed', () => {
 let dsdStreamServer = null;
 let dsdStreamPort = 0;
 
+let currentMainStreamProc = null;
+
 function startDsdStreamingServer() {
   if (!ffmpegPath) {
     console.warn('FFmpeg binary not available for DSD decoding');
@@ -162,7 +169,7 @@ function startDsdStreamingServer() {
         const filePath = reqUrl.searchParams.get('file');
         const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
         const sampleRate = parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
-        const precision = parseInt(reqUrl.searchParams.get('precision') || '28', 10);
+        const precision = parseInt(reqUrl.searchParams.get('precision') || '24', 10);
         const dsdMode = reqUrl.searchParams.get('dsd') || '';
 
         if (!filePath || !fs.existsSync(filePath)) {
@@ -181,6 +188,12 @@ function startDsdStreamingServer() {
           return;
         }
 
+        // Kill previous running transcoder instance immediately to avoid CPU congestion
+        if (currentMainStreamProc) {
+          try { currentMainStreamProc.kill(); } catch (e) {}
+          currentMainStreamProc = null;
+        }
+
         const afFilter = dsdMode
           ? `aresample=resampler=soxr:precision=${precision}:cheby=1:dither_method=triangular_hp:osr=${sampleRate}`
           : `aresample=resampler=soxr:precision=${precision}:cheby=1:osr=${sampleRate}`;
@@ -190,9 +203,11 @@ function startDsdStreamingServer() {
           ffmpegArgs.push('-ss', startSec.toString());
         }
         ffmpegArgs.push(
+          '-threads', '2',
           '-i', filePath,
           '-af', afFilter,
           '-c:a', 'flac',
+          '-compression_level', '0',
           '-sample_fmt', 's32',
           '-ar', sampleRate.toString(),
           '-f', 'flac',
@@ -206,6 +221,7 @@ function startDsdStreamingServer() {
         });
 
         const proc = spawn(ffmpegPath, ffmpegArgs, { windowsHide: true });
+        currentMainStreamProc = proc;
         proc.stdout.pipe(res);
         proc.stderr.on('data', () => {});
 
@@ -219,6 +235,9 @@ function startDsdStreamingServer() {
 
         req.on('close', () => {
           try {
+            if (currentMainStreamProc === proc) {
+              currentMainStreamProc = null;
+            }
             proc.kill();
           } catch (e) {}
         });
@@ -250,15 +269,23 @@ function startDsdStreamingServer() {
         return;
       }
 
+      // Kill previous running transcoder instance immediately
+      if (currentMainStreamProc) {
+        try { currentMainStreamProc.kill(); } catch (e) {}
+        currentMainStreamProc = null;
+      }
+
       // Fast seek with -ss before -i, output high-resolution 24-bit 88.2kHz FLAC with 6dB standard DSD gain
       const ffmpegArgs = [];
       if (startSec > 0) {
         ffmpegArgs.push('-ss', startSec.toString());
       }
       ffmpegArgs.push(
+        '-threads', '2',
         '-i', filePath,
         '-af', 'volume=6dB',
         '-c:a', 'flac',
+        '-compression_level', '0',
         '-ar', '88200',
         '-f', 'flac',
         'pipe:1'
@@ -271,6 +298,7 @@ function startDsdStreamingServer() {
       });
 
       const proc = spawn(ffmpegPath, ffmpegArgs, { windowsHide: true });
+      currentMainStreamProc = proc;
       proc.stdout.pipe(res);
       proc.stderr.on('data', () => {});
 
@@ -284,6 +312,9 @@ function startDsdStreamingServer() {
 
       req.on('close', () => {
         try {
+          if (currentMainStreamProc === proc) {
+            currentMainStreamProc = null;
+          }
           proc.kill();
         } catch (e) {}
       });

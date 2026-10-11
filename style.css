@@ -69,7 +69,10 @@ body {
   justify-content: space-between;
   padding: 0 16px;
   -webkit-app-region: drag;
+  user-select: none;
+  -webkit-user-select: none;
   z-index: 1000;
+  contain: paint;
 }
 
 .titlebar-left, .titlebar-right, .titlebar-center {

@@ -46,10 +46,10 @@ const state = {
       return {
         enabled: saved.enabled === true,
         rateMode: saved.rateMode || '4x',
-        precision: saved.precision || 28
+        precision: saved.precision || 24
       };
     } catch (e) {
-      return { enabled: false, rateMode: '4x', precision: 28 };
+      return { enabled: false, rateMode: '4x', precision: 24 };
     }
   })()
 };
@@ -3178,7 +3178,7 @@ function updateSignalPathUI(track = null) {
   if (dspSoxCard) dspSoxCard.classList.toggle('active', !!(state.dsp && state.dsp.enabled));
 
   const curRateMode = (state.dsp && state.dsp.rateMode) || '4x';
-  const curPrecision = (state.dsp && state.dsp.precision) || 28;
+  const curPrecision = (state.dsp && state.dsp.precision) || 24;
 
   // Clear pill active classes
   document.querySelectorAll('#dspRateSelector .dsp-pill, #dspDsdRateSelector .dsp-pill').forEach(p => p.classList.remove('active'));
@@ -4207,6 +4207,8 @@ function onTrackEnded() {
 }
 
 // Native Audio Element Events
+let timeUpdateRaf = null;
+
 nativeAudio.addEventListener('timeupdate', () => {
   if (state.activeAudioZone !== 'local') return;
   const track = state.queue[state.currentTrackIndex];
@@ -4215,36 +4217,49 @@ nativeAudio.addEventListener('timeupdate', () => {
   if (isCurrentDsd) {
     const current = currentDsdOffset + nativeAudio.currentTime;
     const total = track.duration || 300;
-    const percent = Math.min(100, (current / total) * 100);
-    scrubberFill.style.width = `${percent}%`;
-    currentTimeLabel.textContent = formatDuration(current);
-    totalTimeLabel.textContent = formatDuration(total);
-
     if (current >= total && total > 0) {
       onTrackEnded();
+      return;
     }
   } else if (isCurrentSox) {
     const current = currentSoxOffset + nativeAudio.currentTime;
     const total = track.duration || 300;
-    const percent = Math.min(100, (current / total) * 100);
-    scrubberFill.style.width = `${percent}%`;
-    currentTimeLabel.textContent = formatDuration(current);
-    totalTimeLabel.textContent = formatDuration(total);
-
     if (current >= total && total > 0) {
       onTrackEnded();
+      return;
     }
-  } else {
-    if (!nativeAudio.duration) return;
-    const current = nativeAudio.currentTime;
-    const total = nativeAudio.duration;
-    const percent = (current / total) * 100;
-    scrubberFill.style.width = `${percent}%`;
-    currentTimeLabel.textContent = formatDuration(current);
-    totalTimeLabel.textContent = formatDuration(total);
   }
 
-  updateNowPlayingPlaybackProgress();
+  // Throttle DOM updates with requestAnimationFrame so window drag and UI animations stay 60+ FPS
+  if (!timeUpdateRaf) {
+    timeUpdateRaf = requestAnimationFrame(() => {
+      timeUpdateRaf = null;
+      if (isCurrentDsd) {
+        const current = currentDsdOffset + nativeAudio.currentTime;
+        const total = track.duration || 300;
+        const percent = Math.min(100, (current / total) * 100);
+        scrubberFill.style.width = `${percent}%`;
+        currentTimeLabel.textContent = formatDuration(current);
+        totalTimeLabel.textContent = formatDuration(total);
+      } else if (isCurrentSox) {
+        const current = currentSoxOffset + nativeAudio.currentTime;
+        const total = track.duration || 300;
+        const percent = Math.min(100, (current / total) * 100);
+        scrubberFill.style.width = `${percent}%`;
+        currentTimeLabel.textContent = formatDuration(current);
+        totalTimeLabel.textContent = formatDuration(total);
+      } else {
+        if (!nativeAudio.duration) return;
+        const current = nativeAudio.currentTime;
+        const total = nativeAudio.duration;
+        const percent = (current / total) * 100;
+        scrubberFill.style.width = `${percent}%`;
+        currentTimeLabel.textContent = formatDuration(current);
+        totalTimeLabel.textContent = formatDuration(total);
+      }
+      updateNowPlayingPlaybackProgress();
+    });
+  }
 });
 
 nativeAudio.addEventListener('ended', () => {
