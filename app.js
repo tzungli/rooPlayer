@@ -81,6 +81,29 @@ function createSvgCover(title, artist, primaryColor, secondaryColor) {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
+// Convert any cover source (file path, media URL, or file URL) to a valid browser-loadable URL
+function formatCoverSrc(src) {
+  if (!src || typeof src !== 'string') return '';
+  src = src.trim();
+  if (src.startsWith('data:') || src.startsWith('http://') || src.startsWith('https://')) {
+    return src;
+  }
+  if (src.startsWith('file:///')) {
+    return src;
+  }
+  if (src.startsWith('file://')) {
+    const raw = src.replace(/^file:\/\//, '').replace(/\\/g, '/');
+    return raw.startsWith('/') ? 'file://' + raw : 'file:///' + raw;
+  }
+  if (src.startsWith('media://')) {
+    let raw = src.replace(/^media:\/\//i, '').replace(/\\/g, '/');
+    return raw.startsWith('/') ? 'file://' + raw : 'file:///' + raw;
+  }
+  // Local file path like C:\Users\... or /Users/...
+  const clean = src.replace(/\\/g, '/');
+  return clean.startsWith('/') ? 'file://' + clean : 'file:///' + clean;
+}
+
 function escapeXml(unsafe) {
   if (unsafe === null || unsafe === undefined) return '';
   return String(unsafe).replace(/[<>&'"]/g, c => {
@@ -1056,7 +1079,7 @@ function rebuildLibraryCollections() {
         year: t.year,
         date: t.date || null,
         genre: t.genre,
-        cover: t.cover,
+        cover: formatCoverSrc(t.cover),
         isLossless: t.isLossless,
         formatName: t.formatName,
         sampleRate: t.sampleRate,
@@ -1070,7 +1093,7 @@ function rebuildLibraryCollections() {
     }
     const alb = albumMap.get(albumKey);
     alb.tracks.push(t);
-    if (!alb.cover && t.cover) alb.cover = t.cover;
+    if (!alb.cover && t.cover) alb.cover = formatCoverSrc(t.cover);
     if ((!alb.genre || alb.genre === 'Unknown') && t.genre && t.genre !== 'Unknown') alb.genre = t.genre;
     if (!alb.year && t.year) alb.year = t.year;
     if (!alb.date && t.date) alb.date = t.date;
@@ -1113,7 +1136,7 @@ function rebuildLibraryCollections() {
     }
     if (!alb.cover) {
       const childWithCover = alb.tracks.find(tr => tr.cover);
-      if (childWithCover) alb.cover = childWithCover.cover;
+      if (childWithCover) alb.cover = formatCoverSrc(childWithCover.cover);
     }
     if (!alb.genre || alb.genre === 'Unknown') {
       const childWithGenre = alb.tracks.find(tr => tr.genre && tr.genre !== 'Unknown');
@@ -1284,7 +1307,7 @@ function createAlbumCard(album) {
   card.className = 'album-card';
 
   const defaultCover = createSvgCover(album.title, album.artist, '#27272a', '#09090b');
-  const coverSrc = album.cover || defaultCover;
+  const coverSrc = formatCoverSrc(album.cover) || defaultCover;
 
   const firstTrack = (album.tracks && album.tracks[0]) || {};
   const rawPath = firstTrack.filePath || firstTrack.fileName || album.filePath || '';
@@ -1643,7 +1666,7 @@ async function fetchArtistBio(artistName, localAlbums = []) {
     // If no artist image found online, fallback to first local album cover as banner backdrop
     const firstLocalCover = localAlbums.find(a => a.cover)?.cover;
     if (firstLocalCover && heroBackdrop) {
-      heroBackdrop.style.backgroundImage = `url("${firstLocalCover}")`;
+      heroBackdrop.style.backgroundImage = `url("${formatCoverSrc(firstLocalCover)}")`;
       heroBackdrop.style.opacity = '0.65';
     }
   }
@@ -1755,7 +1778,7 @@ async function fetchArtistMissingAlbums(artistName, localAlbums) {
     card.className = 'missing-album-card';
 
     const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
-    const coverSrc = alb.cover || defaultCover;
+    const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
 
     const searchQuery = `${alb.title} ${alb.artist}`;
     // Tidal: direct site search on Google avoids Tidal's 403 Forbidden Cloudflare block on URL queries
@@ -2640,7 +2663,7 @@ function renderAlbumRecommendations(album) {
     card.className = 'recommend-card';
 
     const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
-    const coverSrc = alb.cover || defaultCover;
+    const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
     const firstTrk = (alb.tracks && alb.tracks[0]) || {};
     const albFmt = getAudioFormatFromPath(firstTrk.filePath || firstTrk.fileName || alb.filePath, alb.formatName || 'PCM').toUpperCase();
     const isAlbDsd = albFmt === 'DSF' || albFmt === 'DFF' || albFmt === 'DSD';
@@ -2717,7 +2740,7 @@ function openAlbumDetail(album) {
   state.activeAlbumDetail = album;
   applyDetailCoverSize(state.detailCoverSize || 'medium');
   const defaultDetailCover = createSvgCover(album.title, album.artist, '#27272a', '#09090b');
-  detailCoverImg.src = album.cover || defaultDetailCover;
+  detailCoverImg.src = formatCoverSrc(album.cover) || defaultDetailCover;
   detailCoverImg.onerror = () => {
     detailCoverImg.onerror = null;
     detailCoverImg.src = defaultDetailCover;
@@ -2909,7 +2932,7 @@ function playCurrentTrack() {
   playerTitle.textContent = track.title;
   playerArtist.textContent = `${track.artist} — ${track.album}`;
   const defaultPlayerCover = createSvgCover(track.album, track.artist, '#27272a', '#09090b');
-  playerCoverImg.src = track.cover || (foundAlbum ? foundAlbum.cover : null) || defaultPlayerCover;
+  playerCoverImg.src = formatCoverSrc(track.cover || (foundAlbum ? foundAlbum.cover : null)) || defaultPlayerCover;
   playerCoverImg.onerror = () => {
     playerCoverImg.onerror = null;
     playerCoverImg.src = defaultPlayerCover;
@@ -3860,7 +3883,7 @@ function updateNowPlayingModalContent() {
 
   // 1. Left: Cover Art & Track Info
   const defaultCover = createSvgCover(track.album || track.title, track.artist, '#27272a', '#09090b');
-  const coverSrc = track.cover || (foundAlbum ? foundAlbum.cover : null) || defaultCover;
+  const coverSrc = formatCoverSrc(track.cover || (foundAlbum ? foundAlbum.cover : null)) || defaultCover;
   const coverImg = document.getElementById('nowPlayingCoverImg');
   if (coverImg) {
     coverImg.src = coverSrc;
@@ -5173,7 +5196,7 @@ function renderOnlineStreamingAlbums(albums, query) {
     card.className = 'missing-album-card';
 
     const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
-    const coverSrc = alb.cover || defaultCover;
+    const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
     const albumQuery = `${alb.title} ${alb.artist}`.trim();
 
     card.innerHTML = `

@@ -36,7 +36,12 @@ if (!fs.existsSync(COVER_CACHE_DIR)) {
 
 function toMediaUrl(filePath) {
   if (!filePath) return null;
-  return 'media://' + filePath.replace(/\\/g, '/');
+  try {
+    return pathToFileURL(filePath).href;
+  } catch (e) {
+    const norm = filePath.replace(/\\/g, '/');
+    return norm.startsWith('/') ? 'file://' + norm : 'file:///' + norm;
+  }
 }
 
 function saveCoverPicture(picBuffer, format) {
@@ -149,11 +154,15 @@ app.whenReady().then(() => {
   // Handle local media streaming protocol
   protocol.handle('media', (request) => {
     try {
-      let filePath = decodeURIComponent(request.url.replace(/^media:\/\//, ''));
+      let raw = decodeURIComponent(request.url.replace(/^media:\/\//i, ''));
       if (process.platform === 'win32') {
-        filePath = filePath.replace(/^\//, '');
+        raw = raw.replace(/^\//, '');
+        // Restore drive colon if Chromium stripped it when parsing hostname (e.g. c/Users -> C:/Users)
+        if (/^[a-zA-Z][\/\\]/.test(raw)) {
+          raw = raw[0].toUpperCase() + ':/' + raw.slice(2);
+        }
       }
-      return net.fetch(pathToFileURL(filePath).toString());
+      return net.fetch(pathToFileURL(raw).toString());
     } catch (err) {
       console.error('Error streaming media file:', err);
       return new Response('File not found', { status: 404 });
