@@ -2158,6 +2158,38 @@ let currentAlbumBioState = {
   isShowingOriginal: false
 };
 
+let isAlbumIntroCollapsed = localStorage.getItem('roo_album_intro_collapsed') === 'true';
+
+function updateAlbumIntroCollapseUI() {
+  const sectionEl = document.getElementById('albumIntroSection');
+  const iconEl = document.getElementById('albumIntroCollapseIcon');
+  const textEl = document.getElementById('albumIntroCollapseText');
+  const btnEl = document.getElementById('btnToggleAlbumIntroCollapse');
+  if (!sectionEl) return;
+
+  if (isAlbumIntroCollapsed) {
+    sectionEl.classList.add('collapsed');
+    if (iconEl) iconEl.textContent = '▼';
+    if (textEl) textEl.textContent = '展開';
+    if (btnEl) btnEl.title = '展開專輯介紹';
+  } else {
+    sectionEl.classList.remove('collapsed');
+    if (iconEl) iconEl.textContent = '▲';
+    if (textEl) textEl.textContent = '縮小';
+    if (btnEl) btnEl.title = '縮小專輯介紹';
+  }
+}
+
+function toggleAlbumIntroCollapse(e) {
+  if (e) {
+    e.stopPropagation();
+    e.preventDefault();
+  }
+  isAlbumIntroCollapsed = !isAlbumIntroCollapsed;
+  localStorage.setItem('roo_album_intro_collapsed', isAlbumIntroCollapsed);
+  updateAlbumIntroCollapseUI();
+}
+
 function cleanWikipediaAlbumExtract(rawText, maxChars = 2200) {
   if (!rawText) return '';
   let text = rawText.replace(/\r/g, '');
@@ -2935,6 +2967,7 @@ function openAlbumDetail(album) {
   if (modalContent) modalContent.scrollTop = 0;
 
   // 1. Fetch Album Bio (Online search + Auto Traditional Chinese Translation)
+  updateAlbumIntroCollapseUI();
   fetchAlbumBio(album);
 
   // 2. Render Album Credits & Metadata (Artist, Producer, Release Year, Record Label, etc.)
@@ -5889,6 +5922,16 @@ function setupPlayerControls() {
       showToast(`🔀 隨機播放專輯《${state.activeAlbumDetail.title}》`);
     }
   });
+
+  // Album intro collapse toggle
+  const btnToggleAlbumIntroCollapse = document.getElementById('btnToggleAlbumIntroCollapse');
+  if (btnToggleAlbumIntroCollapse) {
+    btnToggleAlbumIntroCollapse.addEventListener('click', toggleAlbumIntroCollapse);
+  }
+  const albumIntroTitleWrap = document.querySelector('.album-intro-title-wrap');
+  if (albumIntroTitleWrap) {
+    albumIntroTitleWrap.addEventListener('click', toggleAlbumIntroCollapse);
+  }
 
   // Queue Drawer
   btnToggleQueue.addEventListener('click', () => {

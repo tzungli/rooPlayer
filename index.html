@@ -1047,12 +1047,18 @@
 
       <!-- 簡短專輯介紹 (網路上搜尋，轉換成繁體中文) -->
       <div class="album-intro-section" id="albumIntroSection">
-        <div class="album-intro-header">
-          <div class="album-intro-title-wrap">
+        <div class="album-intro-header" id="albumIntroHeader">
+          <div class="album-intro-title-wrap" title="點擊展開或縮小專輯介紹">
             <h3 class="album-intro-title">📖 專輯介紹 Album Review</h3>
             <span class="data-source-badge" id="albumIntroSourceBadge">資料來源：維基百科音樂資料庫</span>
           </div>
-          <button class="btn-toggle-lang" id="btnToggleAlbumBioLang" style="display: none;" title="切換檢視原文或繁體中文翻譯">檢視原文</button>
+          <div class="album-intro-actions">
+            <button class="btn-toggle-lang" id="btnToggleAlbumBioLang" style="display: none;" title="切換檢視原文或繁體中文翻譯">檢視原文</button>
+            <button class="btn-toggle-collapse" id="btnToggleAlbumIntroCollapse" title="縮小或展開專輯介紹">
+              <span class="collapse-icon" id="albumIntroCollapseIcon">▲</span>
+              <span class="collapse-text" id="albumIntroCollapseText">縮小</span>
+            </button>
+          </div>
         </div>
         <div class="album-intro-card" id="albumIntroCard">
           <div class="bio-loading" id="albumBioLoading">

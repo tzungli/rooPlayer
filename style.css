@@ -1153,6 +1153,12 @@ body {
   border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 18px 20px;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.album-intro-section.collapsed {
+  margin-bottom: 16px;
+  padding: 12px 20px;
 }
 
 .album-intro-header {
@@ -1160,12 +1166,62 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+  user-select: none;
+}
+
+.album-intro-section.collapsed .album-intro-header {
+  margin-bottom: 0;
 }
 
 .album-intro-title-wrap {
   display: flex;
   align-items: center;
   gap: 10px;
+  cursor: pointer;
+}
+
+.album-intro-title-wrap:hover .album-intro-title {
+  color: var(--accent-purple);
+}
+
+.album-intro-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-toggle-collapse {
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-sub);
+  padding: 3px 10px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-toggle-collapse:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-main);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+[data-theme="light"] .btn-toggle-collapse {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #4b5563;
+}
+
+[data-theme="light"] .btn-toggle-collapse:hover {
+  background: rgba(0, 0, 0, 0.09);
+  color: #111827;
+  border-color: rgba(0, 0, 0, 0.2);
 }
 
 .album-intro-title {
@@ -1173,6 +1229,15 @@ body {
   font-weight: 700;
   color: var(--text-main);
   margin: 0;
+  transition: color 0.15s ease;
+}
+
+.album-intro-card {
+  transition: opacity 0.25s ease;
+}
+
+.album-intro-section.collapsed .album-intro-card {
+  display: none;
 }
 
 .album-intro-card .bio-text {
