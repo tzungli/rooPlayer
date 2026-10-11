@@ -999,7 +999,7 @@ class DlnaManager extends EventEmitter {
     } else if (isDsdUpsample) {
       if (isTv) {
         // Smart TV compatibility: TV cannot decode DSD bitstreams; provide High-Res 24-bit 96kHz WAV
-        const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, 96000, 24, track);
+        const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, 96000, 24, track, dspOptions ? (dspOptions.filterPhase || 'linear') : 'linear');
         this.currentStreamSession = session;
         activeFilePath = session.filePath;
         streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
@@ -1007,7 +1007,9 @@ class DlnaManager extends EventEmitter {
         protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
       } else {
         // Audiophile streamer / DAC: Progressive on-the-fly DSD modulation in DSF container (Worker + Flow Control)
-        const session = await this.nativeDspStreamer.createDsdSession(streamToken, track.filePath, startSec, dspOptions.dsdMode, track);
+        const dsdOrder = dspOptions ? (dspOptions.dsdOrder || 5) : 5;
+        const filterPhase = dspOptions ? (dspOptions.filterPhase || 'linear') : 'linear';
+        const session = await this.nativeDspStreamer.createDsdSession(streamToken, track.filePath, startSec, dspOptions.dsdMode, track, dsdOrder, filterPhase);
         this.currentStreamSession = session;
         activeFilePath = session.filePath;
         streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.dsf`;
@@ -1025,7 +1027,8 @@ class DlnaManager extends EventEmitter {
     } else if (dspOptions && dspOptions.enabled) {
       // PCM High-Res Progressive Upsampling to 24-bit WAV
       const targetRate = dspOptions.sampleRate || 192000;
-      const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, targetRate, dspOptions.precision || 24, track);
+      const filterPhase = dspOptions.filterPhase || 'linear';
+      const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, targetRate, dspOptions.precision || 24, track, filterPhase);
       this.currentStreamSession = session;
       activeFilePath = session.filePath;
       streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;

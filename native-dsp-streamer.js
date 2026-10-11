@@ -99,6 +99,35 @@ class ProgressiveFileStream extends stream.Readable {
   }
 }
 
+// Filter Phase Interpolation Kernel (Linear, Minimum, Intermediate / Slow Roll-off)
+function interpolateSample(p0, p1, p2, p3, t, phase = 'linear') {
+  if (phase === 'minimum') {
+    const d0 = p1 - p0;
+    const d1 = p2 - p1;
+    const y = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
+    return Math.max(-1.0, Math.min(1.0, y));
+  }
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  const m1 = 0.5 * (p2 - p0);
+  const m2 = 0.5 * (p3 - p1);
+  const yLin = h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2;
+
+  if (phase === 'intermediate') {
+    const d0 = p1 - p0;
+    const d1 = p2 - p1;
+    const yMin = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
+    const y = 0.35 * yLin + 0.65 * yMin;
+    return Math.max(-1.0, Math.min(1.0, y));
+  }
+
+  return Math.max(-1.0, Math.min(1.0, yLin));
+}
+
 class NativeDspStreamer {
   constructor() {
     this.cacheDir = path.join(os.tmpdir(), 'rooplayer_dsp_cache');
@@ -129,7 +158,7 @@ class NativeDspStreamer {
 
   // Create progressive streaming session for PCM -> 1-bit DSD (DSF format)
   // Powered by background worker_threads to prevent any Electron UI / main process lag
-  async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null) {
+  async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear') {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.dsf`);
@@ -153,7 +182,9 @@ class NativeDspStreamer {
         leftBuffer: pcm.left.buffer,
         rightBuffer: pcm.right.buffer,
         sampleRate: pcm.sampleRate,
-        dsdMode
+        dsdMode,
+        dsdOrder,
+        filterPhase
       }
     });
     session.worker = worker;
@@ -199,7 +230,7 @@ class NativeDspStreamer {
   }
 
   // Create progressive streaming session for High-Res PCM Upsampling (WAV format)
-  async createPcmSession(token, filePath, startSec = 0, targetSampleRate = 192000, precision = 24, track = null) {
+  async createPcmSession(token, filePath, startSec = 0, targetSampleRate = 192000, precision = 24, track = null, filterPhase = 'linear') {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.wav`);
@@ -254,7 +285,7 @@ class NativeDspStreamer {
     session.isCancelled = false;
     session.durationSec = inLen / srcRate;
 
-    // 3. Encoder state & chunk writer using Cubic Hermite interpolation
+    // 3. Encoder state & chunk writer using selected filter phase interpolation
     let framesWritten = 0;
     let timer = null;
 
@@ -270,29 +301,18 @@ class NativeDspStreamer {
         const srcPos = i / ratio;
         const idx = srcPos | 0;
         const t = srcPos - idx;
-        const t2 = t * t;
-        const t3 = t2 * t;
-
-        const h00 = 2 * t3 - 3 * t2 + 1;
-        const h10 = t3 - 2 * t2 + t;
-        const h01 = -2 * t3 + 3 * t2;
-        const h11 = t3 - t2;
 
         const p0L = idx > 0 ? inL[idx - 1] : inL[0];
         const p1L = inL[idx];
         const p2L = idx < inLen - 1 ? inL[idx + 1] : p1L;
         const p3L = idx < inLen - 2 ? inL[idx + 2] : p2L;
-        const m1L = 0.5 * (p2L - p0L);
-        const m2L = 0.5 * (p3L - p1L);
-        const sL = Math.max(-1.0, Math.min(1.0, h00 * p1L + h10 * m1L + h01 * p2L + h11 * m2L));
+        const sL = interpolateSample(p0L, p1L, p2L, p3L, t, filterPhase);
 
         const p0R = idx > 0 ? inR[idx - 1] : inR[0];
         const p1R = inR[idx];
         const p2R = idx < inLen - 1 ? inR[idx + 1] : p1R;
         const p3R = idx < inLen - 2 ? inR[idx + 2] : p2R;
-        const m1R = 0.5 * (p2R - p0R);
-        const m2R = 0.5 * (p3R - p1R);
-        const sR = Math.max(-1.0, Math.min(1.0, h00 * p1R + h10 * m1R + h01 * p2R + h11 * m2R));
+        const sR = interpolateSample(p0R, p1R, p2R, p3R, t, filterPhase);
 
         // 24-bit PCM clamp and pack (Little-Endian)
         const iL = Math.max(-8388608, Math.min(8388607, Math.floor(sL * 8388607)));

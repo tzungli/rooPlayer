@@ -1,11 +1,39 @@
 // ==========================================
 // rooPlayer - DSD Modulator Worker Thread
 // Dedicated High-Speed Noise-Shaping 1-bit Delta-Sigma Modulator
+// Supports 2nd, 5th, and 7th Order SDM with Linear/Minimum/Intermediate Phase
 // Completely offloaded from Electron UI / Main Process
 // ==========================================
 
 const fs = require('fs');
 const { parentPort, workerData } = require('worker_threads');
+
+// Filter Phase Interpolation Kernel
+function interpolateSample(p0, p1, p2, p3, t, phase) {
+  if (phase === 'minimum') {
+    const d0 = p1 - p0;
+    const d1 = p2 - p1;
+    return p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
+  }
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  const m1 = 0.5 * (p2 - p0);
+  const m2 = 0.5 * (p3 - p1);
+  const yLin = h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2;
+
+  if (phase === 'intermediate') {
+    const d0 = p1 - p0;
+    const d1 = p2 - p1;
+    const yMin = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
+    return 0.35 * yLin + 0.65 * yMin;
+  }
+
+  return yLin;
+}
 
 function run() {
   const {
@@ -13,12 +41,17 @@ function run() {
     leftBuffer,
     rightBuffer,
     sampleRate,
-    dsdMode
+    dsdMode,
+    dsdOrder,
+    filterPhase
   } = workerData;
 
   const left = new Float32Array(leftBuffer);
   const right = new Float32Array(rightBuffer);
   const inLen = left.length;
+
+  const order = [2, 5, 7].includes(parseInt(dsdOrder, 10)) ? parseInt(dsdOrder, 10) : 5;
+  const phase = ['linear', 'minimum', 'intermediate'].includes(filterPhase) ? filterPhase : 'linear';
 
   const mode = (dsdMode || 'dsd64').toLowerCase();
   let dsdRate = 2822400; // Standard Sony DSD64 (44.1kHz * 64)
@@ -65,8 +98,14 @@ function run() {
 
   fs.writeSync(fd, header, 0, 92, 0);
 
+  // Modulator State Variables
+  // Order 2 states
   let s1_L = 0, s2_L = 0, y_L = 0;
   let s1_R = 0, s2_R = 0, y_R = 0;
+
+  // Order 5 / 7 states
+  let s3_L = 0, s4_L = 0, s5_L = 0, s6_L = 0, s7_L = 0;
+  let s3_R = 0, s4_R = 0, s5_R = 0, s6_R = 0, s7_R = 0;
 
   let blocksWritten = 0;
   let bytesWritten = 92;
@@ -100,29 +139,106 @@ function run() {
           const idx = pos | 0;
           const t = pos - idx;
 
-          let xL = 0, xR = 0;
-          if (idx < inLen - 1) {
-            xL = (left[idx] + t * (left[idx + 1] - left[idx])) * 0.75;
-            xR = (right[idx] + t * (right[idx + 1] - right[idx])) * 0.75;
-          } else if (idx < inLen) {
-            xL = left[idx] * 0.75;
-            xR = right[idx] * 0.75;
+          const p0L = idx > 0 ? left[idx - 1] : left[0];
+          const p1L = idx < inLen ? left[idx] : 0;
+          const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
+          const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
+          const rawL = interpolateSample(p0L, p1L, p2L, p3L, t, phase);
+
+          const p0R = idx > 0 ? right[idx - 1] : right[0];
+          const p1R = idx < inLen ? right[idx] : 0;
+          const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
+          const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
+          const rawR = interpolateSample(p0R, p1R, p2R, p3R, t, phase);
+
+          if (order === 2) {
+            // 2nd-Order Boser-Wooley SDM with Anti-Windup Clamping
+            const uL = rawL * 0.75;
+            s1_L += uL - y_L;
+            if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
+            s2_L += s1_L - 0.5 * y_L;
+            if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
+            y_L = (s2_L >= 0) ? 1.0 : -1.0;
+            if (y_L > 0) byteValL |= (1 << bit);
+
+            const uR = rawR * 0.75;
+            s1_R += uR - y_R;
+            if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
+            s2_R += s1_R - 0.5 * y_R;
+            if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
+            y_R = (s2_R >= 0) ? 1.0 : -1.0;
+            if (y_R > 0) byteValR |= (1 << bit);
+          } else if (order === 5) {
+            // 5th-Order CRFB (Cascade of Resonators with Feedback) with 2 Zero-Optimizing Resonators
+            const uL = rawL * 0.65;
+            s1_L += uL - y_L - 0.0006 * s2_L;
+            if (s1_L > 3.5) s1_L = 3.5; else if (s1_L < -3.5) s1_L = -3.5;
+            s2_L += s1_L;
+            if (s2_L > 3.5) s2_L = 3.5; else if (s2_L < -3.5) s2_L = -3.5;
+            s3_L += s2_L - 0.5 * y_L - 0.0018 * s4_L;
+            if (s3_L > 3.5) s3_L = 3.5; else if (s3_L < -3.5) s3_L = -3.5;
+            s4_L += s3_L;
+            if (s4_L > 3.5) s4_L = 3.5; else if (s4_L < -3.5) s4_L = -3.5;
+            s5_L += s4_L - 0.25 * y_L;
+            if (s5_L > 3.5) s5_L = 3.5; else if (s5_L < -3.5) s5_L = -3.5;
+            const sigma_L = s5_L + 0.1 * s3_L + 0.05 * s1_L;
+            y_L = (sigma_L >= 0) ? 1.0 : -1.0;
+            if (y_L > 0) byteValL |= (1 << bit);
+
+            const uR = rawR * 0.65;
+            s1_R += uR - y_R - 0.0006 * s2_R;
+            if (s1_R > 3.5) s1_R = 3.5; else if (s1_R < -3.5) s1_R = -3.5;
+            s2_R += s1_R;
+            if (s2_R > 3.5) s2_R = 3.5; else if (s2_R < -3.5) s2_R = -3.5;
+            s3_R += s2_R - 0.5 * y_R - 0.0018 * s4_R;
+            if (s3_R > 3.5) s3_R = 3.5; else if (s3_R < -3.5) s3_R = -3.5;
+            s4_R += s3_R;
+            if (s4_R > 3.5) s4_R = 3.5; else if (s4_R < -3.5) s4_R = -3.5;
+            s5_R += s4_R - 0.25 * y_R;
+            if (s5_R > 3.5) s5_R = 3.5; else if (s5_R < -3.5) s5_R = -3.5;
+            const sigma_R = s5_R + 0.1 * s3_R + 0.05 * s1_R;
+            y_R = (sigma_R >= 0) ? 1.0 : -1.0;
+            if (y_R > 0) byteValR |= (1 << bit);
+          } else {
+            // 7th-Order CRFB with 3 Zero-Optimizing Resonators
+            const uL = rawL * 0.55;
+            s1_L += uL - y_L - 0.0003 * s2_L;
+            if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
+            s2_L += s1_L;
+            if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
+            s3_L += s2_L - 0.5 * y_L - 0.0010 * s4_L;
+            if (s3_L > 3.0) s3_L = 3.0; else if (s3_L < -3.0) s3_L = -3.0;
+            s4_L += s3_L;
+            if (s4_L > 3.0) s4_L = 3.0; else if (s4_L < -3.0) s4_L = -3.0;
+            s5_L += s4_L - 0.25 * y_L - 0.0022 * s6_L;
+            if (s5_L > 3.0) s5_L = 3.0; else if (s5_L < -3.0) s5_L = -3.0;
+            s6_L += s5_L;
+            if (s6_L > 3.0) s6_L = 3.0; else if (s6_L < -3.0) s6_L = -3.0;
+            s7_L += s6_L - 0.1 * y_L;
+            if (s7_L > 3.0) s7_L = 3.0; else if (s7_L < -3.0) s7_L = -3.0;
+            const sigma_L = s7_L + 0.08 * s5_L + 0.04 * s3_L + 0.02 * s1_L;
+            y_L = (sigma_L >= 0) ? 1.0 : -1.0;
+            if (y_L > 0) byteValL |= (1 << bit);
+
+            const uR = rawR * 0.55;
+            s1_R += uR - y_R - 0.0003 * s2_R;
+            if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
+            s2_R += s1_R;
+            if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
+            s3_R += s2_R - 0.5 * y_R - 0.0010 * s4_R;
+            if (s3_R > 3.0) s3_R = 3.0; else if (s3_R < -3.0) s3_R = -3.0;
+            s4_R += s3_R;
+            if (s4_R > 3.0) s4_R = 3.0; else if (s4_R < -3.0) s4_R = -3.0;
+            s5_R += s4_R - 0.25 * y_R - 0.0022 * s6_R;
+            if (s5_R > 3.0) s5_R = 3.0; else if (s5_R < -3.0) s5_R = -3.0;
+            s6_R += s5_R;
+            if (s6_R > 3.0) s6_R = 3.0; else if (s6_R < -3.0) s6_R = -3.0;
+            s7_R += s6_R - 0.1 * y_R;
+            if (s7_R > 3.0) s7_R = 3.0; else if (s7_R < -3.0) s7_R = -3.0;
+            const sigma_R = s7_R + 0.08 * s5_R + 0.04 * s3_R + 0.02 * s1_R;
+            y_R = (sigma_R >= 0) ? 1.0 : -1.0;
+            if (y_R > 0) byteValR |= (1 << bit);
           }
-
-          // Audio-Grade 2nd-Order Boser-Wooley Delta-Sigma Modulator with Anti-Windup Clamping
-          s1_L += xL - y_L;
-          if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
-          s2_L += s1_L - 0.5 * y_L;
-          if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
-          y_L = (s2_L >= 0) ? 1.0 : -1.0;
-          if (y_L > 0) byteValL |= (1 << bit);
-
-          s1_R += xR - y_R;
-          if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
-          s2_R += s1_R - 0.5 * y_R;
-          if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
-          y_R = (s2_R >= 0) ? 1.0 : -1.0;
-          if (y_R > 0) byteValR |= (1 << bit);
         }
 
         blockBuf[leftOff + byteIdx] = byteValL;

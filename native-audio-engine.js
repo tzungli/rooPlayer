@@ -17,6 +17,35 @@ const fs = require('fs');
 const path = require('path');
 const { FLACDecoder } = require('@wasm-audio-decoders/flac');
 
+// Filter Phase Interpolation Kernel (Linear, Minimum, Intermediate / Slow Roll-off)
+function interpolateSample(p0, p1, p2, p3, t, phase = 'linear') {
+  if (phase === 'minimum') {
+    const d0 = p1 - p0;
+    const d1 = p2 - p1;
+    const y = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
+    return Math.max(-1.0, Math.min(1.0, y));
+  }
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  const m1 = 0.5 * (p2 - p0);
+  const m2 = 0.5 * (p3 - p1);
+  const yLin = h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2;
+
+  if (phase === 'intermediate') {
+    const d0 = p1 - p0;
+    const d1 = p2 - p1;
+    const yMin = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
+    const y = 0.35 * yLin + 0.65 * yMin;
+    return Math.max(-1.0, Math.min(1.0, y));
+  }
+
+  return Math.max(-1.0, Math.min(1.0, yLin));
+}
+
 class NativeAudioEngine {
   constructor() {
     this.name = 'rooPlayer Native Audiophile Engine';
@@ -284,9 +313,9 @@ class NativeAudioEngine {
   }
 
   // ----------------------------------------------------
-  // 5. 64-bit 浮點多相三次 Hermite 高音質升頻器 (Upsampler)
+  // 5. 64-bit 浮點多相高階超取樣升頻器 (支援線性相位、最小相位、混和緩衰減)
   // ----------------------------------------------------
-  upsampleHermite(left, right, srcRate, dstRate) {
+  upsampleHermite(left, right, srcRate, dstRate, filterPhase = 'linear') {
     if (srcRate === dstRate) {
       return { outL: left, outR: right, dstRate };
     }
@@ -307,13 +336,8 @@ class NativeAudioEngine {
       const idx2 = Math.min(inLen - 1, idx + 1);
       const idx3 = Math.min(inLen - 1, idx + 2);
 
-      // Left Channel Cubic Hermite Interpolation
-      const y0_L = left[idx0], y1_L = left[idx1], y2_L = left[idx2], y3_L = left[idx3];
-      outL[i] = (((0.5 * (y3_L - y0_L) + 1.5 * (y1_L - y2_L)) * t + (y0_L - 2.5 * y1_L + 2.0 * y2_L - 0.5 * y3_L)) * t + 0.5 * (y2_L - y0_L)) * t + y1_L;
-
-      // Right Channel Cubic Hermite Interpolation
-      const y0_R = right[idx0], y1_R = right[idx1], y2_R = right[idx2], y3_R = right[idx3];
-      outR[i] = (((0.5 * (y3_R - y0_R) + 1.5 * (y1_R - y2_R)) * t + (y0_R - 2.5 * y1_R + 2.0 * y2_R - 0.5 * y3_R)) * t + 0.5 * (y2_R - y0_R)) * t + y1_R;
+      outL[i] = interpolateSample(left[idx0], left[idx1], left[idx2], left[idx3], t, filterPhase);
+      outR[i] = interpolateSample(right[idx0], right[idx1], right[idx2], right[idx3], t, filterPhase);
     }
 
     return { outL, outR, dstRate };
@@ -361,8 +385,11 @@ class NativeAudioEngine {
   // ----------------------------------------------------
   // 7. 高頻噪聲整形 1-bit Delta-Sigma Modulator (PCM ➔ DSD DSF)
   // ----------------------------------------------------
-  encodeDsdDsf(left, right, srcRate, dsdMode = 'dsd64', maxDurationSec = 300) {
+  encodeDsdDsf(left, right, srcRate, dsdMode = 'dsd64', maxDurationSec = 300, dsdOrder = 5, filterPhase = 'linear') {
     const mode = (dsdMode || 'dsd64').toLowerCase();
+    const order = [2, 5, 7].includes(parseInt(dsdOrder, 10)) ? parseInt(dsdOrder, 10) : 5;
+    const phase = ['linear', 'minimum', 'intermediate'].includes(filterPhase) ? filterPhase : 'linear';
+
     let dsdRate = 2822400; // Standard Sony DSD64 (44.1kHz * 64)
     if (mode === 'dsd128') dsdRate = 5644800; // Standard DSD128 (44.1kHz * 128)
     else if (mode === 'dsd256') dsdRate = 11289600; // Standard DSD256 (44.1kHz * 256)
@@ -371,6 +398,7 @@ class NativeAudioEngine {
     const maxFrames = Math.floor(maxDurationSec * srcRate);
     const inLen = Math.min(left.length, maxFrames);
     const ratio = dsdRate / srcRate;
+    const invRatio = 1.0 / ratio;
     const outBits = Math.floor(inLen * ratio);
 
     const blockSize = 4096; // 4096 bytes = 32768 1-bit samples per channel block
@@ -407,9 +435,11 @@ class NativeAudioEngine {
     buf.write('data', off); off += 4;
     buf.writeBigUInt64LE(BigInt(12 + totalDataBytes), off); off += 8;
 
-    // Audio-Grade 2nd-Order Boser-Wooley Delta-Sigma Modulator with Anti-Windup Clamping
+    // Modulator States
     let s1_L = 0, s2_L = 0, y_L = 0;
     let s1_R = 0, s2_R = 0, y_R = 0;
+    let s3_L = 0, s4_L = 0, s5_L = 0, s6_L = 0, s7_L = 0;
+    let s3_R = 0, s4_R = 0, s5_R = 0, s6_R = 0, s7_R = 0;
 
     for (let b = 0; b < totalBlocks; b++) {
       const leftBlockOffset = 92 + b * 2 * blockSize;
@@ -419,37 +449,111 @@ class NativeAudioEngine {
       for (let byteIdx = 0; byteIdx < blockSize; byteIdx++) {
         let byteValL = 0;
         let byteValR = 0;
+        const baseSample = startSampleIdx + (byteIdx << 3);
 
         for (let bit = 0; bit < 8; bit++) {
-          const outIdx = startSampleIdx + byteIdx * 8 + bit;
-          const pos = outIdx / ratio;
+          const outIdx = baseSample + bit;
+          const pos = outIdx * invRatio;
           const idx = pos | 0;
           const t = pos - idx;
 
-          let xL = 0, xR = 0;
-          if (idx < inLen - 1) {
-            xL = (left[idx] + t * (left[idx + 1] - left[idx])) * 0.75;
-            xR = (right[idx] + t * (right[idx + 1] - right[idx])) * 0.75;
-          } else if (idx < inLen) {
-            xL = left[idx] * 0.75;
-            xR = right[idx] * 0.75;
+          const p0L = idx > 0 ? left[idx - 1] : left[0];
+          const p1L = idx < inLen ? left[idx] : 0;
+          const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
+          const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
+          const rawL = interpolateSample(p0L, p1L, p2L, p3L, t, phase);
+
+          const p0R = idx > 0 ? right[idx - 1] : right[0];
+          const p1R = idx < inLen ? right[idx] : 0;
+          const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
+          const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
+          const rawR = interpolateSample(p0R, p1R, p2R, p3R, t, phase);
+
+          if (order === 2) {
+            const uL = rawL * 0.75;
+            s1_L += uL - y_L;
+            if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
+            s2_L += s1_L - 0.5 * y_L;
+            if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
+            y_L = (s2_L >= 0) ? 1.0 : -1.0;
+            if (y_L > 0) byteValL |= (1 << bit);
+
+            const uR = rawR * 0.75;
+            s1_R += uR - y_R;
+            if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
+            s2_R += s1_R - 0.5 * y_R;
+            if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
+            y_R = (s2_R >= 0) ? 1.0 : -1.0;
+            if (y_R > 0) byteValR |= (1 << bit);
+          } else if (order === 5) {
+            const uL = rawL * 0.65;
+            s1_L += uL - y_L - 0.0006 * s2_L;
+            if (s1_L > 3.5) s1_L = 3.5; else if (s1_L < -3.5) s1_L = -3.5;
+            s2_L += s1_L;
+            if (s2_L > 3.5) s2_L = 3.5; else if (s2_L < -3.5) s2_L = -3.5;
+            s3_L += s2_L - 0.5 * y_L - 0.0018 * s4_L;
+            if (s3_L > 3.5) s3_L = 3.5; else if (s3_L < -3.5) s3_L = -3.5;
+            s4_L += s3_L;
+            if (s4_L > 3.5) s4_L = 3.5; else if (s4_L < -3.5) s4_L = -3.5;
+            s5_L += s4_L - 0.25 * y_L;
+            if (s5_L > 3.5) s5_L = 3.5; else if (s5_L < -3.5) s5_L = -3.5;
+            const sigma_L = s5_L + 0.1 * s3_L + 0.05 * s1_L;
+            y_L = (sigma_L >= 0) ? 1.0 : -1.0;
+            if (y_L > 0) byteValL |= (1 << bit);
+
+            const uR = rawR * 0.65;
+            s1_R += uR - y_R - 0.0006 * s2_R;
+            if (s1_R > 3.5) s1_R = 3.5; else if (s1_R < -3.5) s1_R = -3.5;
+            s2_R += s1_R;
+            if (s2_R > 3.5) s2_R = 3.5; else if (s2_R < -3.5) s2_R = -3.5;
+            s3_R += s2_R - 0.5 * y_R - 0.0018 * s4_R;
+            if (s3_R > 3.5) s3_R = 3.5; else if (s3_R < -3.5) s3_R = -3.5;
+            s4_R += s3_R;
+            if (s4_R > 3.5) s4_R = 3.5; else if (s4_R < -3.5) s4_R = -3.5;
+            s5_R += s4_R - 0.25 * y_R;
+            if (s5_R > 3.5) s5_R = 3.5; else if (s5_R < -3.5) s5_R = -3.5;
+            const sigma_R = s5_R + 0.1 * s3_R + 0.05 * s1_R;
+            y_R = (sigma_R >= 0) ? 1.0 : -1.0;
+            if (y_R > 0) byteValR |= (1 << bit);
+          } else {
+            const uL = rawL * 0.55;
+            s1_L += uL - y_L - 0.0003 * s2_L;
+            if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
+            s2_L += s1_L;
+            if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
+            s3_L += s2_L - 0.5 * y_L - 0.0010 * s4_L;
+            if (s3_L > 3.0) s3_L = 3.0; else if (s3_L < -3.0) s3_L = -3.0;
+            s4_L += s3_L;
+            if (s4_L > 3.0) s4_L = 3.0; else if (s4_L < -3.0) s4_L = -3.0;
+            s5_L += s4_L - 0.25 * y_L - 0.0022 * s6_L;
+            if (s5_L > 3.0) s5_L = 3.0; else if (s5_L < -3.0) s5_L = -3.0;
+            s6_L += s5_L;
+            if (s6_L > 3.0) s6_L = 3.0; else if (s6_L < -3.0) s6_L = -3.0;
+            s7_L += s6_L - 0.1 * y_L;
+            if (s7_L > 3.0) s7_L = 3.0; else if (s7_L < -3.0) s7_L = -3.0;
+            const sigma_L = s7_L + 0.08 * s5_L + 0.04 * s3_L + 0.02 * s1_L;
+            y_L = (sigma_L >= 0) ? 1.0 : -1.0;
+            if (y_L > 0) byteValL |= (1 << bit);
+
+            const uR = rawR * 0.55;
+            s1_R += uR - y_R - 0.0003 * s2_R;
+            if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
+            s2_R += s1_R;
+            if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
+            s3_R += s2_R - 0.5 * y_R - 0.0010 * s4_R;
+            if (s3_R > 3.0) s3_R = 3.0; else if (s3_R < -3.0) s3_R = -3.0;
+            s4_R += s3_R;
+            if (s4_R > 3.0) s4_R = 3.0; else if (s4_R < -3.0) s4_R = -3.0;
+            s5_R += s4_R - 0.25 * y_R - 0.0022 * s6_R;
+            if (s5_R > 3.0) s5_R = 3.0; else if (s5_R < -3.0) s5_R = -3.0;
+            s6_R += s5_R;
+            if (s6_R > 3.0) s6_R = 3.0; else if (s6_R < -3.0) s6_R = -3.0;
+            s7_R += s6_R - 0.1 * y_R;
+            if (s7_R > 3.0) s7_R = 3.0; else if (s7_R < -3.0) s7_R = -3.0;
+            const sigma_R = s7_R + 0.08 * s5_R + 0.04 * s3_R + 0.02 * s1_R;
+            y_R = (sigma_R >= 0) ? 1.0 : -1.0;
+            if (y_R > 0) byteValR |= (1 << bit);
           }
-
-          // Left channel 2nd-order SDM
-          s1_L += xL - y_L;
-          if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
-          s2_L += s1_L - 0.5 * y_L;
-          if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
-          y_L = (s2_L >= 0) ? 1.0 : -1.0;
-          if (y_L > 0) byteValL |= (1 << bit);
-
-          // Right channel 2nd-order SDM
-          s1_R += xR - y_R;
-          if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
-          s2_R += s1_R - 0.5 * y_R;
-          if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
-          y_R = (s2_R >= 0) ? 1.0 : -1.0;
-          if (y_R > 0) byteValR |= (1 << bit);
         }
 
         buf[leftBlockOffset + byteIdx] = byteValL;

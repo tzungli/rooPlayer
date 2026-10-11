@@ -246,6 +246,8 @@ function startDsdStreamingServer() {
         const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
         const sampleRate = parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
         const dsdMode = reqUrl.searchParams.get('dsd') || '';
+        const dsdOrder = parseInt(reqUrl.searchParams.get('order') || '5', 10);
+        const filterPhase = reqUrl.searchParams.get('phase') || 'linear';
 
         if (!filePath || !fs.existsSync(filePath)) {
           res.writeHead(404);
@@ -276,15 +278,15 @@ function startDsdStreamingServer() {
 
           if (dsdMode && !isLocal) {
             // Native DSD Modulation: Noise-Shaped Delta-Sigma Modulator (for DLNA / DSD DACs)
-            outBuf = nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode, 300);
+            outBuf = nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode, 300, dsdOrder, filterPhase);
             res.writeHead(200, {
               'Content-Type': 'audio/x-dsf',
               'Content-Length': outBuf.length,
               'Access-Control-Allow-Origin': '*'
             });
           } else {
-            // Native Cubic Hermite Upsampling to Target Sample Rate (WAV format fully supported by Chromium and DACs)
-            const up = nativeAudioEngine.upsampleHermite(pcm.left, pcm.right, pcm.sampleRate, sampleRate);
+            // Native High-Precision Upsampling with selected filter phase (WAV format fully supported by Chromium and DACs)
+            const up = nativeAudioEngine.upsampleHermite(pcm.left, pcm.right, pcm.sampleRate, sampleRate, filterPhase);
             outBuf = nativeAudioEngine.encodeWav24(up.outL, up.outR, sampleRate);
             res.writeHead(200, {
               'Content-Type': 'audio/wav',
@@ -389,7 +391,7 @@ ipcMain.handle('audio:getDsdStreamUrl', (event, filePath, startSec = 0) => {
 });
 
 // SoX Resampler Stream URL helper IPC
-ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, precision = 28, dsdMode = '') => {
+ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, precision = 28, dsdMode = '', dsdOrder = 5, filterPhase = 'linear') => {
   if (!dsdStreamPort) return '';
   const params = new URLSearchParams();
   params.set('file', filePath);
@@ -397,6 +399,8 @@ ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRa
   params.set('rate', sampleRate.toString());
   params.set('precision', precision.toString());
   if (dsdMode) params.set('dsd', dsdMode);
+  params.set('order', (dsdOrder || 5).toString());
+  params.set('phase', filterPhase || 'linear');
   params.set('local', '1'); // Local Electron Chromium playback needs decoded PCM WAV
   return `http://127.0.0.1:${dsdStreamPort}/sox-stream?${params.toString()}`;
 });

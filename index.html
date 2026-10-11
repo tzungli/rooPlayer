@@ -1451,6 +1451,32 @@
                 </div>
               </div>
 
+              <!-- DSD Modulator Order Selection -->
+              <div class="dsp-option-group" id="dspOrderGroup">
+                <div class="dsp-option-label">
+                  <span>調變器階數 (Modulator Order)</span>
+                  <span class="dsp-hint-badge dsd-badge-color" id="dspActiveOrderHint">5 階 (CRFB 發燒推薦)</span>
+                </div>
+                <div class="dsp-pill-selector" id="dspOrderSelector">
+                  <button class="dsp-pill pill-dsd" data-order="2" title="2 階 Boser-Wooley 經典調變 (溫潤厚實，類比黑膠感)">2 階 (經典溫潤)</button>
+                  <button class="dsp-pill pill-dsd active" data-order="5" title="5 階 CRFB 雙重諧振零點調變 (發燒高動態，噪聲外推至 100kHz)">5 階 (CRFB 發燒推薦)</button>
+                  <button class="dsp-pill pill-dsd" data-order="7" title="7 階 CRFB 三重諧振零點調變 (極致微動態解析，極寬音場)">7 階 (極致微動態)</button>
+                </div>
+              </div>
+
+              <!-- Filter Phase Selection -->
+              <div class="dsp-option-group" id="dspPhaseGroup">
+                <div class="dsp-option-label">
+                  <span>濾波器相位 (Filter Phase)</span>
+                  <span class="dsp-hint-badge" id="dspActivePhaseHint">線性相位 (零相位失真)</span>
+                </div>
+                <div class="dsp-pill-selector" id="dspPhaseSelector">
+                  <button class="dsp-pill active" data-phase="linear" title="線性相位 (Linear Phase)：零相位失真，對稱脈衝響應，定位精準">線性相位 (零相位失真)</button>
+                  <button class="dsp-pill" data-phase="minimum" title="最小相位 (Minimum Phase)：零預響鈴 (No Pre-ringing)，打擊瞬態凌厲爆發">最小相位 (零預響鈴)</button>
+                  <button class="dsp-pill" data-phase="intermediate" title="混和 / 緩衰減 (Intermediate Phase)：極低預響鈴與自然高頻緩衰，溫潤類比聽感">混和 / 緩衰減 (溫潤類比)</button>
+                </div>
+              </div>
+
               <!-- Filter Precision Selection -->
               <div class="dsp-option-group">
                 <div class="dsp-option-label">
@@ -1468,8 +1494,8 @@
               <div class="dsp-info-footer">
                 <span class="dsp-info-tag">✓ Chebyshev 等波紋通帶</span>
                 <span class="dsp-info-tag">✓ 1-bit Delta-Sigma 超高頻調變</span>
-                <span class="dsp-info-tag">✓ 5th/7th-Order 噪聲整形</span>
-                <span class="dsp-info-tag">✓ 零相位失真還原</span>
+                <span class="dsp-info-tag">✓ 2 / 5 / 7 階 CRFB 諧振噪聲整形</span>
+                <span class="dsp-info-tag">✓ 線性 / 最小 / 混和相位濾波</span>
               </div>
             </div>
           </div>
