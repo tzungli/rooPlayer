@@ -7,7 +7,93 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const stream = require('stream');
+const EventEmitter = require('events');
+const { Worker } = require('worker_threads');
 const nativeAudioEngine = require('./native-audio-engine');
+
+// Progressive Streaming Reader with Backpressure Flow Control
+// Prevents downstream DLNA/UPnP renderers from reading unwritten / zero-padded blocks
+class ProgressiveFileStream extends stream.Readable {
+  constructor(filePath, start, end, session) {
+    super({ highWaterMark: 64 * 1024 });
+    this.filePath = filePath;
+    this.currentPos = start;
+    this.endPos = end;
+    this.session = session;
+    this.fd = fs.openSync(filePath, 'r');
+    this._isClosed = false;
+
+    this._onProgress = () => {
+      this._tryRead();
+    };
+    if (this.session) {
+      this.session.on('progress', this._onProgress);
+      this.session.on('complete', this._onProgress);
+    }
+  }
+
+  _destroy(err, callback) {
+    this._cleanup();
+    callback(err);
+  }
+
+  _cleanup() {
+    if (this._isClosed) return;
+    this._isClosed = true;
+    if (this.session) {
+      this.session.removeListener('progress', this._onProgress);
+      this.session.removeListener('complete', this._onProgress);
+    }
+    try { fs.closeSync(this.fd); } catch (e) {}
+  }
+
+  _read(size) {
+    this._tryRead(size);
+  }
+
+  _tryRead(size = 64 * 1024) {
+    if (this._isClosed) return;
+    if (this.currentPos > this.endPos) {
+      this.push(null);
+      this._cleanup();
+      return;
+    }
+
+    const availableEnd = this.session ? Math.min(this.endPos + 1, this.session.bytesWritten) : (this.endPos + 1);
+    const available = availableEnd - this.currentPos;
+
+    if (available <= 0) {
+      if (this.session && this.session.isCompleted) {
+        this.push(null);
+        this._cleanup();
+      }
+      // Upstream writer hasn't generated this block yet; wait for progress notification
+      return;
+    }
+
+    const readBytes = Math.min(size, available);
+    const buf = Buffer.allocUnsafe(readBytes);
+    try {
+      const bytesRead = fs.readSync(this.fd, buf, 0, readBytes, this.currentPos);
+      if (bytesRead <= 0) {
+        if (this.session && this.session.isCompleted) {
+          this.push(null);
+          this._cleanup();
+        }
+        return;
+      }
+      this.currentPos += bytesRead;
+      this.push(buf.subarray(0, bytesRead));
+      if (this.currentPos > this.endPos) {
+        this.push(null);
+        this._cleanup();
+      }
+    } catch (err) {
+      this.destroy(err);
+    }
+  }
+}
 
 class NativeDspStreamer {
   constructor() {
@@ -38,6 +124,7 @@ class NativeDspStreamer {
   }
 
   // Create progressive streaming session for PCM -> 1-bit DSD (DSF format)
+  // Powered by background worker_threads to prevent any Electron UI / main process lag
   async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null) {
     this.cancelSession(token);
 
@@ -45,147 +132,62 @@ class NativeDspStreamer {
     const pcm = await nativeAudioEngine.readPcmSamples(filePath, startSec);
     if (!pcm) throw new Error('Native PCM read failed for DSD modulation');
 
-    const srcRate = pcm.sampleRate;
-    const is48k = (srcRate % 48000 === 0);
-    let dsdRate = is48k ? 3072000 : 2822400; // dsd64
-    if (dsdMode === 'dsd128') dsdRate = is48k ? 6144000 : 5644800;
-    else if (dsdMode === 'dsd256') dsdRate = is48k ? 12288000 : 11289600;
+    const session = new EventEmitter();
+    session.token = token;
+    session.filePath = tmpFile;
+    session.mimeType = 'audio/x-dsf';
+    session.bytesWritten = 92;
+    session.isCompleted = false;
+    session.isCancelled = false;
+    session.totalFileBytes = 0;
+    session.durationSec = pcm.left.length / pcm.sampleRate;
 
-    const inLen = pcm.left.length;
-    const ratio = dsdRate / srcRate;
-    const outBits = Math.floor(inLen * ratio);
+    const workerPath = path.join(__dirname, 'dsd-modulator-worker.js');
+    const worker = new Worker(workerPath, {
+      workerData: {
+        tmpFile,
+        leftBuffer: pcm.left.buffer,
+        rightBuffer: pcm.right.buffer,
+        sampleRate: pcm.sampleRate,
+        dsdMode
+      }
+    });
+    session.worker = worker;
 
-    const blockSize = 4096;
-    const samplesPerBlock = blockSize * 8; // 32768
-    const totalBlocks = Math.ceil(outBits / samplesPerBlock);
-    const totalSamplesPerChannel = totalBlocks * samplesPerBlock;
-    const totalDataBytes = totalBlocks * 2 * blockSize;
-    const totalFileBytes = 92 + totalDataBytes;
-
-    // 1. Instant pre-allocation on disk with exact target size
-    const fd = fs.openSync(tmpFile, 'w+');
-    fs.ftruncateSync(fd, totalFileBytes);
-
-    // 2. Write 92 bytes DSF Header
-    const header = Buffer.alloc(92);
-    let off = 0;
-    header.write('DSD ', off); off += 4;
-    header.writeBigUInt64LE(28n, off); off += 8;
-    header.writeBigUInt64LE(BigInt(totalFileBytes), off); off += 8;
-    header.writeBigUInt64LE(0n, off); off += 8;
-
-    header.write('fmt ', off); off += 4;
-    header.writeBigUInt64LE(52n, off); off += 8;
-    header.writeUInt32LE(1, off); off += 4; // version
-    header.writeUInt32LE(0, off); off += 4; // format DSD raw
-    header.writeUInt32LE(2, off); off += 4; // stereo
-    header.writeUInt32LE(2, off); off += 4; // 2 channels
-    header.writeUInt32LE(dsdRate, off); off += 4;
-    header.writeUInt32LE(1, off); off += 4; // 1 bit
-    header.writeBigUInt64LE(BigInt(totalSamplesPerChannel), off); off += 8;
-    header.writeUInt32LE(blockSize, off); off += 4;
-    header.writeUInt32LE(0, off); off += 4;
-
-    header.write('data', off); off += 4;
-    header.writeBigUInt64LE(BigInt(12 + totalDataBytes), off); off += 8;
-
-    fs.writeSync(fd, header, 0, 92, 0);
-
-    // 3. Encoder state & chunk writer
-    let a1_L = 0, a2_L = 0, a3_L = 0, y_L = 0;
-    let a1_R = 0, a2_R = 0, a3_R = 0, y_R = 0;
-    let blocksWritten = 0;
-    let isCancelled = false;
-    let timer = null;
-
-    const writeBlockChunk = (count) => {
-      if (isCancelled || blocksWritten >= totalBlocks) return blocksWritten;
-      const startBlock = blocksWritten;
-      const endBlock = Math.min(totalBlocks, startBlock + count);
-      const chunkBytes = (endBlock - startBlock) * 2 * blockSize;
-      const blockBuf = Buffer.alloc(chunkBytes);
-
-      for (let b = startBlock; b < endBlock; b++) {
-        const bufOffset = (b - startBlock) * 2 * blockSize;
-        const leftOff = bufOffset;
-        const rightOff = bufOffset + blockSize;
-        const startSampleIdx = b * samplesPerBlock;
-
-        for (let byteIdx = 0; byteIdx < blockSize; byteIdx++) {
-          let byteValL = 0;
-          let byteValR = 0;
-          for (let bit = 0; bit < 8; bit++) {
-            const outIdx = startSampleIdx + byteIdx * 8 + bit;
-            const pos = outIdx / ratio;
-            const idx = pos | 0;
-            const t = pos - idx;
-
-            let xL = 0, xR = 0;
-            if (idx < inLen - 1) {
-              xL = pcm.left[idx] + t * (pcm.left[idx + 1] - pcm.left[idx]);
-              xR = pcm.right[idx] + t * (pcm.right[idx + 1] - pcm.right[idx]);
-            } else if (idx < inLen) {
-              xL = pcm.left[idx];
-              xR = pcm.right[idx];
-            }
-
-            const diffL = (xL * 0.85) - y_L;
-            a1_L += diffL;
-            a2_L += a1_L - 0.05 * y_L;
-            a3_L += a2_L;
-            y_L = (a3_L >= 0) ? 1.0 : -1.0;
-            if (y_L > 0) byteValL |= (1 << bit);
-
-            const diffR = (xR * 0.85) - y_R;
-            a1_R += diffR;
-            a2_R += a1_R - 0.05 * y_R;
-            a3_R += a2_R;
-            y_R = (a3_R >= 0) ? 1.0 : -1.0;
-            if (y_R > 0) byteValR |= (1 << bit);
-          }
-          blockBuf[leftOff + byteIdx] = byteValL;
-          blockBuf[rightOff + byteIdx] = byteValR;
+    await new Promise((resolve, reject) => {
+      let isInit = false;
+      worker.on('message', (msg) => {
+        if (msg.type === 'initial') {
+          session.totalFileBytes = msg.totalFileBytes;
+          session.bytesWritten = msg.bytesWritten;
+          isInit = true;
+          resolve();
+        } else if (msg.type === 'progress') {
+          session.bytesWritten = msg.bytesWritten;
+          session.emit('progress', msg.bytesWritten);
+        } else if (msg.type === 'complete') {
+          session.isCompleted = true;
+          session.bytesWritten = msg.bytesWritten;
+          session.emit('complete');
         }
-      }
+      });
+      worker.on('error', (err) => {
+        console.error('[DsdWorker] error:', err);
+        if (!isInit) reject(err);
+      });
+      worker.on('exit', (code) => {
+        if (!isInit && code !== 0) reject(new Error(`DSD worker exited with code ${code}`));
+      });
+    });
 
-      const fileOffset = 92 + startBlock * 2 * blockSize;
-      fs.writeSync(fd, blockBuf, 0, blockBuf.length, fileOffset);
-      blocksWritten = endBlock;
-      return blocksWritten;
-    };
-
-    // 4. Generate initial 3 seconds of audio buffer so player can begin immediately (< 350ms)
-    const initialBlocks = Math.min(totalBlocks, Math.ceil(3 * dsdRate / samplesPerBlock));
-    writeBlockChunk(initialBlocks);
-
-    // 5. Background progressive generator: writes 250 blocks (~2.9s of audio) every 30ms
-    // This yields control to the event loop so Electron UI remains 60fps and HTTP requests are instant
-    timer = setInterval(() => {
-      if (isCancelled) {
-        clearInterval(timer);
-        return;
+    session.cancel = () => {
+      session.isCancelled = true;
+      if (session.worker) {
+        try { session.worker.terminate(); } catch (e) {}
+        session.worker = null;
       }
-      if (blocksWritten < totalBlocks) {
-        writeBlockChunk(250);
-      } else {
-        clearInterval(timer);
-        timer = null;
-      }
-    }, 30);
-
-    const session = {
-      token,
-      filePath: tmpFile,
-      mimeType: 'audio/x-dsf',
-      totalFileBytes,
-      durationSec: inLen / srcRate,
-      cancel: () => {
-        isCancelled = true;
-        if (timer) clearInterval(timer);
-        try { fs.closeSync(fd); } catch (e) {}
-        try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
-        this.activeSessions.delete(token);
-      }
+      try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
+      this.activeSessions.delete(token);
     };
 
     this.activeSessions.set(token, session);
@@ -238,17 +240,26 @@ class NativeDspStreamer {
 
     fs.writeSync(fd, header, 0, 44, 0);
 
+    const session = new EventEmitter();
+    session.token = token;
+    session.filePath = tmpFile;
+    session.mimeType = 'audio/wav';
+    session.totalFileBytes = totalFileBytes;
+    session.bytesWritten = 44;
+    session.isCompleted = false;
+    session.isCancelled = false;
+    session.durationSec = inLen / srcRate;
+
     // 3. Encoder state & chunk writer using Cubic Hermite interpolation
     let framesWritten = 0;
-    let isCancelled = false;
     let timer = null;
 
     const writePcmChunk = (chunkFrames) => {
-      if (isCancelled || framesWritten >= outFrames) return framesWritten;
+      if (session.isCancelled || framesWritten >= outFrames) return framesWritten;
       const startF = framesWritten;
       const endF = Math.min(outFrames, startF + chunkFrames);
       const count = endF - startF;
-      const buf = Buffer.alloc(count * blockAlign);
+      const buf = Buffer.allocUnsafe(count * blockAlign);
       let bufOff = 0;
 
       for (let i = startF; i < endF; i++) {
@@ -296,6 +307,8 @@ class NativeDspStreamer {
       const fileOffset = 44 + startF * blockAlign;
       fs.writeSync(fd, buf, 0, buf.length, fileOffset);
       framesWritten = endF;
+      session.bytesWritten = 44 + framesWritten * blockAlign;
+      session.emit('progress', session.bytesWritten);
       return framesWritten;
     };
 
@@ -305,7 +318,7 @@ class NativeDspStreamer {
 
     // 5. Background progressive generator: writes ~5 seconds of frames every 25ms
     timer = setInterval(() => {
-      if (isCancelled) {
+      if (session.isCancelled) {
         clearInterval(timer);
         return;
       }
@@ -314,22 +327,18 @@ class NativeDspStreamer {
       } else {
         clearInterval(timer);
         timer = null;
+        session.isCompleted = true;
+        session.emit('complete');
+        try { fs.closeSync(fd); } catch (e) {}
       }
     }, 25);
 
-    const session = {
-      token,
-      filePath: tmpFile,
-      mimeType: 'audio/wav',
-      totalFileBytes,
-      durationSec: inLen / srcRate,
-      cancel: () => {
-        isCancelled = true;
-        if (timer) clearInterval(timer);
-        try { fs.closeSync(fd); } catch (e) {}
-        try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
-        this.activeSessions.delete(token);
-      }
+    session.cancel = () => {
+      session.isCancelled = true;
+      if (timer) clearInterval(timer);
+      try { fs.closeSync(fd); } catch (e) {}
+      try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
+      this.activeSessions.delete(token);
     };
 
     this.activeSessions.set(token, session);
@@ -346,16 +355,17 @@ class NativeDspStreamer {
 
     fs.writeFileSync(tmpFile, wavBuf);
 
-    const session = {
-      token,
-      filePath: tmpFile,
-      mimeType: 'audio/wav',
-      totalFileBytes: wavBuf.length,
-      durationSec: (track && track.duration > 0) ? track.duration : (wavBuf.length / (88200 * 6)),
-      cancel: () => {
-        try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
-        this.activeSessions.delete(token);
-      }
+    const session = new EventEmitter();
+    session.token = token;
+    session.filePath = tmpFile;
+    session.mimeType = 'audio/wav';
+    session.totalFileBytes = wavBuf.length;
+    session.bytesWritten = wavBuf.length;
+    session.isCompleted = true;
+    session.durationSec = (track && track.duration > 0) ? track.duration : (wavBuf.length / (88200 * 6));
+    session.cancel = () => {
+      try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
+      this.activeSessions.delete(token);
     };
 
     this.activeSessions.set(token, session);
@@ -386,4 +396,7 @@ class NativeDspStreamer {
   }
 }
 
-module.exports = new NativeDspStreamer();
+const instance = new NativeDspStreamer();
+instance.ProgressiveFileStream = ProgressiveFileStream;
+
+module.exports = instance;

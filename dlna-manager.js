@@ -88,12 +88,12 @@ class DlnaManager extends EventEmitter {
               res.end('File not found');
               return;
             }
-            this.handleLocalAudioStream(req, res, filePath);
+            this.handleLocalAudioStream(req, res, filePath, token);
           } else if (dsdModMatch || pathname === '/dsd-mod-stream' || pathname === '/dsd-mod-stream/') {
             const token = dsdModMatch ? dsdModMatch[1] : null;
             const streamInfo = token ? this.activeStreams.get(token) : null;
             if (streamInfo && streamInfo.filePath && fs.existsSync(streamInfo.filePath)) {
-              this.handleLocalAudioStream(req, res, streamInfo.filePath);
+              this.handleLocalAudioStream(req, res, streamInfo.filePath, token);
               return;
             }
             const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
@@ -120,7 +120,7 @@ class DlnaManager extends EventEmitter {
             const token = dsdMatch ? dsdMatch[1] : null;
             const streamInfo = token ? this.activeStreams.get(token) : null;
             if (streamInfo && streamInfo.filePath && fs.existsSync(streamInfo.filePath)) {
-              this.handleLocalAudioStream(req, res, streamInfo.filePath);
+              this.handleLocalAudioStream(req, res, streamInfo.filePath, token);
               return;
             }
             const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
@@ -138,7 +138,7 @@ class DlnaManager extends EventEmitter {
             const token = soxMatch ? soxMatch[1] : null;
             const streamInfo = token ? this.activeStreams.get(token) : null;
             if (streamInfo && streamInfo.filePath && fs.existsSync(streamInfo.filePath)) {
-              this.handleLocalAudioStream(req, res, streamInfo.filePath);
+              this.handleLocalAudioStream(req, res, streamInfo.filePath, token);
               return;
             }
             const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
@@ -201,10 +201,10 @@ class DlnaManager extends EventEmitter {
     return this._startServerPromise;
   }
 
-  // Handle standard audio file with HTTP 206 Partial Content Range support
-  handleLocalAudioStream(req, res, filePath) {
-    const stat = fs.statSync(filePath);
-    const totalSize = stat.size;
+  // Handle audio file stream with HTTP 206 Partial Content Range and Progressive Flow Control
+  handleLocalAudioStream(req, res, filePath, token = null) {
+    const session = token ? this.nativeDspStreamer.getSession(token) : Array.from(this.nativeDspStreamer.activeSessions.values()).find(s => s.filePath === filePath);
+    const totalSize = (session && session.totalFileBytes) ? session.totalFileBytes : fs.statSync(filePath).size;
     const range = req.headers.range;
     const ext = path.extname(filePath).toLowerCase();
 
@@ -237,6 +237,9 @@ class DlnaManager extends EventEmitter {
       return;
     }
 
+    const ProgressiveFileStream = this.nativeDspStreamer.ProgressiveFileStream;
+    const isProgressive = session && !session.isCompleted && ProgressiveFileStream;
+
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
       const start = parseInt(parts[0], 10);
@@ -249,7 +252,9 @@ class DlnaManager extends EventEmitter {
         'Content-Length': chunkSize
       });
 
-      const stream = fs.createReadStream(filePath, { start, end });
+      const stream = isProgressive
+        ? new ProgressiveFileStream(filePath, start, end, session)
+        : fs.createReadStream(filePath, { start, end });
       stream.pipe(res);
       req.on('close', () => stream.destroy());
     } else {
@@ -258,7 +263,9 @@ class DlnaManager extends EventEmitter {
         'Content-Length': totalSize
       });
 
-      const stream = fs.createReadStream(filePath);
+      const stream = isProgressive
+        ? new ProgressiveFileStream(filePath, 0, totalSize - 1, session)
+        : fs.createReadStream(filePath);
       stream.pipe(res);
       req.on('close', () => stream.destroy());
     }
@@ -973,25 +980,7 @@ class DlnaManager extends EventEmitter {
     let mimeType = 'audio/flac';
     let protocolInfo = 'http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
 
-    if (isDsdUpsample) {
-      if (isTv) {
-        // Smart TV compatibility: TV cannot decode DSD bitstreams; provide High-Res 24-bit 96kHz WAV
-        const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, 96000, 24, track);
-        this.currentStreamSession = session;
-        activeFilePath = session.filePath;
-        streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
-        mimeType = 'audio/wav';
-        protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
-      } else {
-        // Audiophile streamer / DAC: Progressive on-the-fly DSD modulation in DSF container
-        const session = await this.nativeDspStreamer.createDsdSession(streamToken, track.filePath, startSec, dspOptions.dsdMode, track);
-        this.currentStreamSession = session;
-        activeFilePath = session.filePath;
-        streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.dsf`;
-        mimeType = 'audio/x-dsf';
-        protocolInfo = 'http-get:*:audio/x-dsf:*';
-      }
-    } else if (isNativeDsf && (!dspOptions || !dspOptions.enabled)) {
+    if (isNativeDsf) {
       if (isTv) {
         // Smart TV: decimate DSF to 24-bit 88.2kHz WAV
         const session = await this.nativeDspStreamer.createDsdDecimateSession(streamToken, track.filePath, startSec, track);
@@ -1001,14 +990,32 @@ class DlnaManager extends EventEmitter {
         mimeType = 'audio/wav';
         protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
       } else {
-        // Audiophile streamer: Bit-perfect native DSF direct streaming
+        // Audiophile streamer: Bit-perfect native DSF direct streaming (zero CPU, bit-perfect)
         activeFilePath = track.filePath;
         streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/track.dsf`;
         mimeType = 'audio/x-dsf';
         protocolInfo = 'http-get:*:audio/x-dsf:*';
       }
+    } else if (isDsdUpsample) {
+      if (isTv) {
+        // Smart TV compatibility: TV cannot decode DSD bitstreams; provide High-Res 24-bit 96kHz WAV
+        const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, 96000, 24, track);
+        this.currentStreamSession = session;
+        activeFilePath = session.filePath;
+        streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
+        mimeType = 'audio/wav';
+        protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
+      } else {
+        // Audiophile streamer / DAC: Progressive on-the-fly DSD modulation in DSF container (Worker + Flow Control)
+        const session = await this.nativeDspStreamer.createDsdSession(streamToken, track.filePath, startSec, dspOptions.dsdMode, track);
+        this.currentStreamSession = session;
+        activeFilePath = session.filePath;
+        streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.dsf`;
+        mimeType = 'audio/x-dsf';
+        protocolInfo = 'http-get:*:audio/x-dsf:*';
+      }
     } else if (isNativeDsd) {
-      // Native DFF or DSF needing PCM decimation to 24-bit 88.2kHz WAV
+      // Native DFF needing PCM decimation to 24-bit 88.2kHz WAV
       const session = await this.nativeDspStreamer.createDsdDecimateSession(streamToken, track.filePath, startSec, track);
       this.currentStreamSession = session;
       activeFilePath = session.filePath;
