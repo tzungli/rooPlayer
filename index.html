@@ -947,111 +947,121 @@
       </div>
       <p class="signal-sub">rooPlayer 標誌性功能：即時追蹤從原始音訊源到耳機/擴大機的音質還原路徑與 DSP 升頻處理。</p>
 
-      <div class="signal-stages">
-        <div class="signal-stage">
-          <div class="stage-icon">💿</div>
-          <div class="stage-info">
-            <div class="stage-title" id="signalSourceTitle">FLAC 96kHz 24bit</div>
-            <div class="stage-desc" id="signalSourceDesc">原始母帶音訊源 (Bit-Perfect Lossless)</div>
+      <div class="signal-path-columns">
+        <!-- Left Column: Audio Signal Path Stages -->
+        <div class="signal-path-col-left">
+          <div class="signal-col-header">
+            <span class="signal-col-title">即時訊號串流路徑</span>
+          </div>
+          <div class="signal-stages">
+            <div class="signal-stage">
+              <div class="stage-icon">💿</div>
+              <div class="stage-info">
+                <div class="stage-title" id="signalSourceTitle">FLAC 96kHz 24bit</div>
+                <div class="stage-desc" id="signalSourceDesc">原始母帶音訊源 (Bit-Perfect Lossless)</div>
+              </div>
+            </div>
+
+            <!-- Dynamic SoX DSP Resampler Stage -->
+            <div class="signal-arrow sox-dsp-element" id="signalSoxArrow" style="display: none;">↓</div>
+            <div class="signal-stage sox-dsp-element sox-stage-highlight" id="signalSoxStage" style="display: none;">
+              <div class="stage-icon">🎛️</div>
+              <div class="stage-info">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <div class="stage-title" id="signalSoxTitle">SoX Resampler (libsoxr VHQ)</div>
+                  <span class="stage-badge-dsp">DSP ACTIVE</span>
+                </div>
+                <div class="stage-desc" id="signalSoxDesc">28-bit VHQ 超高精度升頻：44.1 kHz ➔ 176.4 kHz (4x 整數倍頻)</div>
+              </div>
+            </div>
+
+            <div class="signal-arrow">↓</div>
+            <div class="signal-stage">
+              <div class="stage-icon">⚡</div>
+              <div class="stage-info">
+                <div class="stage-title" id="signalEngineTitle">rooPlayer Core Audio Engine</div>
+                <div class="stage-desc" id="signalEngineDesc">64-bit 浮點無損混音核心，零採樣損失處理</div>
+              </div>
+            </div>
+            <div class="signal-arrow">↓</div>
+            <div class="signal-stage">
+              <div class="stage-icon" id="signalOutputIcon">🔊</div>
+              <div class="stage-info">
+                <div class="stage-title" id="signalOutputTitle">Windows WASAPI Exclusive / DirectSound</div>
+                <div class="stage-desc" id="signalOutputDesc">輸出至本機預設音訊裝置</div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- Dynamic SoX DSP Resampler Stage -->
-        <div class="signal-arrow sox-dsp-element" id="signalSoxArrow" style="display: none;">↓</div>
-        <div class="signal-stage sox-dsp-element sox-stage-highlight" id="signalSoxStage" style="display: none;">
-          <div class="stage-icon">🎛️</div>
-          <div class="stage-info">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <div class="stage-title" id="signalSoxTitle">SoX Resampler (libsoxr VHQ)</div>
-              <span class="stage-badge-dsp">DSP ACTIVE</span>
+        <!-- Right Column: Upsampling DSP Engine Settings -->
+        <div class="signal-path-col-right">
+          <div class="dsp-sox-card">
+            <div class="dsp-sox-header">
+              <div class="dsp-sox-title-wrap">
+                <span class="dsp-sox-icon">🎛️</span>
+                <div>
+                  <div class="dsp-sox-title">升頻引擎設定</div>
+                  <div class="dsp-sox-desc">發燒級 64 位元浮點即時超取樣升頻濾波器，拓展音場細節與瞬態還原</div>
+                </div>
+              </div>
+              <label class="switch-toggle" title="啟用/關閉 升頻引擎">
+                <input type="checkbox" id="toggleSoxDsp">
+                <span class="slider-round"></span>
+              </label>
             </div>
-            <div class="stage-desc" id="signalSoxDesc">28-bit VHQ 超高精度升頻：44.1 kHz ➔ 176.4 kHz (4x 整數倍頻)</div>
-          </div>
-        </div>
 
-        <div class="signal-arrow">↓</div>
-        <div class="signal-stage">
-          <div class="stage-icon">⚡</div>
-          <div class="stage-info">
-            <div class="stage-title" id="signalEngineTitle">rooPlayer Core Audio Engine</div>
-            <div class="stage-desc" id="signalEngineDesc">64-bit 浮點無損混音核心，零採樣損失處理</div>
-          </div>
-        </div>
-        <div class="signal-arrow">↓</div>
-        <div class="signal-stage">
-          <div class="stage-icon" id="signalOutputIcon">🔊</div>
-          <div class="stage-info">
-            <div class="stage-title" id="signalOutputTitle">Windows WASAPI Exclusive / DirectSound</div>
-            <div class="stage-desc" id="signalOutputDesc">輸出至本機預設音訊裝置</div>
-          </div>
-        </div>
-      </div>
+            <div class="dsp-sox-body" id="dspSoxBody">
+              <!-- Target Sample Rate Selection (PCM) -->
+              <div class="dsp-option-group">
+                <div class="dsp-option-label">
+                  <span>PCM 升頻取樣規格 (PCM Upsampling)</span>
+                  <span class="dsp-hint-badge" id="dspActiveRateHint">4x 整數倍頻</span>
+                </div>
+                <div class="dsp-pill-selector" id="dspRateSelector">
+                  <button class="dsp-pill active" data-rate-mode="4x" title="44.1k➔176.4k, 48k➔192k (發燒推薦：整數倍頻相位最純淨)">4x 整數倍頻 (推薦)</button>
+                  <button class="dsp-pill" data-rate-mode="2x" title="44.1k➔88.2k, 48k➔96k (整數 2 倍超取樣)">2x 整數倍頻</button>
+                  <button class="dsp-pill" data-rate-mode="192k" title="固定升頻至 192 kHz / 24-bit">固定 192 kHz</button>
+                  <button class="dsp-pill" data-rate-mode="384k" title="固定升頻至 384 kHz / 24-bit (DXD 頂級解碼)">固定 384 kHz</button>
+                  <button class="dsp-pill" data-rate-mode="96k" title="固定升頻至 96 kHz / 24-bit">固定 96 kHz</button>
+                </div>
+              </div>
 
-      <!-- DSP SoX Resampler Control Panel -->
-      <div class="dsp-sox-card">
-        <div class="dsp-sox-header">
-          <div class="dsp-sox-title-wrap">
-            <span class="dsp-sox-icon">🎛️</span>
-            <div>
-              <div class="dsp-sox-title">升頻引擎</div>
-              <div class="dsp-sox-desc">發燒級 64 位元浮點即時超取樣升頻濾波器，拓展音場細節與瞬態還原</div>
-            </div>
-          </div>
-          <label class="switch-toggle" title="啟用/關閉 升頻引擎">
-            <input type="checkbox" id="toggleSoxDsp">
-            <span class="slider-round"></span>
-          </label>
-        </div>
+              <!-- Target DSD Modulation Selection -->
+              <div class="dsp-option-group">
+                <div class="dsp-option-label">
+                  <span>1-bit DSD 調變升頻 (PCM ➔ 1-bit DSD SDM Modulator)</span>
+                  <span class="dsp-hint-badge dsd-badge-color" id="dspActiveDsdHint">可選 DSD 格式</span>
+                </div>
+                <div class="dsp-pill-selector" id="dspDsdRateSelector">
+                  <button class="dsp-pill pill-dsd" data-rate-mode="dsd64" title="PCM ➔ DSD64 (1-bit / 2.8224 MHz 或 3.072 MHz 超高頻噪聲整形調變)">DSD64 (2.8 MHz)</button>
+                  <button class="dsp-pill pill-dsd" data-rate-mode="dsd128" title="PCM ➔ DSD128 (1-bit / 5.6448 MHz 或 6.144 MHz 雙倍 DSD 調變)">DSD128 (5.6 MHz)</button>
+                  <button class="dsp-pill pill-dsd" data-rate-mode="dsd256" title="PCM ➔ DSD256 (1-bit / 11.2896 MHz 或 12.288 MHz 四倍 DSD 調變)">DSD256 (11.2 MHz)</button>
+                  <button class="dsp-pill pill-dsd" data-rate-mode="dsd512" title="PCM ➔ DSD512 (1-bit / 22.5792 MHz 或 24.576 MHz 極限發燒 DSD 調變)">DSD512 (22.5 MHz)</button>
+                </div>
+              </div>
 
-        <div class="dsp-sox-body" id="dspSoxBody">
-          <!-- Target Sample Rate Selection (PCM) -->
-          <div class="dsp-option-group">
-            <div class="dsp-option-label">
-              <span>PCM 升頻取樣規格 (PCM Upsampling)</span>
-              <span class="dsp-hint-badge" id="dspActiveRateHint">4x 整數倍頻</span>
-            </div>
-            <div class="dsp-pill-selector" id="dspRateSelector">
-              <button class="dsp-pill active" data-rate-mode="4x" title="44.1k➔176.4k, 48k➔192k (發燒推薦：整數倍頻相位最純淨)">4x 整數倍頻 (推薦)</button>
-              <button class="dsp-pill" data-rate-mode="2x" title="44.1k➔88.2k, 48k➔96k (整數 2 倍超取樣)">2x 整數倍頻</button>
-              <button class="dsp-pill" data-rate-mode="192k" title="固定升頻至 192 kHz / 24-bit">固定 192 kHz</button>
-              <button class="dsp-pill" data-rate-mode="384k" title="固定升頻至 384 kHz / 24-bit (DXD 頂級解碼)">固定 384 kHz</button>
-              <button class="dsp-pill" data-rate-mode="96k" title="固定升頻至 96 kHz / 24-bit">固定 96 kHz</button>
-            </div>
-          </div>
+              <!-- Filter Precision Selection -->
+              <div class="dsp-option-group">
+                <div class="dsp-option-label">
+                  <span>濾波精度與噪聲整形 (Filter Precision / Noise Shaping)</span>
+                  <span class="dsp-hint-badge" id="dspActivePrecisionHint">28-bit VHQ</span>
+                </div>
+                <div class="dsp-pill-selector" id="dspPrecisionSelector">
+                  <button class="dsp-pill active" data-precision="28" title="SoX Very High Quality (28-bit，訊噪比高達 ~175 dB)">28-bit VHQ (極致發燒)</button>
+                  <button class="dsp-pill" data-precision="33" title="SoX Ultra Precision (33-bit 最高位元運算精度)">33-bit Ultra (最高位階)</button>
+                  <button class="dsp-pill" data-precision="20" title="SoX High Quality (20-bit 快速高解析)">20-bit HQ (標準高解析)</button>
+                </div>
+              </div>
 
-          <!-- Target DSD Modulation Selection -->
-          <div class="dsp-option-group">
-            <div class="dsp-option-label">
-              <span>1-bit DSD 調變升頻 (PCM ➔ 1-bit DSD SDM Modulator)</span>
-              <span class="dsp-hint-badge dsd-badge-color" id="dspActiveDsdHint">可選 DSD 格式</span>
+              <!-- Feature Note -->
+              <div class="dsp-info-footer">
+                <span class="dsp-info-tag">✓ Chebyshev 等波紋通帶</span>
+                <span class="dsp-info-tag">✓ 1-bit Delta-Sigma 超高頻調變</span>
+                <span class="dsp-info-tag">✓ 5th/7th-Order 噪聲整形</span>
+                <span class="dsp-info-tag">✓ 零相位失真還原</span>
+              </div>
             </div>
-            <div class="dsp-pill-selector" id="dspDsdRateSelector">
-              <button class="dsp-pill pill-dsd" data-rate-mode="dsd64" title="PCM ➔ DSD64 (1-bit / 2.8224 MHz 或 3.072 MHz 超高頻噪聲整形調變)">DSD64 (2.8 MHz)</button>
-              <button class="dsp-pill pill-dsd" data-rate-mode="dsd128" title="PCM ➔ DSD128 (1-bit / 5.6448 MHz 或 6.144 MHz 雙倍 DSD 調變)">DSD128 (5.6 MHz)</button>
-              <button class="dsp-pill pill-dsd" data-rate-mode="dsd256" title="PCM ➔ DSD256 (1-bit / 11.2896 MHz 或 12.288 MHz 四倍 DSD 調變)">DSD256 (11.2 MHz)</button>
-              <button class="dsp-pill pill-dsd" data-rate-mode="dsd512" title="PCM ➔ DSD512 (1-bit / 22.5792 MHz 或 24.576 MHz 極限發燒 DSD 調變)">DSD512 (22.5 MHz)</button>
-            </div>
-          </div>
-
-          <!-- Filter Precision Selection -->
-          <div class="dsp-option-group">
-            <div class="dsp-option-label">
-              <span>濾波精度與噪聲整形 (Filter Precision / Noise Shaping)</span>
-              <span class="dsp-hint-badge" id="dspActivePrecisionHint">28-bit VHQ</span>
-            </div>
-            <div class="dsp-pill-selector" id="dspPrecisionSelector">
-              <button class="dsp-pill active" data-precision="28" title="SoX Very High Quality (28-bit，訊噪比高達 ~175 dB)">28-bit VHQ (極致發燒)</button>
-              <button class="dsp-pill" data-precision="33" title="SoX Ultra Precision (33-bit 最高位元運算精度)">33-bit Ultra (最高位階)</button>
-              <button class="dsp-pill" data-precision="20" title="SoX High Quality (20-bit 快速高解析)">20-bit HQ (標準高解析)</button>
-            </div>
-          </div>
-
-          <!-- Feature Note -->
-          <div class="dsp-info-footer">
-            <span class="dsp-info-tag">✓ Chebyshev 等波紋通帶</span>
-            <span class="dsp-info-tag">✓ 1-bit Delta-Sigma 超高頻調變</span>
-            <span class="dsp-info-tag">✓ 5th/7th-Order 噪聲整形</span>
-            <span class="dsp-info-tag">✓ 零相位失真還原</span>
           </div>
         </div>
       </div>
