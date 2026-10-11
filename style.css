@@ -4443,11 +4443,65 @@ body {
   color: var(--text-muted);
 }
 
+.kkbox-search-box {
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  padding: 3px 10px;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.kkbox-search-box:focus-within {
+  border-color: #25d5ff;
+  box-shadow: 0 0 10px rgba(37, 213, 255, 0.25);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.kkbox-search-icon {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.kkbox-search-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #fff;
+  font-size: 12px;
+  width: 220px;
+}
+
+.btn-kkbox-search {
+  background: rgba(37, 213, 255, 0.2);
+  color: #25d5ff;
+  border: 1px solid rgba(37, 213, 255, 0.4);
+  border-radius: 14px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-kkbox-search:hover {
+  background: #25d5ff;
+  color: #000;
+}
+
+.kkbox-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .kkbox-charts-category-bar {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .kkbox-cat-chip {
@@ -4475,6 +4529,51 @@ body {
   box-shadow: 0 2px 8px rgba(37, 213, 255, 0.3);
 }
 
+/* Playlist Banner Card on top of Charts */
+.kkbox-playlist-header-card {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background: linear-gradient(135deg, rgba(37, 213, 255, 0.1) 0%, rgba(20, 24, 33, 0.8) 100%);
+  border: 1px solid rgba(37, 213, 255, 0.25);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+}
+
+.kkbox-header-card-thumb {
+  width: 90px;
+  height: 90px;
+  border-radius: 8px;
+  object-fit: cover;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.kkbox-header-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.kkbox-header-card-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 4px 0;
+}
+
+.kkbox-header-card-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 10px 0;
+  line-height: 1.4;
+}
+
+.kkbox-header-card-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* Track list */
 .kkbox-track-list {
   display: flex;
   flex-direction: column;
@@ -4503,6 +4602,7 @@ body {
   align-items: center;
   gap: 12px;
   min-width: 0;
+  flex: 1;
 }
 
 .kkbox-track-rank {
@@ -4529,6 +4629,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  flex: 1;
 }
 
 .kkbox-track-title {
@@ -4551,8 +4652,14 @@ body {
 .kkbox-track-row-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-shrink: 0;
+}
+
+.kkbox-track-duration {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-right: 8px;
 }
 
 .kkbox-btn-play-now {
@@ -4574,6 +4681,23 @@ body {
   background: #25d5ff;
   color: #000;
   box-shadow: 0 0 10px rgba(37, 213, 255, 0.4);
+}
+
+.kkbox-btn-add-queue {
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.kkbox-btn-add-queue:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
 .kkbox-playlists-grid {
@@ -4633,6 +4757,76 @@ body {
   font-size: 14px;
 }
 
+/* KKBOX Detail Drill-Down View */
+.kkbox-detail-view {
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+.kkbox-detail-header {
+  margin-bottom: 24px;
+}
+
+.kkbox-detail-banner {
+  display: flex;
+  gap: 28px;
+  align-items: flex-end;
+  background: linear-gradient(180deg, rgba(37, 213, 255, 0.12) 0%, rgba(18, 21, 28, 0.9) 100%);
+  border: 1px solid rgba(37, 213, 255, 0.25);
+  border-radius: 16px;
+  padding: 28px;
+}
+
+.kkbox-detail-cover {
+  width: 180px;
+  height: 180px;
+  border-radius: 12px;
+  object-fit: cover;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.kkbox-detail-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.kkbox-detail-badge {
+  display: inline-block;
+  background: rgba(37, 213, 255, 0.2);
+  color: #25d5ff;
+  border: 1px solid rgba(37, 213, 255, 0.4);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+
+.kkbox-detail-title {
+  font-size: 26px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 8px 0;
+}
+
+.kkbox-detail-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 14px 0;
+  line-height: 1.5;
+  max-width: 700px;
+}
+
+.kkbox-detail-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 18px;
+}
+
+.kkbox-detail-actions {
+  display: flex;
+  gap: 12px;
+}
+
 .kkbox-login-modal-card {
   width: 440px;
   max-width: 90vw;
@@ -4642,6 +4836,7 @@ body {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(37, 213, 255, 0.15);
   overflow: hidden;
 }
+
 
 
 

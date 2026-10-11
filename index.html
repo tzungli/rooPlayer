@@ -539,7 +539,7 @@
         </div>
       </section>
 
-      <!-- 10. KKBOX STREAMING VIEW -->
+      <!-- 10. KKBOX STREAMING VIEW (Native rooPlayer Explorer) -->
       <section id="viewKkbox" class="content-view">
         <div class="kkbox-view-container">
           <!-- KKBOX Top Navigation Toolbar -->
@@ -548,88 +548,147 @@
               <div class="kkbox-brand-badge">
                 <span class="kkbox-badge-dot"></span>
                 <span class="kkbox-badge-name">KKBOX</span>
-                <span class="kkbox-badge-tag">ONLINE STREAMING</span>
+                <span class="kkbox-badge-tag">STREAMING EXPLORER</span>
               </div>
               <div class="kkbox-view-switcher">
-                <button class="kkbox-switch-btn active" id="btnKkboxTabPlayer" title="切換至 KKBOX 完整線上播放器">
-                  🎧 線上播放器
-                </button>
-                <button class="kkbox-switch-btn" id="btnKkboxTabCharts" title="瀏覽 KKBOX 即時熱門排行榜">
+                <button class="kkbox-switch-btn active" id="btnKkboxTabCharts" title="瀏覽 KKBOX 即時熱門排行榜">
                   🏆 即時排行榜
                 </button>
                 <button class="kkbox-switch-btn" id="btnKkboxTabFeatured" title="探索 KKBOX 官方精選推薦歌單">
                   ✨ 精選推薦
                 </button>
+                <button class="kkbox-switch-btn" id="btnKkboxTabNewHits" title="發現 KKBOX 速爆最新發行歌曲">
+                  🆕 新歌速爆
+                </button>
               </div>
             </div>
 
             <div class="kkbox-header-right">
-              <button class="btn btn-sm btn-kkbox-login" id="btnOpenKkboxLoginModal" title="輸入帳號密碼登入 KKBOX">
-                🔑 輸入帳號密碼登入
-              </button>
-              <div class="kkbox-nav-arrows">
-                <button class="icon-btn kkbox-icon-btn" id="btnKkboxWebBack" title="上一頁">❮</button>
-                <button class="icon-btn kkbox-icon-btn" id="btnKkboxWebForward" title="下一頁">❯</button>
-                <button class="icon-btn kkbox-icon-btn" id="btnKkboxWebReload" title="重新載入播放器">🔄</button>
-                <button class="icon-btn kkbox-icon-btn" id="btnKkboxWebHome" title="返回 KKBOX 首頁">🏠</button>
-                <button class="icon-btn kkbox-icon-btn" id="btnKkboxOpenBrowser" title="以系統瀏覽器開啟">↗</button>
+              <div class="kkbox-search-box">
+                <span class="kkbox-search-icon">🔍</span>
+                <input type="text" id="kkboxSearchInput" placeholder="在 KKBOX 百萬曲庫搜尋歌曲/歌手/專輯..." class="kkbox-search-input">
+                <button class="btn btn-sm btn-kkbox-search" id="btnKkboxSearch">搜尋</button>
               </div>
+              <button class="btn btn-sm btn-kkbox-login" id="btnOpenKkboxLoginModal" title="KKBOX 帳號連線資訊">
+                🔑 KKBOX 帳號
+              </button>
             </div>
           </div>
 
           <!-- KKBOX Status Banner -->
           <div class="kkbox-info-banner" id="kkboxInfoBanner">
             <span class="banner-icon">ℹ️</span>
-            <span class="banner-text" id="kkboxBannerText">歡迎使用 KKBOX 線上串流。輸入帳號密碼登入後，即可暢享高解析音樂、個人收藏曲目與完整播放清單。</span>
+            <span class="banner-text" id="kkboxBannerText">💡 KKBOX 線上曲庫模式：可一鍵點播排行榜、精選歌單與最新單曲，或匯入整張歌單至 rooPlayer 播放佇列，由原生播放核心與 DLNA 統一控制。</span>
             <button class="banner-close-btn" id="btnCloseKkboxBanner">✕</button>
           </div>
 
-          <!-- Pane 1: Full-screen Embedded Web Player -->
-          <div class="kkbox-content-pane active" id="kkboxPanePlayer">
-            <div class="kkbox-webview-wrapper">
-              <div id="kkboxWebviewLoader" class="kkbox-webview-loading-overlay">
-                <div class="spinner" style="width: 36px; height: 36px; border-width: 3px; border-top-color: #25d5ff;"></div>
-                <div style="font-size: 15px; font-weight: 600; color: #fff; margin-top: 14px;">正在連線 KKBOX 線上播放器...</div>
-                <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">若首次載入稍慢，亦可點擊上方「即時排行榜」或「精選推薦」搶先聆聽熱門音樂</div>
+          <!-- Main Sub-View: Master Lists -->
+          <div id="kkboxExplorerContainer">
+            <!-- Pane 1: Live Charts Explorer (Powered by KKBOX Open API) -->
+            <div class="kkbox-content-pane active" id="kkboxPaneCharts">
+              <div class="kkbox-api-view-inner">
+                <div class="kkbox-section-title-wrap">
+                  <div>
+                    <h2>🏆 KKBOX 即時排行榜</h2>
+                    <span class="kkbox-sub-desc">KKBOX 官方權威熱門榜單 • 支援整榜一鍵播放與匯入佇列</span>
+                  </div>
+                  <div class="kkbox-pane-actions">
+                    <button class="btn btn-sm btn-secondary" id="btnRefreshCharts">🔄 重新整理</button>
+                  </div>
+                </div>
+                <div class="kkbox-charts-category-bar" id="kkboxChartCategories">
+                  <!-- Category buttons injected by JS -->
+                </div>
+                <div class="kkbox-playlist-header-card" id="kkboxChartHeaderCard" style="display: none;">
+                  <!-- Dynamic Playlist Banner Header injected by JS -->
+                </div>
+                <div class="kkbox-track-list" id="kkboxChartTracksList">
+                  <div class="kkbox-loading-indicator">⏳ 正在載入 KKBOX 即時排行榜...</div>
+                </div>
               </div>
-              <webview id="kkboxWebview"
-                       src="https://play.kkbox.com/"
-                       partition="persist:kkbox"
-                       useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-                       allowpopups
-                       style="width: 100%; height: 100%; border: none;">
-              </webview>
+            </div>
+
+            <!-- Pane 2: Featured Playlists Explorer (Powered by KKBOX Open API) -->
+            <div class="kkbox-content-pane" id="kkboxPaneFeatured" style="display: none;">
+              <div class="kkbox-api-view-inner">
+                <div class="kkbox-section-title-wrap">
+                  <div>
+                    <h2>✨ KKBOX 官方精選歌單</h2>
+                    <span class="kkbox-sub-desc">官方主題選品、情境音樂與發燒曲風合輯</span>
+                  </div>
+                  <div class="kkbox-pane-actions">
+                    <button class="btn btn-sm btn-secondary" id="btnRefreshFeatured">🔄 重新整理</button>
+                  </div>
+                </div>
+                <div class="kkbox-playlists-grid" id="kkboxFeaturedGrid">
+                  <div class="kkbox-loading-indicator">⏳ 正在載入 KKBOX 精選歌單...</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pane 3: New Hits Playlists Explorer (Powered by KKBOX Open API) -->
+            <div class="kkbox-content-pane" id="kkboxPaneNewHits" style="display: none;">
+              <div class="kkbox-api-view-inner">
+                <div class="kkbox-section-title-wrap">
+                  <div>
+                    <h2>🆕 KKBOX 新歌速爆</h2>
+                    <span class="kkbox-sub-desc">華語、西洋、日韓即時焦點速爆新歌，掌握第一手潮流發行</span>
+                  </div>
+                  <div class="kkbox-pane-actions">
+                    <button class="btn btn-sm btn-secondary" id="btnRefreshNewHits">🔄 重新整理</button>
+                  </div>
+                </div>
+                <div class="kkbox-playlists-grid" id="kkboxNewHitsGrid">
+                  <div class="kkbox-loading-indicator">⏳ 正在載入 KKBOX 新歌歌單...</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pane 4: Search Results Explorer -->
+            <div class="kkbox-content-pane" id="kkboxPaneSearch" style="display: none;">
+              <div class="kkbox-api-view-inner">
+                <div class="kkbox-section-title-wrap">
+                  <div>
+                    <h2>🔍 KKBOX 線上搜尋結果</h2>
+                    <span class="kkbox-sub-desc" id="kkboxSearchSummary">搜尋中...</span>
+                  </div>
+                  <div class="kkbox-pane-actions">
+                    <button class="btn btn-sm btn-secondary" id="btnBackFromSearch">❮ 返回排行榜</button>
+                  </div>
+                </div>
+                <div class="kkbox-track-list" id="kkboxSearchTracksList">
+                  <!-- Search rows injected by JS -->
+                </div>
+              </div>
             </div>
           </div>
 
-          <!-- Pane 2: Live Charts Explorer (Powered by KKBOX Open API) -->
-          <div class="kkbox-content-pane" id="kkboxPaneCharts" style="display: none;">
-            <div class="kkbox-api-view-inner">
-              <div class="kkbox-section-title-wrap">
-                <h2>🏆 KKBOX 即時排行榜</h2>
-                <span class="kkbox-sub-desc">資料由 KKBOX Open API 即時連線提供 • 支援直接點播與試聽</span>
+          <!-- Secondary Sub-View: Playlist/Album Drill-down Detail View -->
+          <div id="kkboxDetailView" class="kkbox-detail-view" style="display: none;">
+            <div class="kkbox-detail-header">
+              <button class="btn btn-sm btn-secondary" id="btnKkboxBackToList" style="margin-bottom: 16px;">❮ 返回列表</button>
+              <div class="kkbox-detail-banner">
+                <img id="kkboxDetailCover" class="kkbox-detail-cover" src="" alt="Cover" onerror="this.src='default_cover.png'">
+                <div class="kkbox-detail-info">
+                  <span class="kkbox-detail-badge" id="kkboxDetailType">KKBOX PLAYLIST</span>
+                  <h1 class="kkbox-detail-title" id="kkboxDetailTitle">歌單名稱</h1>
+                  <p class="kkbox-detail-desc" id="kkboxDetailDesc">歌單描述與簡介</p>
+                  <div class="kkbox-detail-meta" id="kkboxDetailMeta">共 0 首歌曲</div>
+                  <div class="kkbox-detail-actions">
+                    <button class="btn btn-primary" id="btnKkboxPlayDetailAll">▶ 立即播放全部</button>
+                    <button class="btn btn-secondary" id="btnKkboxImportDetailToQueue">📥 匯入至播放佇列</button>
+                    <button class="btn btn-secondary" id="btnKkboxShuffleDetail">🔀 隨機播放</button>
+                  </div>
+                </div>
               </div>
-              <div class="kkbox-charts-category-bar" id="kkboxChartCategories">
-                <!-- Category buttons injected by JS -->
-              </div>
-              <div class="kkbox-track-list" id="kkboxChartTracksList">
-                <div class="kkbox-loading-indicator">⏳ 正在載入 KKBOX 即時排行榜...</div>
+            </div>
+            <div class="kkbox-detail-tracklist-wrap">
+              <div class="kkbox-track-list" id="kkboxDetailTracksList">
+                <!-- Tracks injected by JS -->
               </div>
             </div>
           </div>
 
-          <!-- Pane 3: Featured Playlists Explorer (Powered by KKBOX Open API) -->
-          <div class="kkbox-content-pane" id="kkboxPaneFeatured" style="display: none;">
-            <div class="kkbox-api-view-inner">
-              <div class="kkbox-section-title-wrap">
-                <h2>✨ KKBOX 官方精選歌單</h2>
-                <span class="kkbox-sub-desc">官方主題選品、新歌推薦與曲風合輯</span>
-              </div>
-              <div class="kkbox-playlists-grid" id="kkboxFeaturedGrid">
-                <div class="kkbox-loading-indicator">⏳ 正在載入 KKBOX 精選歌單...</div>
-              </div>
-            </div>
-          </div>
         </div>
       </section>
     </main>

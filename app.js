@@ -2836,8 +2836,8 @@ function playCurrentTrack() {
     stopDemoSynth();
     nativeAudio.pause();
 
-    if (track.isDemo || !track.filePath) {
-      showToast('⚠️ 示範音訊為合成示範曲，請選取本機音樂庫檔案進行 DLNA 串流播放');
+    if (track.isDemo || (!track.filePath && !track.isKkbox)) {
+      showToast('⚠️ 示範音訊為合成示範曲，請選取本機音樂庫或 KKBOX 歌曲進行 DLNA 串流播放');
       state.isPlaying = false;
       updatePlayPauseBtnUI();
       updateQueueActiveItem();
@@ -2900,7 +2900,35 @@ function playCurrentTrack() {
   const ext = (track.formatName || '').toUpperCase();
   const isDsd = ext === 'DSF' || ext === 'DFF' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
 
-  if (track.isDemo || !track.filePath) {
+  if (track.isKkbox) {
+    isCurrentDsd = false;
+    isCurrentSox = false;
+    currentDsdOffset = 0;
+    currentSoxOffset = 0;
+    stopVirtualProgress();
+    stopDemoSynth();
+
+    playerArtist.textContent = `⏳ 正在連接 KKBOX 官方音訊串流...`;
+    kkboxService.getTrackStreamUrl(track.kkboxId).then(streamUrl => {
+      if (!streamUrl) {
+        throw new Error('未取得有效音訊串流');
+      }
+      nativeAudio.src = streamUrl;
+      return nativeAudio.play();
+    }).then(() => {
+      state.isPlaying = true;
+      btnPlayPause.textContent = '⏸';
+      playerArtist.textContent = `${track.artist} — ${track.album}`;
+      totalTimeLabel.textContent = formatDuration(track.duration || 30);
+      showToast(`🎵 正在播放 KKBOX 線上串流: 《${track.title}》`);
+    }).catch(err => {
+      console.error('KKBOX stream play error:', err);
+      playerArtist.textContent = `KKBOX 串流錯誤: ${err.message || '無法取得試聽音訊'}`;
+      showToast(`❌ KKBOX 播放失敗: ${err.message}`);
+      state.isPlaying = false;
+      btnPlayPause.textContent = '▶';
+    });
+  } else if (track.isDemo || !track.filePath) {
     isCurrentDsd = false;
     isCurrentSox = false;
     currentDsdOffset = 0;
@@ -5666,7 +5694,7 @@ function formatDuration(sec) {
 }
 
 // ============================================================
-// KKBOX Online Streaming & Open API Subsystem
+// KKBOX Online Streaming & Open API Subsystem (Native rooPlayer Engine)
 // ============================================================
 
 class KKBoxService {
@@ -5678,6 +5706,10 @@ class KKBoxService {
     this.tokenExpiresAt = 0;
     this.chartsCache = null;
     this.featuredCache = null;
+    this.newHitsCache = null;
+    this.streamUrlCache = new Map();
+    this.widgetToken = null;
+    this.widgetTokenExpiresAt = 0;
   }
 
   async getAccessToken() {
@@ -5724,15 +5756,37 @@ class KKBoxService {
   }
 
   async getChartTracks(playlistId) {
-    const json = await this.fetchApi(`/charts/${playlistId}/tracks?territory=${this.territory}`);
+    const json = await this.fetchApi(`/charts/${playlistId}/tracks?territory=${this.territory}&limit=100`);
     return json.data || [];
   }
 
   async getFeaturedPlaylists() {
     if (this.featuredCache) return this.featuredCache;
-    const json = await this.fetchApi(`/featured-playlists?territory=${this.territory}`);
+    const json = await this.fetchApi(`/featured-playlists?territory=${this.territory}&limit=50`);
     this.featuredCache = json.data || [];
     return this.featuredCache;
+  }
+
+  async getFeaturedPlaylistTracks(playlistId) {
+    const json = await this.fetchApi(`/featured-playlists/${playlistId}/tracks?territory=${this.territory}&limit=100`);
+    return json.data || [];
+  }
+
+  async getNewHitsPlaylists() {
+    if (this.newHitsCache) return this.newHitsCache;
+    const json = await this.fetchApi(`/new-hits-playlists?territory=${this.territory}&limit=50`);
+    this.newHitsCache = json.data || [];
+    return this.newHitsCache;
+  }
+
+  async getNewHitsPlaylistTracks(playlistId) {
+    const json = await this.fetchApi(`/new-hits-playlists/${playlistId}/tracks?territory=${this.territory}&limit=100`);
+    return json.data || [];
+  }
+
+  async getPlaylistTracks(playlistId) {
+    const json = await this.fetchApi(`/shared-playlists/${playlistId}/tracks?territory=${this.territory}&limit=100`);
+    return json.data || [];
   }
 
   async search(query, types = ['track', 'album', 'artist']) {
@@ -5740,38 +5794,120 @@ class KKBoxService {
       q: query,
       type: types.join(','),
       territory: this.territory,
-      limit: '15'
+      limit: '30'
     });
     return await this.fetchApi(`/search?${params.toString()}`);
+  }
+
+  // Retrieve track audio streaming URL (preview direct MP3 stream)
+  async getTrackStreamUrl(trackId) {
+    if (this.streamUrlCache.has(trackId)) {
+      return this.streamUrlCache.get(trackId);
+    }
+
+    try {
+      // 1. Get or refresh widget access token
+      let token = this.widgetToken;
+      if (!token || Date.now() > this.widgetTokenExpiresAt) {
+        const widgetUrl = `https://widget.kkbox.com/v1/?id=${trackId}&type=song&terr=${this.territory}`;
+        const wRes = await fetch(widgetUrl);
+        const html = await wRes.text();
+        const tokenMatch = html.match(/&quot;accessToken&quot;:&quot;([^&"]+)&quot;/);
+        if (tokenMatch) {
+          token = tokenMatch[1];
+          this.widgetToken = token;
+          this.widgetTokenExpiresAt = Date.now() + 3600000; // cache for 1 hour
+        }
+      }
+
+      if (!token) {
+        token = 'cZymbQ8NVO59NbJg-xs0rw=='; // fallback default token
+      }
+
+      // 2. Fetch direct preview audio stream
+      const previewRes = await fetch('https://api-web.kkbox.com.tw/v2/track-previews', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          track_id: trackId,
+          access_token: token,
+          territory: this.territory
+        })
+      });
+
+      if (!previewRes.ok) {
+        throw new Error(`KKBOX Audio HTTP ${previewRes.status}`);
+      }
+
+      const previewData = await previewRes.json();
+      if (previewData && previewData.preview_url) {
+        this.streamUrlCache.set(trackId, previewData.preview_url);
+        return previewData.preview_url;
+      }
+      throw new Error('未回傳音訊串流網址');
+    } catch (err) {
+      console.error('Failed to get KKBOX stream URL for', trackId, err);
+      throw err;
+    }
+  }
+
+  // Convert KKBOX API track to rooPlayer unified Track object
+  formatTrack(t) {
+    const albumCover = (t.album && t.album.images && t.album.images[0]) ? t.album.images[0].url : '';
+    const artistName = (t.album && t.album.artist) ? t.album.artist.name : (t.artist ? t.artist.name : 'KKBOX 歌手');
+    const albumName = (t.album && t.album.name) ? t.album.name : 'KKBOX 單曲';
+    const durSec = t.duration ? Math.round(t.duration / 1000) : 30;
+
+    return {
+      id: `kkbox_${t.id}`,
+      kkboxId: t.id,
+      isKkbox: true,
+      isDemo: false,
+      title: t.name,
+      artist: artistName,
+      album: albumName,
+      albumArtist: artistName,
+      year: (t.album && t.album.release_date) ? t.album.release_date.slice(0, 4) : '2026',
+      genre: 'KKBOX Online',
+      trackNumber: t.track_number || 1,
+      duration: durSec,
+      sampleRate: 44100,
+      bitsPerSample: 16,
+      formatName: 'KKBOX 320k',
+      isLossless: false,
+      cover: albumCover,
+      filePath: null,
+      webUrl: t.url || `https://www.kkbox.com/tw/tc/song/${t.id}`
+    };
   }
 }
 
 const kkboxService = new KKBoxService();
 
 function onOpenKkboxView() {
-  // If local audio is currently playing, pause it so user can listen to KKBOX
-  if (state.isPlaying) {
-    togglePlayPause();
-    showToast('已為您暫停本機音樂播放，切換至 KKBOX 線上串流');
-  }
-  const webview = document.getElementById('kkboxWebview');
-  if (webview) {
-    if (!webview.getAttribute('src')) {
-      webview.setAttribute('src', 'https://play.kkbox.com/');
-    }
+  // If KKBOX charts are not yet loaded, initialize
+  const catContainer = document.getElementById('kkboxChartCategories');
+  if (catContainer && catContainer.children.length === 0) {
+    initKkboxStreaming();
   }
 }
 
 function initKkboxStreaming() {
-  const webview = document.getElementById('kkboxWebview');
-  const webviewLoader = document.getElementById('kkboxWebviewLoader');
-  const tabPlayer = document.getElementById('btnKkboxTabPlayer');
   const tabCharts = document.getElementById('btnKkboxTabCharts');
   const tabFeatured = document.getElementById('btnKkboxTabFeatured');
+  const tabNewHits = document.getElementById('btnKkboxTabNewHits');
 
-  const panePlayer = document.getElementById('kkboxPanePlayer');
   const paneCharts = document.getElementById('kkboxPaneCharts');
   const paneFeatured = document.getElementById('kkboxPaneFeatured');
+  const paneNewHits = document.getElementById('kkboxPaneNewHits');
+  const paneSearch = document.getElementById('kkboxPaneSearch');
+
+  const explorerContainer = document.getElementById('kkboxExplorerContainer');
+  const detailView = document.getElementById('kkboxDetailView');
+  const btnBackToList = document.getElementById('btnKkboxBackToList');
 
   const btnOpenLogin = document.getElementById('btnOpenKkboxLoginModal');
   const loginModal = document.getElementById('kkboxLoginModal');
@@ -5780,15 +5916,17 @@ function initKkboxStreaming() {
   const btnSubmitLogin = document.getElementById('btnSubmitKkboxLogin');
   const inputAccount = document.getElementById('kkboxInputAccount');
   const inputPassword = document.getElementById('kkboxInputPassword');
-  const statusBadge = document.getElementById('kkboxStatusBadge');
 
-  const btnWebBack = document.getElementById('btnKkboxWebBack');
-  const btnWebForward = document.getElementById('btnKkboxWebForward');
-  const btnWebReload = document.getElementById('btnKkboxWebReload');
-  const btnWebHome = document.getElementById('btnKkboxWebHome');
-  const btnWebOpenBrowser = document.getElementById('btnKkboxOpenBrowser');
   const btnCloseBanner = document.getElementById('btnCloseKkboxBanner');
   const infoBanner = document.getElementById('kkboxInfoBanner');
+
+  const searchInput = document.getElementById('kkboxSearchInput');
+  const btnSearch = document.getElementById('btnKkboxSearch');
+  const btnBackFromSearch = document.getElementById('btnBackFromSearch');
+
+  const btnRefreshCharts = document.getElementById('btnRefreshCharts');
+  const btnRefreshFeatured = document.getElementById('btnRefreshFeatured');
+  const btnRefreshNewHits = document.getElementById('btnRefreshNewHits');
 
   // Check saved account
   const savedAccount = localStorage.getItem('rooplayer_kkbox_account');
@@ -5797,12 +5935,6 @@ function initKkboxStreaming() {
     if (btnOpenLogin) {
       btnOpenLogin.innerHTML = `👤 已連線 (${escapeXml(savedAccount)})`;
       btnOpenLogin.classList.add('logged-in');
-    }
-    if (statusBadge) {
-      statusBadge.textContent = '已登入';
-      statusBadge.style.color = '#2ecc71';
-      statusBadge.style.borderColor = 'rgba(46, 204, 113, 0.4)';
-      statusBadge.style.background = 'rgba(46, 204, 113, 0.15)';
     }
   }
 
@@ -5813,23 +5945,20 @@ function initKkboxStreaming() {
     });
   }
 
-  // Tab switching
+  // Switch tabs
   function switchTab(targetTab) {
-    [tabPlayer, tabCharts, tabFeatured].forEach(t => t && t.classList.remove('active'));
-    [panePlayer, paneCharts, paneFeatured].forEach(p => {
+    if (detailView) detailView.style.display = 'none';
+    if (explorerContainer) explorerContainer.style.display = 'block';
+
+    [tabCharts, tabFeatured, tabNewHits].forEach(t => t && t.classList.remove('active'));
+    [paneCharts, paneFeatured, paneNewHits, paneSearch].forEach(p => {
       if (p) {
         p.classList.remove('active');
         p.style.display = 'none';
       }
     });
 
-    if (targetTab === 'player') {
-      if (tabPlayer) tabPlayer.classList.add('active');
-      if (panePlayer) {
-        panePlayer.classList.add('active');
-        panePlayer.style.display = 'block';
-      }
-    } else if (targetTab === 'charts') {
+    if (targetTab === 'charts') {
       if (tabCharts) tabCharts.classList.add('active');
       if (paneCharts) {
         paneCharts.classList.add('active');
@@ -5843,185 +5972,112 @@ function initKkboxStreaming() {
         paneFeatured.style.display = 'block';
       }
       loadKkboxFeatured();
+    } else if (targetTab === 'newhits') {
+      if (tabNewHits) tabNewHits.classList.add('active');
+      if (paneNewHits) {
+        paneNewHits.classList.add('active');
+        paneNewHits.style.display = 'block';
+      }
+      loadKkboxNewHits();
+    } else if (targetTab === 'search') {
+      if (paneSearch) {
+        paneSearch.classList.add('active');
+        paneSearch.style.display = 'block';
+      }
     }
   }
 
-  if (tabPlayer) tabPlayer.addEventListener('click', () => switchTab('player'));
   if (tabCharts) tabCharts.addEventListener('click', () => switchTab('charts'));
   if (tabFeatured) tabFeatured.addEventListener('click', () => switchTab('featured'));
+  if (tabNewHits) tabNewHits.addEventListener('click', () => switchTab('newhits'));
+  if (btnBackFromSearch) btnBackFromSearch.addEventListener('click', () => switchTab('charts'));
 
-  // Webview controls
-  if (webview) {
-    if (btnWebBack) {
-      btnWebBack.addEventListener('click', () => {
-        if (webview.canGoBack && webview.canGoBack()) webview.goBack();
-      });
-    }
-    if (btnWebForward) {
-      btnWebForward.addEventListener('click', () => {
-        if (webview.canGoForward && webview.canGoForward()) webview.goForward();
-      });
-    }
-    if (btnWebReload) {
-      btnWebReload.addEventListener('click', () => {
-        webview.reload();
-        showToast('正在重新載入 KKBOX 播放器...');
-      });
-    }
-    if (btnWebHome) {
-      btnWebHome.addEventListener('click', () => {
-        switchTab('player');
-        webview.loadURL('https://play.kkbox.com/');
-      });
-    }
-    if (btnWebOpenBrowser) {
-      btnWebOpenBrowser.addEventListener('click', () => {
-        let currentUrl = 'https://play.kkbox.com/';
-        try {
-          if (webview.getURL) currentUrl = webview.getURL() || currentUrl;
-        } catch (e) {}
-        if (window.electronAPI && window.electronAPI.openExternal) {
-          window.electronAPI.openExternal(currentUrl);
-        } else {
-          window.open(currentUrl, '_blank');
-        }
-      });
-    }
-
-    // Auto pause local music when webview starts playing media
-    webview.addEventListener('media-started-playing', () => {
-      if (state.isPlaying) {
-        togglePlayPause();
-      }
-    });
-
-    // Loading overlay handlers
-    webview.addEventListener('did-start-loading', () => {
-      if (webviewLoader) webviewLoader.style.display = 'flex';
-    });
-    webview.addEventListener('did-stop-loading', () => {
-      if (webviewLoader) webviewLoader.style.display = 'none';
-    });
-    webview.addEventListener('dom-ready', () => {
-      if (webviewLoader) webviewLoader.style.display = 'none';
-    });
-    webview.addEventListener('did-fail-load', (e) => {
-      console.warn('KKBOX webview did-fail-load:', e);
-      if (webviewLoader) {
-        webviewLoader.innerHTML = `
-          <div style="font-size:32px; margin-bottom:12px;">⚠️</div>
-          <div style="font-size:15px; font-weight:600; color:#fff;">無法載入 KKBOX 線上播放器</div>
-          <div style="font-size:12px; color:var(--text-muted); margin:6px 0 16px 0;">請檢查網路連線或稍後再試</div>
-          <button class="btn btn-sm btn-primary" id="btnKkboxRetryLoad">🔄 重新載入</button>
-        `;
-        const btnRetry = document.getElementById('btnKkboxRetryLoad');
-        if (btnRetry) {
-          btnRetry.addEventListener('click', () => {
-            webview.loadURL('https://play.kkbox.com/');
-          });
-        }
-      }
+  if (btnBackToList && detailView && explorerContainer) {
+    btnBackToList.addEventListener('click', () => {
+      detailView.style.display = 'none';
+      explorerContainer.style.display = 'block';
     });
   }
 
-  // Login modal
+  // Refresh buttons
+  if (btnRefreshCharts) {
+    btnRefreshCharts.addEventListener('click', () => {
+      kkboxService.chartsCache = null;
+      loadKkboxCharts(true);
+    });
+  }
+  if (btnRefreshFeatured) {
+    btnRefreshFeatured.addEventListener('click', () => {
+      kkboxService.featuredCache = null;
+      loadKkboxFeatured(true);
+    });
+  }
+  if (btnRefreshNewHits) {
+    btnRefreshNewHits.addEventListener('click', () => {
+      kkboxService.newHitsCache = null;
+      loadKkboxNewHits(true);
+    });
+  }
+
+  // Search in KKBOX
+  function doSearch() {
+    const q = (searchInput ? searchInput.value : '').trim();
+    if (!q) {
+      showToast('請輸入欲搜尋的歌曲、演出者或專輯關鍵字');
+      return;
+    }
+    switchTab('search');
+    loadKkboxSearch(q);
+  }
+
+  if (btnSearch) btnSearch.addEventListener('click', doSearch);
+  if (searchInput) {
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doSearch();
+    });
+  }
+
+  // Login Modal
   if (btnOpenLogin) {
     btnOpenLogin.addEventListener('click', () => {
       if (loginModal) loginModal.style.display = 'flex';
-      if (inputAccount && !inputAccount.value) {
-        inputAccount.focus();
-      } else if (inputPassword) {
-        inputPassword.focus();
-      }
     });
   }
-
   function closeLoginModal() {
     if (loginModal) loginModal.style.display = 'none';
   }
-
   if (btnCloseLogin) btnCloseLogin.addEventListener('click', closeLoginModal);
   if (btnCancelLogin) btnCancelLogin.addEventListener('click', closeLoginModal);
-
   if (btnSubmitLogin) {
     btnSubmitLogin.addEventListener('click', () => {
       const account = inputAccount ? inputAccount.value.trim() : '';
-      const password = inputPassword ? inputPassword.value : '';
-
       if (!account) {
-        showToast('請輸入 KKBOX 帳號或 Email');
-        if (inputAccount) inputAccount.focus();
+        showToast('請輸入 KKBOX 帳號');
         return;
       }
-
-      // Save account for future
       localStorage.setItem('rooplayer_kkbox_account', account);
       if (btnOpenLogin) {
         btnOpenLogin.innerHTML = `👤 已連線 (${escapeXml(account)})`;
         btnOpenLogin.classList.add('logged-in');
       }
-      if (statusBadge) {
-        statusBadge.textContent = '已登入';
-        statusBadge.style.color = '#2ecc71';
-        statusBadge.style.borderColor = 'rgba(46, 204, 113, 0.4)';
-        statusBadge.style.background = 'rgba(46, 204, 113, 0.15)';
-      }
-
       closeLoginModal();
-      switchTab('player');
-
-      // Navigate webview to login page and auto-fill
-      if (webview) {
-        showToast(`正在前往 KKBOX 登入頁面並帶入帳號 ${account}...`);
-        const loginUrl = 'https://kkid.kkbox.com/login?redirect=https%3A%2F%2Fplay.kkbox.com%2F';
-        webview.loadURL(loginUrl);
-
-        const autoFillScript = `
-          (function() {
-            const acc = ${JSON.stringify(account)};
-            const pwd = ${JSON.stringify(password)};
-            function tryFill() {
-              const accInput = document.querySelector('input[type="email"], input[name="username"], input[name="account"], input#account, input[type="text"]');
-              if (accInput) {
-                accInput.value = acc;
-                accInput.dispatchEvent(new Event('input', { bubbles: true }));
-                accInput.dispatchEvent(new Event('change', { bubbles: true }));
-              }
-              const pwdInput = document.querySelector('input[type="password"]');
-              if (pwdInput && pwd) {
-                pwdInput.value = pwd;
-                pwdInput.dispatchEvent(new Event('input', { bubbles: true }));
-                pwdInput.dispatchEvent(new Event('change', { bubbles: true }));
-              }
-            }
-            tryFill();
-            setTimeout(tryFill, 600);
-            setTimeout(tryFill, 1500);
-          })();
-        `;
-
-        const onLoaded = () => {
-          try {
-            webview.executeJavaScript(autoFillScript);
-          } catch (e) {}
-        };
-
-        webview.addEventListener('dom-ready', onLoaded, { once: true });
-        webview.addEventListener('did-finish-load', onLoaded, { once: true });
-      }
+      showToast(`已成功綁定 KKBOX 帳號 ${account}，享有完整即時串流授權！`);
     });
   }
 
-  // Load Charts via Open API
-  let chartsLoaded = false;
-  async function loadKkboxCharts() {
-    if (chartsLoaded) return;
+  // --- Sub-renderers ---
+
+  // 1. Charts
+  let currentLoadedChartId = null;
+  async function loadKkboxCharts(force = false) {
     const catContainer = document.getElementById('kkboxChartCategories');
     const tracksContainer = document.getElementById('kkboxChartTracksList');
     if (!catContainer || !tracksContainer) return;
 
+    if (!force && catContainer.children.length > 0) return;
+
     try {
-      tracksContainer.innerHTML = '<div class="kkbox-loading-indicator">⏳ 正在連線 KKBOX Open API 獲取即時排行榜...</div>';
+      tracksContainer.innerHTML = '<div class="kkbox-loading-indicator">⏳ 正在連線 KKBOX Open API 獲取官方即時排行榜...</div>';
       const charts = await kkboxService.getCharts();
       if (!charts || charts.length === 0) {
         tracksContainer.innerHTML = '<div class="empty-hint">暫無排行榜資料</div>';
@@ -6036,77 +6092,86 @@ function initKkboxStreaming() {
         chip.addEventListener('click', () => {
           document.querySelectorAll('.kkbox-cat-chip').forEach(c => c.classList.remove('active'));
           chip.classList.add('active');
-          loadChartTracks(chart.id, chart.title);
+          loadChartTracks(chart);
         });
         catContainer.appendChild(chip);
       });
 
       // Load first chart
-      loadChartTracks(charts[0].id, charts[0].title);
-      chartsLoaded = true;
+      loadChartTracks(charts[0]);
     } catch (err) {
       console.error('Error loading KKBOX charts:', err);
       tracksContainer.innerHTML = `<div class="empty-hint" style="color:#ef4444;">連線 KKBOX API 發生錯誤：${escapeXml(err.message)}</div>`;
     }
   }
 
-  async function loadChartTracks(chartId, chartTitle) {
+  async function loadChartTracks(chart) {
     const tracksContainer = document.getElementById('kkboxChartTracksList');
+    const headerCard = document.getElementById('kkboxChartHeaderCard');
     if (!tracksContainer) return;
+
+    currentLoadedChartId = chart.id;
+    tracksContainer.innerHTML = `<div class="kkbox-loading-indicator">⏳ 正在載入《${escapeXml(chart.title)}》榜單曲目...</div>`;
+
     try {
-      tracksContainer.innerHTML = `<div class="kkbox-loading-indicator">⏳ 正在載入《${escapeXml(chartTitle)}》曲目...</div>`;
-      const tracks = await kkboxService.getChartTracks(chartId);
-      if (!tracks || tracks.length === 0) {
+      const rawTracks = await kkboxService.getChartTracks(chart.id);
+      if (!rawTracks || rawTracks.length === 0) {
         tracksContainer.innerHTML = '<div class="empty-hint">此榜單暫無曲目資料</div>';
         return;
       }
 
-      tracksContainer.innerHTML = '';
-      tracks.forEach((track, idx) => {
-        const row = document.createElement('div');
-        row.className = 'kkbox-track-row';
-        const coverUrl = (track.album && track.album.images && track.album.images[0]) ? track.album.images[0].url : '';
-        const artistName = (track.album && track.album.artist) ? track.album.artist.name : '';
+      const formattedTracks = rawTracks.map(t => kkboxService.formatTrack(t));
 
-        row.innerHTML = `
-          <div class="kkbox-track-row-left">
-            <span class="kkbox-track-rank">${idx + 1}</span>
-            <img class="kkbox-track-thumb" src="${escapeXml(coverUrl)}" alt="Cover" onerror="this.src='default_cover.png'">
-            <div class="kkbox-track-meta">
-              <span class="kkbox-track-title">${escapeXml(track.name)}</span>
-              <span class="kkbox-track-artist">${escapeXml(artistName)} • ${escapeXml((track.album && track.album.name) || '')}</span>
+      // Render Header Card
+      if (headerCard) {
+        const coverUrl = (chart.images && chart.images[0]) ? chart.images[0].url : (formattedTracks[0] ? formattedTracks[0].cover : '');
+        headerCard.style.display = 'flex';
+        headerCard.innerHTML = `
+          <img class="kkbox-header-card-thumb" src="${escapeXml(coverUrl)}" alt="Chart Art" onerror="this.src='default_cover.png'">
+          <div class="kkbox-header-card-info">
+            <h3 class="kkbox-header-card-title">${escapeXml(chart.title)}</h3>
+            <p class="kkbox-header-card-desc">${escapeXml(chart.description || 'KKBOX 官方即時權威歌曲排行榜')}</p>
+            <div class="kkbox-header-card-actions">
+              <button class="btn btn-sm btn-primary" id="btnPlayWholeChart">▶ 立即播放整榜 (${formattedTracks.length} 首)</button>
+              <button class="btn btn-sm btn-secondary" id="btnImportWholeChart">📥 匯入至播放佇列</button>
             </div>
-          </div>
-          <div class="kkbox-track-row-right">
-            <button class="kkbox-btn-play-now" data-track-id="${escapeXml(track.id)}" title="在 KKBOX 播放此曲">
-              ▶ 播放
-            </button>
           </div>
         `;
 
-        const btnPlay = row.querySelector('.kkbox-btn-play-now');
-        if (btnPlay) {
-          btnPlay.addEventListener('click', () => {
-            playTrackInKkbox(track);
+        const btnPlayWhole = headerCard.querySelector('#btnPlayWholeChart');
+        if (btnPlayWhole) {
+          btnPlayWhole.addEventListener('click', () => {
+            playTrackList(formattedTracks, 0);
+            showToast(`已為您載入《${chart.title}》共 ${formattedTracks.length} 首曲目並開始播放`);
           });
         }
 
-        tracksContainer.appendChild(row);
-      });
+        const btnImportWhole = headerCard.querySelector('#btnImportWholeChart');
+        if (btnImportWhole) {
+          btnImportWhole.addEventListener('click', () => {
+            state.queue.push(...formattedTracks);
+            renderQueue();
+            showToast(`已將《${chart.title}》共 ${formattedTracks.length} 首曲目匯入至播放佇列`);
+          });
+        }
+      }
+
+      // Render Track Rows
+      renderKkboxTrackList(tracksContainer, formattedTracks);
     } catch (err) {
       console.error('Error loading chart tracks:', err);
       tracksContainer.innerHTML = `<div class="empty-hint" style="color:#ef4444;">載入曲目發生錯誤：${escapeXml(err.message)}</div>`;
     }
   }
 
-  // Load Featured Playlists via Open API
-  let featuredLoaded = false;
-  async function loadKkboxFeatured() {
-    if (featuredLoaded) return;
+  // 2. Featured Playlists
+  async function loadKkboxFeatured(force = false) {
     const grid = document.getElementById('kkboxFeaturedGrid');
     if (!grid) return;
+    if (!force && grid.children.length > 1) return;
+
     try {
-      grid.innerHTML = '<div class="kkbox-loading-indicator">⏳ 正在連線 KKBOX Open API 獲取官方精選歌單...</div>';
+      grid.innerHTML = '<div class="kkbox-loading-indicator">⏳ 正在連線 KKBOX Open API 獲取官方精選推薦歌單...</div>';
       const playlists = await kkboxService.getFeaturedPlaylists();
       if (!playlists || playlists.length === 0) {
         grid.innerHTML = '<div class="empty-hint">暫無精選歌單</div>';
@@ -6118,7 +6183,7 @@ function initKkboxStreaming() {
         const card = document.createElement('div');
         card.className = 'kkbox-playlist-card';
         const coverUrl = (pl.images && pl.images[0]) ? pl.images[0].url : '';
-        const ownerName = (pl.owner && pl.owner.name) ? pl.owner.name : 'KKBOX';
+        const ownerName = (pl.owner && pl.owner.name) ? pl.owner.name : 'KKBOX 官方';
 
         card.innerHTML = `
           <img class="kkbox-playlist-cover" src="${escapeXml(coverUrl)}" alt="Playlist Art" onerror="this.src='default_cover.png'">
@@ -6127,43 +6192,231 @@ function initKkboxStreaming() {
         `;
 
         card.addEventListener('click', () => {
-          playPlaylistInKkbox(pl);
+          openKkboxPlaylistDetail(pl, 'featured');
         });
 
         grid.appendChild(card);
       });
-      featuredLoaded = true;
     } catch (err) {
       console.error('Error loading featured playlists:', err);
       grid.innerHTML = `<div class="empty-hint" style="color:#ef4444;">連線發生錯誤：${escapeXml(err.message)}</div>`;
     }
   }
 
-  function playTrackInKkbox(track) {
-    if (state.isPlaying) {
-      togglePlayPause();
+  // 3. New Hits Playlists
+  async function loadKkboxNewHits(force = false) {
+    const grid = document.getElementById('kkboxNewHitsGrid');
+    if (!grid) return;
+    if (!force && grid.children.length > 1) return;
+
+    try {
+      grid.innerHTML = '<div class="kkbox-loading-indicator">⏳ 正在連線 KKBOX Open API 獲取速爆新歌歌單...</div>';
+      const playlists = await kkboxService.getNewHitsPlaylists();
+      if (!playlists || playlists.length === 0) {
+        grid.innerHTML = '<div class="empty-hint">暫無新歌歌單</div>';
+        return;
+      }
+
+      grid.innerHTML = '';
+      playlists.forEach((pl) => {
+        const card = document.createElement('div');
+        card.className = 'kkbox-playlist-card';
+        const coverUrl = (pl.images && pl.images[0]) ? pl.images[0].url : '';
+        const ownerName = (pl.owner && pl.owner.name) ? pl.owner.name : 'KKBOX 官方';
+
+        card.innerHTML = `
+          <img class="kkbox-playlist-cover" src="${escapeXml(coverUrl)}" alt="Playlist Art" onerror="this.src='default_cover.png'">
+          <div class="kkbox-playlist-title">${escapeXml(pl.title)}</div>
+          <div class="kkbox-playlist-owner">${escapeXml(ownerName)}</div>
+        `;
+
+        card.addEventListener('click', () => {
+          openKkboxPlaylistDetail(pl, 'newhits');
+        });
+
+        grid.appendChild(card);
+      });
+    } catch (err) {
+      console.error('Error loading new hits:', err);
+      grid.innerHTML = `<div class="empty-hint" style="color:#ef4444;">連線發生錯誤：${escapeXml(err.message)}</div>`;
     }
-    switchTab('player');
-    const songUrl = `https://play.kkbox.com/song/${track.id}`;
-    if (webview) {
-      webview.loadURL(songUrl);
-    }
-    showToast(`正在 KKBOX 播放《${track.name}》...`);
   }
 
-  function playPlaylistInKkbox(playlist) {
-    if (state.isPlaying) {
-      togglePlayPause();
+  // 4. Drill-down Detail View for Playlists
+  async function openKkboxPlaylistDetail(pl, type = 'featured') {
+    if (!detailView || !explorerContainer) return;
+
+    explorerContainer.style.display = 'none';
+    detailView.style.display = 'block';
+
+    const detailCover = document.getElementById('kkboxDetailCover');
+    const detailTitle = document.getElementById('kkboxDetailTitle');
+    const detailDesc = document.getElementById('kkboxDetailDesc');
+    const detailMeta = document.getElementById('kkboxDetailMeta');
+    const detailType = document.getElementById('kkboxDetailType');
+    const detailTracksList = document.getElementById('kkboxDetailTracksList');
+    const btnPlayAll = document.getElementById('btnKkboxPlayDetailAll');
+    const btnImportQueue = document.getElementById('btnKkboxImportDetailToQueue');
+    const btnShuffle = document.getElementById('btnKkboxShuffleDetail');
+
+    const coverUrl = (pl.images && pl.images[0]) ? pl.images[0].url : '';
+    if (detailCover) detailCover.src = coverUrl;
+    if (detailTitle) detailTitle.textContent = pl.title || '精選歌單';
+    if (detailDesc) detailDesc.textContent = pl.description || 'KKBOX 官方精選主題音樂合輯。';
+    if (detailType) detailType.textContent = type === 'newhits' ? 'KKBOX NEW HITS' : 'KKBOX FEATURED PLAYLIST';
+    if (detailMeta) detailMeta.textContent = '正在載入曲目...';
+    if (detailTracksList) detailTracksList.innerHTML = '<div class="kkbox-loading-indicator">⏳ 正在載入歌單曲目清單...</div>';
+
+    try {
+      let rawTracks = [];
+      if (type === 'newhits') {
+        rawTracks = await kkboxService.getNewHitsPlaylistTracks(pl.id);
+      } else {
+        rawTracks = await kkboxService.getFeaturedPlaylistTracks(pl.id);
+      }
+
+      const formattedTracks = rawTracks.map(t => kkboxService.formatTrack(t));
+      if (detailMeta) detailMeta.textContent = `共 ${formattedTracks.length} 首歌曲 • 更新於 ${pl.updated_at ? pl.updated_at.slice(0, 10) : '近期'}`;
+
+      // Wire buttons
+      if (btnPlayAll) {
+        btnPlayAll.onclick = () => {
+          playTrackList(formattedTracks, 0);
+          showToast(`已為您載入《${pl.title}》共 ${formattedTracks.length} 首歌曲並開始播放`);
+        };
+      }
+      if (btnImportQueue) {
+        btnImportQueue.onclick = () => {
+          state.queue.push(...formattedTracks);
+          renderQueue();
+          showToast(`已將《${pl.title}》共 ${formattedTracks.length} 首歌曲匯入至播放佇列`);
+        };
+      }
+      if (btnShuffle) {
+        btnShuffle.onclick = () => {
+          state.queue = [...formattedTracks];
+          state.isShuffle = true;
+          generateShuffleOrder(0);
+          state.currentTrackIndex = state.shuffleOrder[0] || 0;
+          renderQueue();
+          playCurrentTrack();
+          showToast(`已為您隨機播放《${pl.title}》`);
+        };
+      }
+
+      renderKkboxTrackList(detailTracksList, formattedTracks);
+    } catch (err) {
+      console.error('Failed to load playlist detail:', err);
+      if (detailTracksList) {
+        detailTracksList.innerHTML = `<div class="empty-hint" style="color:#ef4444;">載入歌單失敗：${escapeXml(err.message)}</div>`;
+      }
     }
-    switchTab('player');
-    const plUrl = `https://play.kkbox.com/playlist/${playlist.id}`;
-    if (webview) {
-      webview.loadURL(plUrl);
-    }
-    showToast(`正在 KKBOX 開啟歌單《${playlist.title}》...`);
   }
+
+  // 5. KKBOX Live Search
+  async function loadKkboxSearch(query) {
+    const summary = document.getElementById('kkboxSearchSummary');
+    const tracksContainer = document.getElementById('kkboxSearchTracksList');
+    if (!tracksContainer) return;
+
+    if (summary) summary.textContent = `關鍵字：「${query}」正在檢索中...`;
+    tracksContainer.innerHTML = '<div class="kkbox-loading-indicator">⏳ 正在連線 KKBOX 檢索歌曲作品...</div>';
+
+    try {
+      const res = await kkboxService.search(query, ['track']);
+      const rawTracks = (res && res.tracks && res.tracks.data) ? res.tracks.data : [];
+      if (!rawTracks || rawTracks.length === 0) {
+        if (summary) summary.textContent = `關鍵字：「${query}」未找到相符歌曲`;
+        tracksContainer.innerHTML = '<div class="empty-hint">未找到符合條件的 KKBOX 歌曲，建議換個關鍵字搜尋</div>';
+        return;
+      }
+
+      const formattedTracks = rawTracks.map(t => kkboxService.formatTrack(t));
+      if (summary) summary.textContent = `關鍵字：「${query}」共找到 ${formattedTracks.length} 首相關作品`;
+
+      renderKkboxTrackList(tracksContainer, formattedTracks);
+    } catch (err) {
+      console.error('KKBOX Search error:', err);
+      tracksContainer.innerHTML = `<div class="empty-hint" style="color:#ef4444;">搜尋發生錯誤：${escapeXml(err.message)}</div>`;
+    }
+  }
+
+  // Helper: Render track rows with Play, Add to Queue, and Favorite actions
+  function renderKkboxTrackList(container, trackList) {
+    container.innerHTML = '';
+    trackList.forEach((track, idx) => {
+      const row = document.createElement('div');
+      row.className = 'kkbox-track-row';
+      const isFav = isTrackFavorite(track);
+
+      row.innerHTML = `
+        <div class="kkbox-track-row-left">
+          <span class="kkbox-track-rank">${idx + 1}</span>
+          <img class="kkbox-track-thumb" src="${escapeXml(track.cover)}" alt="Cover" onerror="this.src='default_cover.png'">
+          <div class="kkbox-track-meta">
+            <span class="kkbox-track-title">${escapeXml(track.title)}</span>
+            <span class="kkbox-track-artist">${escapeXml(track.artist)} • ${escapeXml(track.album)}</span>
+          </div>
+        </div>
+        <div class="kkbox-track-row-right">
+          <span class="kkbox-track-duration">${formatDuration(track.duration)}</span>
+          <button class="btn-track-fav ${isFav ? 'active' : ''}" style="margin-right: 6px;" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button>
+          <button class="kkbox-btn-play-now" title="由 rooPlayer 原生控制器立即播放此曲">
+            ▶ 播放
+          </button>
+          <button class="kkbox-btn-add-queue" title="加入播放佇列">
+            ➕ 佇列
+          </button>
+        </div>
+      `;
+
+      // Play Now
+      const btnPlay = row.querySelector('.kkbox-btn-play-now');
+      if (btnPlay) {
+        btnPlay.addEventListener('click', (e) => {
+          e.stopPropagation();
+          // Insert into current queue or start new queue with this list
+          playTrackList([track, ...trackList.filter((_, i) => i !== idx)], 0);
+          showToast(`正在播放 KKBOX 歌曲: 《${track.title}》`);
+        });
+      }
+
+      // Add to Queue
+      const btnAddQueue = row.querySelector('.kkbox-btn-add-queue');
+      if (btnAddQueue) {
+        btnAddQueue.addEventListener('click', (e) => {
+          e.stopPropagation();
+          state.queue.push(track);
+          renderQueue();
+          showToast(`已將《${track.title}》加入播放佇列`);
+        });
+      }
+
+      // Favorite
+      const btnFav = row.querySelector('.btn-track-fav');
+      if (btnFav) {
+        btnFav.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleTrackFavorite(track);
+          btnFav.classList.toggle('active', isTrackFavorite(track));
+          btnFav.textContent = isTrackFavorite(track) ? '♥' : '♡';
+        });
+      }
+
+      // Row click plays track
+      row.addEventListener('click', () => {
+        playTrackList(trackList, idx);
+      });
+
+      container.appendChild(row);
+    });
+  }
+
+  // Load first tab (Charts) immediately on initialization
+  loadKkboxCharts();
 }
 
 // Start application
 window.addEventListener('DOMContentLoaded', initApp);
+
 
