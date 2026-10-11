@@ -262,9 +262,11 @@ class DlnaManager extends EventEmitter {
 
       const dsfBuf = this.nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode, 300);
 
+      const totalSize = dsfBuf.length;
+      const range = req.headers.range;
+
       const headers = {
         'Content-Type': 'audio/x-dsf',
-        'Content-Length': dsfBuf.length,
         'Accept-Ranges': 'bytes',
         'transferMode.dlna.org': 'Streaming',
         'contentFeatures.dlna.org': 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
@@ -272,13 +274,27 @@ class DlnaManager extends EventEmitter {
       };
 
       if (req.method === 'HEAD') {
-        res.writeHead(200, headers);
+        res.writeHead(200, { ...headers, 'Content-Length': totalSize });
         res.end();
         return;
       }
 
-      res.writeHead(200, headers);
-      res.end(dsfBuf);
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+        const chunkSize = (end - start) + 1;
+
+        res.writeHead(206, {
+          ...headers,
+          'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+          'Content-Length': chunkSize
+        });
+        res.end(dsfBuf.subarray(start, end + 1));
+      } else {
+        res.writeHead(200, { ...headers, 'Content-Length': totalSize });
+        res.end(dsfBuf);
+      }
     } catch (err) {
       console.error('[DLNA] handleDsdModulationStream error:', err);
       if (!res.headersSent) {
@@ -297,9 +313,11 @@ class DlnaManager extends EventEmitter {
       return;
     }
 
+    const totalSize = wavBuf.length;
+    const range = req.headers.range;
+
     const headers = {
       'Content-Type': 'audio/wav',
-      'Content-Length': wavBuf.length,
       'Accept-Ranges': 'bytes',
       'Access-Control-Allow-Origin': '*',
       'transferMode.dlna.org': 'Streaming',
@@ -307,13 +325,27 @@ class DlnaManager extends EventEmitter {
     };
 
     if (req.method === 'HEAD') {
-      res.writeHead(200, headers);
+      res.writeHead(200, { ...headers, 'Content-Length': totalSize });
       res.end();
       return;
     }
 
-    res.writeHead(200, headers);
-    res.end(wavBuf);
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+      const chunkSize = (end - start) + 1;
+
+      res.writeHead(206, {
+        ...headers,
+        'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+        'Content-Length': chunkSize
+      });
+      res.end(wavBuf.subarray(start, end + 1));
+    } else {
+      res.writeHead(200, { ...headers, 'Content-Length': totalSize });
+      res.end(wavBuf);
+    }
   }
 
   // Handle High-Res PCM Upsampling to 24-bit WAV (Pure Native Engine)
@@ -337,9 +369,11 @@ class DlnaManager extends EventEmitter {
         outBuf = this.nativeAudioEngine.encodeWav24(up.outL, up.outR, sampleRate);
       }
 
+      const totalSize = outBuf.length;
+      const range = req.headers.range;
+
       const headers = {
         'Content-Type': mime,
-        'Content-Length': outBuf.length,
         'Accept-Ranges': 'bytes',
         'Access-Control-Allow-Origin': '*',
         'transferMode.dlna.org': 'Streaming',
@@ -347,13 +381,27 @@ class DlnaManager extends EventEmitter {
       };
 
       if (req.method === 'HEAD') {
-        res.writeHead(200, headers);
+        res.writeHead(200, { ...headers, 'Content-Length': totalSize });
         res.end();
         return;
       }
 
-      res.writeHead(200, headers);
-      res.end(outBuf);
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+        const chunkSize = (end - start) + 1;
+
+        res.writeHead(206, {
+          ...headers,
+          'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+          'Content-Length': chunkSize
+        });
+        res.end(outBuf.subarray(start, end + 1));
+      } else {
+        res.writeHead(200, { ...headers, 'Content-Length': totalSize });
+        res.end(outBuf);
+      }
     } catch (err) {
       console.error('[DLNA] handleSoxTranscodeStream error:', err);
       if (!res.headersSent) {
@@ -1279,7 +1327,9 @@ class DlnaManager extends EventEmitter {
         });
 
         const timeSinceStart = Date.now() - this.trackPlayTimestamp;
-        const canTriggerEnded = (this.hasStartedPlaying || timeSinceStart > 12000) && (timeSinceStart > 4000);
+        // Safety guard: device must have genuinely transitioned to PLAYING and played at least 6 seconds,
+        // or 20 seconds must have elapsed since play command, avoiding early STOPPED buffer blips
+        const canTriggerEnded = (this.hasStartedPlaying && timeSinceStart > 6000) || (timeSinceStart > 20000);
 
         // Condition A: Standard DLNA state change to STOPPED / NO_MEDIA_PRESENT / COMPLETED
         const isDeviceStopped = (
@@ -1289,7 +1339,7 @@ class DlnaManager extends EventEmitter {
         );
 
         if (canTriggerEnded && isDeviceStopped && this.playbackState === 'PLAYING') {
-          console.log(`[DLNA] Track finished on renderer (state=${stateUpper}), triggering next track`);
+          console.log(`[DLNA] Track finished on renderer (state=${stateUpper}, elapsed=${timeSinceStart}ms), triggering next track`);
           this.playbackState = 'STOPPED';
           this.stopPositionPolling();
           this.emit('track-ended');
