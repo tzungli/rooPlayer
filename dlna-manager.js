@@ -1082,6 +1082,7 @@ class DlnaManager extends EventEmitter {
       this.currentDsdProcess = null;
     }
 
+    this.activeDeviceId = deviceId;
     this.currentTrack = track;
     this.currentDspOptions = dspOptions;
     this.trackPlayTimestamp = Date.now();
@@ -1554,8 +1555,28 @@ class DlnaManager extends EventEmitter {
   }
 
   // Cleanup on app exit
-  destroy() {
+  async destroy() {
     this.stopPositionPolling();
+    if (this.currentDsdProcess) {
+      try { this.currentDsdProcess.kill(); } catch (e) {}
+      this.currentDsdProcess = null;
+    }
+
+    // Proactively send Stop command to active DLNA renderer so music does not keep playing on hardware device
+    if (this.activeDeviceId && this.activeDeviceId !== 'local') {
+      const dev = this.devices.get(this.activeDeviceId);
+      if (dev && dev.avControlUrl) {
+        try {
+          await this.sendSoapRequest(
+            dev.avControlUrl,
+            'urn:schemas-upnp-org:service:AVTransport:1',
+            'Stop',
+            `<InstanceID>0</InstanceID>`
+          );
+        } catch (e) {}
+      }
+    }
+
     if (this.scanInterval) clearInterval(this.scanInterval);
     if (this.ssdpSocket) {
       try { this.ssdpSocket.close(); } catch (e) {}

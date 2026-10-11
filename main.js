@@ -140,13 +140,32 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('window-all-closed', () => {
+let isAppQuitting = false;
+
+async function cleanupAllAudioStreams() {
+  if (currentMainStreamProc) {
+    try { currentMainStreamProc.kill(); } catch (e) {}
+    currentMainStreamProc = null;
+  }
   if (dsdStreamServer) {
     try { dsdStreamServer.close(); } catch (e) {}
   }
   if (dlnaManager) {
-    try { dlnaManager.destroy(); } catch (e) {}
+    try { await dlnaManager.destroy(); } catch (e) {}
   }
+}
+
+app.on('before-quit', async (event) => {
+  if (!isAppQuitting) {
+    isAppQuitting = true;
+    event.preventDefault();
+    await cleanupAllAudioStreams();
+    app.quit();
+  }
+});
+
+app.on('window-all-closed', async () => {
+  await cleanupAllAudioStreams();
   if (process.platform !== 'darwin') app.quit();
 });
 
