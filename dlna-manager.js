@@ -106,7 +106,10 @@ class DlnaManager extends EventEmitter {
               res.end('File not found');
               return;
             }
-            this.handleDsdModulationStream(req, res, filePath, startSec, dsdMode, precision, track);
+            this.handleDsdModulationStream(req, res, filePath, startSec, dsdMode, precision, track).catch(e => {
+              console.error('handleDsdModulationStream error:', e);
+              if (!res.headersSent) { res.writeHead(500); res.end('DSD stream error'); }
+            });
           } else if (dsdMatch || pathname === '/dsd-stream' || pathname === '/dsd-stream/') {
             const token = dsdMatch ? dsdMatch[1] : null;
             const streamInfo = token ? this.activeStreams.get(token) : null;
@@ -143,7 +146,10 @@ class DlnaManager extends EventEmitter {
               res.end('File not found');
               return;
             }
-            this.handleSoxTranscodeStream(req, res, filePath, startSec, sampleRate, precision, dsdMode, track);
+            this.handleSoxTranscodeStream(req, res, filePath, startSec, sampleRate, precision, dsdMode, track).catch(e => {
+              console.error('handleSoxTranscodeStream error:', e);
+              if (!res.headersSent) { res.writeHead(500); res.end('Upsample stream error'); }
+            });
           } else if (coverMatch || pathname === '/cover' || pathname === '/cover/') {
             const token = coverMatch ? coverMatch[1] : null;
             const streamInfo = token ? this.activeStreams.get(token) : null;
@@ -245,33 +251,41 @@ class DlnaManager extends EventEmitter {
   }
 
   // Handle PCM to 1-bit DSD on-the-fly Delta-Sigma Modulation into Sony DSF stream (Pure Native Engine)
-  handleDsdModulationStream(req, res, filePath, startSec = 0, dsdMode = 'dsd64', precision = 24, track = null) {
-    const pcm = this.nativeAudioEngine.readPcmSamples(filePath, startSec);
-    if (!pcm) {
-      res.writeHead(500);
-      res.end('Native PCM read failed for DSD modulation');
-      return;
-    }
+  async handleDsdModulationStream(req, res, filePath, startSec = 0, dsdMode = 'dsd64', precision = 24, track = null) {
+    try {
+      const pcm = await this.nativeAudioEngine.readPcmSamples(filePath, startSec);
+      if (!pcm) {
+        res.writeHead(500);
+        res.end('Native PCM read failed for DSD modulation');
+        return;
+      }
 
-    const dsfBuf = this.nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode);
+      const dsfBuf = this.nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode, 300);
 
-    const headers = {
-      'Content-Type': 'audio/x-dsf',
-      'Content-Length': dsfBuf.length,
-      'Accept-Ranges': 'bytes',
-      'transferMode.dlna.org': 'Streaming',
-      'contentFeatures.dlna.org': 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
-      'Access-Control-Allow-Origin': '*'
-    };
+      const headers = {
+        'Content-Type': 'audio/x-dsf',
+        'Content-Length': dsfBuf.length,
+        'Accept-Ranges': 'bytes',
+        'transferMode.dlna.org': 'Streaming',
+        'contentFeatures.dlna.org': 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
+        'Access-Control-Allow-Origin': '*'
+      };
 
-    if (req.method === 'HEAD') {
+      if (req.method === 'HEAD') {
+        res.writeHead(200, headers);
+        res.end();
+        return;
+      }
+
       res.writeHead(200, headers);
-      res.end();
-      return;
+      res.end(dsfBuf);
+    } catch (err) {
+      console.error('[DLNA] handleDsdModulationStream error:', err);
+      if (!res.headersSent) {
+        res.writeHead(500);
+        res.end('DSD modulation error');
+      }
     }
-
-    res.writeHead(200, headers);
-    res.end(dsfBuf);
   }
 
   // Handle DSD (.dsf / .dff) on-the-fly decimation to 24-bit / 88.2 kHz WAV (Pure Native Engine)
@@ -303,42 +317,50 @@ class DlnaManager extends EventEmitter {
   }
 
   // Handle High-Res PCM Upsampling to 24-bit WAV (Pure Native Engine)
-  handleSoxTranscodeStream(req, res, filePath, startSec = 0, sampleRate = 192000, precision = 24, dsdMode = '', track = null) {
-    const pcm = this.nativeAudioEngine.readPcmSamples(filePath, startSec);
-    if (!pcm) {
-      res.writeHead(500);
-      res.end('Native PCM read failed for upsampling');
-      return;
-    }
+  async handleSoxTranscodeStream(req, res, filePath, startSec = 0, sampleRate = 192000, precision = 24, dsdMode = '', track = null) {
+    try {
+      const pcm = await this.nativeAudioEngine.readPcmSamples(filePath, startSec);
+      if (!pcm) {
+        res.writeHead(500);
+        res.end('Native PCM read failed for upsampling');
+        return;
+      }
 
-    let outBuf = null;
-    let mime = 'audio/wav';
+      let outBuf = null;
+      let mime = 'audio/wav';
 
-    if (dsdMode) {
-      outBuf = this.nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode);
-      mime = 'audio/x-dsf';
-    } else {
-      const up = this.nativeAudioEngine.upsampleHermite(pcm.left, pcm.right, pcm.sampleRate, sampleRate);
-      outBuf = this.nativeAudioEngine.encodeWav24(up.outL, up.outR, sampleRate);
-    }
+      if (dsdMode) {
+        outBuf = this.nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode, 300);
+        mime = 'audio/x-dsf';
+      } else {
+        const up = this.nativeAudioEngine.upsampleHermite(pcm.left, pcm.right, pcm.sampleRate, sampleRate);
+        outBuf = this.nativeAudioEngine.encodeWav24(up.outL, up.outR, sampleRate);
+      }
 
-    const headers = {
-      'Content-Type': mime,
-      'Content-Length': outBuf.length,
-      'Accept-Ranges': 'bytes',
-      'Access-Control-Allow-Origin': '*',
-      'transferMode.dlna.org': 'Streaming',
-      'contentFeatures.dlna.org': 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000'
-    };
+      const headers = {
+        'Content-Type': mime,
+        'Content-Length': outBuf.length,
+        'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
+        'transferMode.dlna.org': 'Streaming',
+        'contentFeatures.dlna.org': 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000'
+      };
 
-    if (req.method === 'HEAD') {
+      if (req.method === 'HEAD') {
+        res.writeHead(200, headers);
+        res.end();
+        return;
+      }
+
       res.writeHead(200, headers);
-      res.end();
-      return;
+      res.end(outBuf);
+    } catch (err) {
+      console.error('[DLNA] handleSoxTranscodeStream error:', err);
+      if (!res.headersSent) {
+        res.writeHead(500);
+        res.end('Upsample transcode error');
+      }
     }
-
-    res.writeHead(200, headers);
-    res.end(outBuf);
   }
 
   // Handle album cover image serving for DLNA Renderers
@@ -892,15 +914,15 @@ class DlnaManager extends EventEmitter {
       mimeType = 'audio/x-dsf';
       protocolInfo = 'http-get:*:audio/x-dsf:*';
     } else if (isNativeDsd) {
-      // Native DFF or DSF needing PCM decimation
-      streamUrl = `http://${localIp}:${this.streamingPort}/dsd-stream/${streamToken}/audio.flac`;
-      mimeType = 'audio/flac';
-      protocolInfo = 'http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
+      // Native DFF or DSF needing PCM decimation to 24-bit 88.2kHz WAV
+      streamUrl = `http://${localIp}:${this.streamingPort}/dsd-stream/${streamToken}/audio.wav`;
+      mimeType = 'audio/wav';
+      protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
     } else if (dspOptions && dspOptions.enabled) {
-      // PCM SoX Resampler upsampling
-      streamUrl = `http://${localIp}:${this.streamingPort}/sox-stream/${streamToken}/audio.flac`;
-      mimeType = 'audio/flac';
-      protocolInfo = 'http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
+      // PCM High-Res Upsampling to 24-bit WAV
+      streamUrl = `http://${localIp}:${this.streamingPort}/sox-stream/${streamToken}/audio.wav`;
+      mimeType = 'audio/wav';
+      protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
     } else {
       const fileExt = path.extname(track.filePath).toLowerCase() || '.flac';
       streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/track${fileExt}`;

@@ -14,10 +14,14 @@
  */
 
 const fs = require('fs');
+const path = require('path');
+const { FLACDecoder } = require('@wasm-audio-decoders/flac');
 
 class NativeAudioEngine {
   constructor() {
     this.name = 'rooPlayer Native Audiophile Engine';
+    this.flacDecoder = new FLACDecoder();
+    this.flacDecoderReady = this.flacDecoder.ready;
   }
 
   // ----------------------------------------------------
@@ -167,8 +171,48 @@ class NativeAudioEngine {
 
   // ----------------------------------------------------
   // 4. 通用 PCM 檔案讀取器 (解出正規化 -1.0 ~ +1.0 Float32Array 左右雙聲道)
+  // 支援 WAV, AIFF 及 FLAC (透過高效能 WASM libFLAC 解碼)
   // ----------------------------------------------------
-  readPcmSamples(filePath, startSec = 0, maxDurationSec = 600) {
+  async readPcmSamples(filePath, startSec = 0, maxDurationSec = 600) {
+    const ext = path.extname(filePath).toLowerCase();
+
+    // 4.1 FLAC Native WASM Decoding
+    if (ext === '.flac') {
+      try {
+        await this.flacDecoderReady;
+        const fileBuf = fs.readFileSync(filePath);
+        const decoded = await this.flacDecoder.decodeFile(fileBuf);
+        if (!decoded || !decoded.channelData || decoded.channelData.length === 0) {
+          return null;
+        }
+
+        const sampleRate = decoded.sampleRate || 44100;
+        const channels = decoded.channelData.length;
+        const fullFrames = decoded.channelData[0].length;
+
+        const startFrame = Math.min(fullFrames, Math.floor(startSec * sampleRate));
+        const maxFrames = Math.floor(maxDurationSec * sampleRate);
+        const frameCount = Math.min(fullFrames - startFrame, maxFrames);
+
+        const left = decoded.channelData[0].subarray(startFrame, startFrame + frameCount);
+        const right = (channels > 1)
+          ? decoded.channelData[1].subarray(startFrame, startFrame + frameCount)
+          : left;
+
+        return {
+          sampleRate,
+          channels: Math.min(2, channels),
+          frameCount,
+          left,
+          right
+        };
+      } catch (err) {
+        console.error('[NativeAudioEngine] FLAC WASM decode error:', err);
+        return null;
+      }
+    }
+
+    // 4.2 WAV / AIFF Direct Header & PCM Reading
     const wavInfo = this.parseWav(filePath);
     const aiffInfo = !wavInfo ? this.parseAiff(filePath) : null;
     const info = wavInfo || aiffInfo;
@@ -312,17 +356,18 @@ class NativeAudioEngine {
   }
 
   // ----------------------------------------------------
-  // 7. 5階高頻噪聲整形 1-bit Delta-Sigma Modulator (PCM ➔ DSD DSF)
+  // 7. 高頻噪聲整形 1-bit Delta-Sigma Modulator (PCM ➔ DSD DSF)
   // ----------------------------------------------------
-  encodeDsdDsf(left, right, srcRate, dsdMode = 'dsd64') {
+  encodeDsdDsf(left, right, srcRate, dsdMode = 'dsd64', maxDurationSec = 300) {
     const is48k = (srcRate % 48000 === 0);
     let dsdRate = is48k ? 3072000 : 2822400; // default dsd64
     if (dsdMode === 'dsd128') dsdRate = is48k ? 6144000 : 5644800;
     else if (dsdMode === 'dsd256') dsdRate = is48k ? 12288000 : 11289600;
     else if (dsdMode === 'dsd512') dsdRate = is48k ? 24576000 : 22579200;
 
+    const maxFrames = Math.floor(maxDurationSec * srcRate);
+    const inLen = Math.min(left.length, maxFrames);
     const ratio = dsdRate / srcRate;
-    const inLen = left.length;
     const outBits = Math.floor(inLen * ratio);
 
     const blockSize = 4096; // 4096 bytes = 32768 1-bit samples per channel block
@@ -359,9 +404,9 @@ class NativeAudioEngine {
     buf.write('data', off); off += 4;
     buf.writeBigUInt64LE(BigInt(12 + totalDataBytes), off); off += 8;
 
-    // 5th-Order Noise-Shaping Delta-Sigma Modulator
-    let a1_L = 0, a2_L = 0, a3_L = 0, a4_L = 0, a5_L = 0, y_L = 0;
-    let a1_R = 0, a2_R = 0, a3_R = 0, a4_R = 0, a5_R = 0, y_R = 0;
+    // Optimized High-Efficiency Noise-Shaping 1-bit Delta-Sigma Modulator
+    let a1_L = 0, a2_L = 0, a3_L = 0, y_L = 0;
+    let a1_R = 0, a2_R = 0, a3_R = 0, y_R = 0;
 
     for (let b = 0; b < totalBlocks; b++) {
       const leftBlockOffset = 92 + b * 2 * blockSize;
@@ -375,41 +420,32 @@ class NativeAudioEngine {
         for (let bit = 0; bit < 8; bit++) {
           const outIdx = startSampleIdx + byteIdx * 8 + bit;
           const pos = outIdx / ratio;
-          const idx = Math.floor(pos);
+          const idx = pos | 0;
           const t = pos - idx;
 
           let xL = 0, xR = 0;
-          if (idx < inLen) {
-            const idx0 = Math.max(0, idx - 1);
-            const idx1 = idx;
-            const idx2 = Math.min(inLen - 1, idx + 1);
-            const idx3 = Math.min(inLen - 1, idx + 2);
-
-            const y0_L = left[idx0], y1_L = left[idx1], y2_L = left[idx2], y3_L = left[idx3];
-            xL = (((0.5 * (y3_L - y0_L) + 1.5 * (y1_L - y2_L)) * t + (y0_L - 2.5 * y1_L + 2.0 * y2_L - 0.5 * y3_L)) * t + 0.5 * (y2_L - y0_L)) * t + y1_L;
-
-            const y0_R = right[idx0], y1_R = right[idx1], y2_R = right[idx2], y3_R = right[idx3];
-            xR = (((0.5 * (y3_R - y0_R) + 1.5 * (y1_R - y2_R)) * t + (y0_R - 2.5 * y1_R + 2.0 * y2_R - 0.5 * y3_R)) * t + 0.5 * (y2_R - y0_R)) * t + y1_R;
+          if (idx < inLen - 1) {
+            xL = left[idx] + t * (left[idx + 1] - left[idx]);
+            xR = right[idx] + t * (right[idx + 1] - right[idx]);
+          } else if (idx < inLen) {
+            xL = left[idx];
+            xR = right[idx];
           }
 
-          // Left channel 5th order modulation with 0.85 headroom scale
+          // Left channel 3rd order noise-shaping modulation
           const diffL = (xL * 0.85) - y_L;
           a1_L += diffL;
-          a2_L += a1_L - 0.001 * a3_L;
+          a2_L += a1_L - 0.05 * y_L;
           a3_L += a2_L;
-          a4_L += a3_L;
-          a5_L += a4_L;
-          y_L = (a5_L >= 0) ? 1.0 : -1.0;
+          y_L = (a3_L >= 0) ? 1.0 : -1.0;
           if (y_L > 0) byteValL |= (1 << bit);
 
-          // Right channel 5th order modulation
+          // Right channel 3rd order noise-shaping modulation
           const diffR = (xR * 0.85) - y_R;
           a1_R += diffR;
-          a2_R += a1_R - 0.001 * a3_R;
+          a2_R += a1_R - 0.05 * y_R;
           a3_R += a2_R;
-          a4_R += a3_R;
-          a5_R += a4_R;
-          y_R = (a5_R >= 0) ? 1.0 : -1.0;
+          y_R = (a3_R >= 0) ? 1.0 : -1.0;
           if (y_R > 0) byteValR |= (1 << bit);
         }
 

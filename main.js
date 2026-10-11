@@ -194,35 +194,44 @@ function startDsdStreamingServer() {
           return;
         }
 
-        // Read raw PCM samples from disk without any external process
-        const pcm = nativeAudioEngine.readPcmSamples(filePath, startSec);
-        if (!pcm) {
-          res.writeHead(500);
-          res.end('Native PCM read failed');
-          return;
-        }
+        // Read raw PCM samples from disk without any external process (async with WASM FLAC / WAV / AIFF)
+        nativeAudioEngine.readPcmSamples(filePath, startSec).then(pcm => {
+          if (!pcm) {
+            res.writeHead(500);
+            res.end('Native PCM read failed');
+            return;
+          }
 
-        let outBuf = null;
-        if (dsdMode) {
-          // Native DSD Modulation: Cubic Hermite 64x + 5th-order Delta-Sigma
-          outBuf = nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode);
-          res.writeHead(200, {
-            'Content-Type': 'audio/x-dsf',
-            'Content-Length': outBuf.length,
-            'Access-Control-Allow-Origin': '*'
-          });
-        } else {
-          // Native Cubic Hermite Upsampling to Target Sample Rate
-          const up = nativeAudioEngine.upsampleHermite(pcm.left, pcm.right, pcm.sampleRate, sampleRate);
-          outBuf = nativeAudioEngine.encodeWav24(up.outL, up.outR, sampleRate);
-          res.writeHead(200, {
-            'Content-Type': 'audio/wav',
-            'Content-Length': outBuf.length,
-            'Access-Control-Allow-Origin': '*'
-          });
-        }
+          let outBuf = null;
+          const isLocal = reqUrl.searchParams.get('local') === '1';
 
-        res.end(outBuf);
+          if (dsdMode && !isLocal) {
+            // Native DSD Modulation: Noise-Shaped Delta-Sigma Modulator (for DLNA / DSD DACs)
+            outBuf = nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode, 300);
+            res.writeHead(200, {
+              'Content-Type': 'audio/x-dsf',
+              'Content-Length': outBuf.length,
+              'Access-Control-Allow-Origin': '*'
+            });
+          } else {
+            // Native Cubic Hermite Upsampling to Target Sample Rate (WAV format fully supported by Chromium and DACs)
+            const up = nativeAudioEngine.upsampleHermite(pcm.left, pcm.right, pcm.sampleRate, sampleRate);
+            outBuf = nativeAudioEngine.encodeWav24(up.outL, up.outR, sampleRate);
+            res.writeHead(200, {
+              'Content-Type': 'audio/wav',
+              'Content-Length': outBuf.length,
+              'Access-Control-Allow-Origin': '*'
+            });
+          }
+
+          res.end(outBuf);
+        }).catch(err => {
+          console.error('[StreamServer] readPcmSamples error:', err);
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end('Native audio stream error');
+          }
+        });
         return;
       }
 
@@ -319,6 +328,7 @@ ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRa
   params.set('rate', sampleRate.toString());
   params.set('precision', precision.toString());
   if (dsdMode) params.set('dsd', dsdMode);
+  params.set('local', '1'); // Local Electron Chromium playback needs decoded PCM WAV
   return `http://127.0.0.1:${dsdStreamPort}/sox-stream?${params.toString()}`;
 });
 
