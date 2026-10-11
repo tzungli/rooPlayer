@@ -5,17 +5,8 @@ const { pathToFileURL } = require('url');
 const http = require('http');
 const { spawn } = require('child_process');
 
-let ffmpegPath = null;
-const customBinFfmpeg = path.join(__dirname, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
-if (fs.existsSync(customBinFfmpeg)) {
-  ffmpegPath = customBinFfmpeg;
-} else {
-  try {
-    ffmpegPath = require('ffmpeg-static');
-  } catch (e) {
-    console.warn('ffmpeg-static not found:', e);
-  }
-}
+const nativeAudioEngine = require('./native-audio-engine');
+const mm = require('music-metadata');
 
 const DlnaManager = require('./dlna-manager');
 let dlnaManager = null;
@@ -112,8 +103,8 @@ app.whenReady().then(() => {
   createWindow();
   startDsdStreamingServer();
 
-  // Initialize DLNA / UPnP Subsystem
-  dlnaManager = new DlnaManager({ ffmpegPath });
+  // Initialize DLNA / UPnP Subsystem (Pure Native Audio Engine)
+  dlnaManager = new DlnaManager({ nativeAudioEngine });
   dlnaManager.startStreamingServer();
   dlnaManager.startSsdpDiscovery();
 
@@ -176,19 +167,15 @@ let dsdStreamPort = 0;
 let currentMainStreamProc = null;
 
 function startDsdStreamingServer() {
-  if (!ffmpegPath) {
-    console.warn('FFmpeg binary not available for DSD decoding');
-    return;
-  }
-
   dsdStreamServer = http.createServer((req, res) => {
     try {
       const reqUrl = new URL(req.url, 'http://127.0.0.1');
+
+      // Native DSP PCM Upsampling Stream
       if (reqUrl.pathname === '/sox-stream') {
         const filePath = reqUrl.searchParams.get('file');
         const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
         const sampleRate = parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
-        const precision = parseInt(reqUrl.searchParams.get('precision') || '24', 10);
         const dsdMode = reqUrl.searchParams.get('dsd') || '';
 
         if (!filePath || !fs.existsSync(filePath)) {
@@ -199,7 +186,7 @@ function startDsdStreamingServer() {
 
         if (req.method === 'HEAD') {
           res.writeHead(200, {
-            'Content-Type': 'audio/flac',
+            'Content-Type': 'audio/wav',
             'Access-Control-Allow-Origin': '*',
             'Transfer-Encoding': 'chunked'
           });
@@ -207,138 +194,80 @@ function startDsdStreamingServer() {
           return;
         }
 
-        // Kill previous running transcoder instance immediately to avoid CPU congestion
-        if (currentMainStreamProc) {
-          try { currentMainStreamProc.kill(); } catch (e) {}
-          currentMainStreamProc = null;
-        }
-
-        const afFilter = dsdMode
-          ? `aresample=resampler=soxr:precision=${precision}:cheby=1:dither_method=triangular_hp:osr=${sampleRate}`
-          : `aresample=resampler=soxr:precision=${precision}:cheby=1:osr=${sampleRate}`;
-
-        const ffmpegArgs = [];
-        if (startSec > 0) {
-          ffmpegArgs.push('-ss', startSec.toString());
-        }
-        ffmpegArgs.push(
-          '-threads', '2',
-          '-i', filePath,
-          '-af', afFilter,
-          '-c:a', 'flac',
-          '-compression_level', '0',
-          '-sample_fmt', 's32',
-          '-ar', sampleRate.toString(),
-          '-f', 'flac',
-          'pipe:1'
-        );
-
-        res.writeHead(200, {
-          'Content-Type': 'audio/flac',
-          'Access-Control-Allow-Origin': '*',
-          'Transfer-Encoding': 'chunked'
-        });
-
-        const proc = spawn(ffmpegPath, ffmpegArgs, { windowsHide: true });
-        currentMainStreamProc = proc;
-        proc.stdout.pipe(res);
-        proc.stderr.on('data', () => {});
-
-        proc.on('error', (err) => {
-          console.error('FFmpeg SoX transcode process error:', err);
-          if (!res.headersSent) {
-            res.writeHead(500);
-            res.end('SoX transcode error');
-          }
-        });
-
-        req.on('close', () => {
-          try {
-            if (currentMainStreamProc === proc) {
-              currentMainStreamProc = null;
-            }
-            proc.kill();
-          } catch (e) {}
-        });
-        return;
-      }
-
-      if (reqUrl.pathname !== '/dsd-stream') {
-        res.writeHead(404);
-        res.end('Not found');
-        return;
-      }
-
-      const filePath = reqUrl.searchParams.get('file');
-      const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
-
-      if (!filePath || !fs.existsSync(filePath)) {
-        res.writeHead(404);
-        res.end('File not found');
-        return;
-      }
-
-      if (req.method === 'HEAD') {
-        res.writeHead(200, {
-          'Content-Type': 'audio/flac',
-          'Access-Control-Allow-Origin': '*',
-          'Transfer-Encoding': 'chunked'
-        });
-        res.end();
-        return;
-      }
-
-      // Kill previous running transcoder instance immediately
-      if (currentMainStreamProc) {
-        try { currentMainStreamProc.kill(); } catch (e) {}
-        currentMainStreamProc = null;
-      }
-
-      // Fast seek with -ss before -i, output high-resolution 24-bit 88.2kHz FLAC with 6dB standard DSD gain
-      const ffmpegArgs = [];
-      if (startSec > 0) {
-        ffmpegArgs.push('-ss', startSec.toString());
-      }
-      ffmpegArgs.push(
-        '-threads', '2',
-        '-i', filePath,
-        '-af', 'volume=6dB',
-        '-c:a', 'flac',
-        '-compression_level', '0',
-        '-ar', '88200',
-        '-f', 'flac',
-        'pipe:1'
-      );
-
-      res.writeHead(200, {
-        'Content-Type': 'audio/flac',
-        'Access-Control-Allow-Origin': '*',
-        'Transfer-Encoding': 'chunked'
-      });
-
-      const proc = spawn(ffmpegPath, ffmpegArgs, { windowsHide: true });
-      currentMainStreamProc = proc;
-      proc.stdout.pipe(res);
-      proc.stderr.on('data', () => {});
-
-      proc.on('error', (err) => {
-        console.error('FFmpeg DSD transcode process error:', err);
-        if (!res.headersSent) {
+        // Read raw PCM samples from disk without any external process
+        const pcm = nativeAudioEngine.readPcmSamples(filePath, startSec);
+        if (!pcm) {
           res.writeHead(500);
-          res.end('Transcode error');
+          res.end('Native PCM read failed');
+          return;
         }
-      });
 
-      req.on('close', () => {
-        try {
-          if (currentMainStreamProc === proc) {
-            currentMainStreamProc = null;
-          }
-          proc.kill();
-        } catch (e) {}
-      });
+        let outBuf = null;
+        if (dsdMode) {
+          // Native DSD Modulation: Cubic Hermite 64x + 5th-order Delta-Sigma
+          outBuf = nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode);
+          res.writeHead(200, {
+            'Content-Type': 'audio/x-dsf',
+            'Content-Length': outBuf.length,
+            'Access-Control-Allow-Origin': '*'
+          });
+        } else {
+          // Native Cubic Hermite Upsampling to Target Sample Rate
+          const up = nativeAudioEngine.upsampleHermite(pcm.left, pcm.right, pcm.sampleRate, sampleRate);
+          outBuf = nativeAudioEngine.encodeWav24(up.outL, up.outR, sampleRate);
+          res.writeHead(200, {
+            'Content-Type': 'audio/wav',
+            'Content-Length': outBuf.length,
+            'Access-Control-Allow-Origin': '*'
+          });
+        }
+
+        res.end(outBuf);
+        return;
+      }
+
+      // Native DSF Decimation Stream
+      if (reqUrl.pathname === '/dsd-stream') {
+        const filePath = reqUrl.searchParams.get('file');
+        const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
+
+        if (!filePath || !fs.existsSync(filePath)) {
+          res.writeHead(404);
+          res.end('File not found');
+          return;
+        }
+
+        if (req.method === 'HEAD') {
+          res.writeHead(200, {
+            'Content-Type': 'audio/wav',
+            'Access-Control-Allow-Origin': '*',
+            'Transfer-Encoding': 'chunked'
+          });
+          res.end();
+          return;
+        }
+
+        // Native 32x Decimation to 88.2kHz / 24-bit WAV
+        const outWav = nativeAudioEngine.decimateDsfToWav(filePath, startSec);
+        if (!outWav) {
+          res.writeHead(500);
+          res.end('Native DSF decimation failed');
+          return;
+        }
+
+        res.writeHead(200, {
+          'Content-Type': 'audio/wav',
+          'Content-Length': outWav.length,
+          'Access-Control-Allow-Origin': '*'
+        });
+        res.end(outWav);
+        return;
+      }
+
+      res.writeHead(404);
+      res.end('Not found');
     } catch (err) {
-      console.error('Audio stream server error:', err);
+      console.error('Native Audio stream server error:', err);
       if (!res.headersSent) {
         res.writeHead(500);
         res.end('Server error');
@@ -348,7 +277,7 @@ function startDsdStreamingServer() {
 
   dsdStreamServer.listen(0, '127.0.0.1', () => {
     dsdStreamPort = dsdStreamServer.address().port;
-    console.log(`High-Res Audio Streaming Server (DSD & SoX) running on port ${dsdStreamPort}`);
+    console.log(`Native High-Res Audio Streaming Server (DSD & PCM) running on port ${dsdStreamPort}`);
   });
 }
 
@@ -393,29 +322,25 @@ ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRa
   return `http://127.0.0.1:${dsdStreamPort}/sox-stream?${params.toString()}`;
 });
 
-function getDurationWithFfmpeg(filePath) {
-  return new Promise((resolve) => {
-    if (!ffmpegPath || !filePath) return resolve(0);
-    const proc = spawn(ffmpegPath, ['-i', filePath], { windowsHide: true });
-    let stderr = '';
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    proc.on('close', () => {
-      const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
-      if (match) {
-        const hours = parseFloat(match[1]);
-        const mins = parseFloat(match[2]);
-        const secs = parseFloat(match[3]);
-        resolve(hours * 3600 + mins * 60 + secs);
-      } else {
-        resolve(0);
-      }
-    });
-    proc.on('error', () => resolve(0));
-  });
+async function getAudioDurationNative(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return 0;
+  try {
+    const meta = await mm.parseFile(filePath, { duration: true, skipCovers: true });
+    if (meta && meta.format && meta.format.duration) {
+      return meta.format.duration;
+    }
+  } catch (e) {
+    // Fallback: check DSF header directly
+    const dsf = nativeAudioEngine.parseDsf(filePath);
+    if (dsf && dsf.dsdRate > 0) {
+      return dsf.sampleCount / dsf.dsdRate;
+    }
+  }
+  return 0;
 }
 
 ipcMain.handle('audio:getAudioDuration', async (event, filePath) => {
-  return await getDurationWithFfmpeg(filePath);
+  return await getAudioDurationNative(filePath);
 });
 
 // Translation to Traditional Chinese (zh-TW) IPC

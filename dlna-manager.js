@@ -14,8 +14,7 @@ const EventEmitter = require('events');
 class DlnaManager extends EventEmitter {
   constructor(options = {}) {
     super();
-    const defaultFfmpeg = path.join(__dirname, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
-    this.ffmpegPath = options.ffmpegPath || (fs.existsSync(defaultFfmpeg) ? defaultFfmpeg : null);
+    this.nativeAudioEngine = options.nativeAudioEngine || require('./native-audio-engine');
     this.devices = new Map(); // id -> device details
     this.activeDeviceId = 'local'; // 'local' or device.id
     this.currentTrack = null;
@@ -245,44 +244,20 @@ class DlnaManager extends EventEmitter {
     }
   }
 
-  // Handle PCM to 1-bit DSD (Direct Stream Digital) on-the-fly Delta-Sigma Modulation into Sony DSF stream
-  handleDsdModulationStream(req, res, filePath, startSec = 0, dsdMode = 'dsd64', precision = 28, track = null) {
-    if (!this.ffmpegPath) {
+  // Handle PCM to 1-bit DSD on-the-fly Delta-Sigma Modulation into Sony DSF stream (Pure Native Engine)
+  handleDsdModulationStream(req, res, filePath, startSec = 0, dsdMode = 'dsd64', precision = 24, track = null) {
+    const pcm = this.nativeAudioEngine.readPcmSamples(filePath, startSec);
+    if (!pcm) {
       res.writeHead(500);
-      res.end('FFmpeg not available for DSD modulation');
+      res.end('Native PCM read failed for DSD modulation');
       return;
     }
 
-    const baseRate = Number((track && track.sampleRate) || 44100);
-    const is48k = (baseRate % 48000 === 0);
-
-    let dsdSampleRate = is48k ? 3072000 : 2822400; // default dsd64
-    if (dsdMode === 'dsd128') {
-      dsdSampleRate = is48k ? 6144000 : 5644800;
-    } else if (dsdMode === 'dsd256') {
-      dsdSampleRate = is48k ? 12288000 : 11289600;
-    } else if (dsdMode === 'dsd512') {
-      dsdSampleRate = is48k ? 24576000 : 22579200;
-    }
-
-    let dur = (track && track.duration > 0) ? track.duration : 0;
-    if (!dur && fs.existsSync(filePath)) {
-      const st = fs.statSync(filePath);
-      dur = Math.max(60, Math.round(st.size / 176400));
-    }
-
-    const effectiveDur = (startSec > 0 && dur > startSec) ? (dur - startSec) : dur;
-
-    const blockSize = 4096; // bytes per channel block
-    const samplesPerBlock = blockSize * 8; // 32768 samples per channel block
-    const totalBlocks = Math.ceil((effectiveDur * dsdSampleRate) / samplesPerBlock);
-    const totalSamplesPerChannel = totalBlocks * samplesPerBlock;
-    const totalDataBytes = totalBlocks * 2 * blockSize;
-    const totalFileBytes = 28 + 52 + 12 + totalDataBytes;
+    const dsfBuf = this.nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode);
 
     const headers = {
       'Content-Type': 'audio/x-dsf',
-      'Content-Length': totalFileBytes,
+      'Content-Length': dsfBuf.length,
       'Accept-Ranges': 'bytes',
       'transferMode.dlna.org': 'Streaming',
       'contentFeatures.dlna.org': 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
@@ -295,299 +270,75 @@ class DlnaManager extends EventEmitter {
       return;
     }
 
-    if (this.currentDsdProcess) {
-      try { this.currentDsdProcess.kill(); } catch (e) {}
-      this.currentDsdProcess = null;
+    res.writeHead(200, headers);
+    res.end(dsfBuf);
+  }
+
+  // Handle DSD (.dsf / .dff) on-the-fly decimation to 24-bit / 88.2 kHz WAV (Pure Native Engine)
+  handleDsdTranscodeStream(req, res, filePath, startSec = 0, track = null) {
+    const wavBuf = this.nativeAudioEngine.decimateDsfToWav(filePath, startSec);
+    if (!wavBuf) {
+      res.writeHead(500);
+      res.end('Native DSD decimation failed');
+      return;
     }
 
-    // Build 92-byte standard DSF container header
-    const headerBuf = Buffer.alloc(92);
-    let off = 0;
-    // DSD chunk (28 bytes)
-    headerBuf.write('DSD ', off); off += 4;
-    headerBuf.writeBigUInt64LE(28n, off); off += 8;
-    headerBuf.writeBigUInt64LE(BigInt(totalFileBytes), off); off += 8;
-    headerBuf.writeBigUInt64LE(0n, off); off += 8;
-    // fmt chunk (52 bytes)
-    headerBuf.write('fmt ', off); off += 4;
-    headerBuf.writeBigUInt64LE(52n, off); off += 8;
-    headerBuf.writeUInt32LE(1, off); off += 4; // version
-    headerBuf.writeUInt32LE(0, off); off += 4; // format id: 0 (DSD raw)
-    headerBuf.writeUInt32LE(2, off); off += 4; // channel type: 2 (stereo)
-    headerBuf.writeUInt32LE(2, off); off += 4; // channels: 2
-    headerBuf.writeUInt32LE(dsdSampleRate, off); off += 4;
-    headerBuf.writeUInt32LE(1, off); off += 4; // bits per sample: 1
-    headerBuf.writeBigUInt64LE(BigInt(totalSamplesPerChannel), off); off += 8;
-    headerBuf.writeUInt32LE(blockSize, off); off += 4; // 4096
-    headerBuf.writeUInt32LE(0, off); off += 4; // reserved
-    // data chunk header (12 bytes)
-    headerBuf.write('data', off); off += 4;
-    headerBuf.writeBigUInt64LE(BigInt(12 + totalDataBytes), off); off += 8;
+    const headers = {
+      'Content-Type': 'audio/wav',
+      'Content-Length': wavBuf.length,
+      'Accept-Ranges': 'bytes',
+      'Access-Control-Allow-Origin': '*',
+      'transferMode.dlna.org': 'Streaming',
+      'contentFeatures.dlna.org': 'DLNA.ORG_PN=WAV;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000'
+    };
 
-    const ffmpegArgs = [];
-    if (startSec > 0) {
-      ffmpegArgs.push('-ss', startSec.toString());
+    if (req.method === 'HEAD') {
+      res.writeHead(200, headers);
+      res.end();
+      return;
     }
-    ffmpegArgs.push(
-      '-threads', '2',
-      '-i', filePath,
-      '-af', `aresample=resampler=soxr:precision=${precision}:cheby=1:osr=${dsdSampleRate}`,
-      '-f', 's16le',
-      '-ac', '2',
-      'pipe:1'
-    );
-
-    const proc = spawn(this.ffmpegPath, ffmpegArgs, { windowsHide: true });
-    this.currentDsdProcess = proc;
 
     res.writeHead(200, headers);
-    res.write(headerBuf);
-
-    let s1_L = 0, s2_L = 0, y_L = 0;
-    let s1_R = 0, s2_R = 0, y_R = 0;
-    const INPUT_CHUNK_BYTES = samplesPerBlock * 4; // 131072 bytes per stereo block
-    const blockBuf = Buffer.alloc(blockSize * 2); // 8192 bytes (4096 Left + 4096 Right)
-    const scale = 0.85 / 32768.0;
-
-    // Use pre-allocated accumulator buffer to eliminate Buffer.concat overhead and GC pauses
-    let ringBuf = Buffer.alloc(INPUT_CHUNK_BYTES * 3);
-    let ringLen = 0;
-
-    proc.stdout.on('data', chunk => {
-      if (ringLen + chunk.length > ringBuf.length) {
-        const newBuf = Buffer.alloc(Math.max(ringBuf.length * 2, ringLen + chunk.length));
-        ringBuf.copy(newBuf, 0, 0, ringLen);
-        ringBuf = newBuf;
-      }
-      chunk.copy(ringBuf, ringLen);
-      ringLen += chunk.length;
-
-      while (ringLen >= INPUT_CHUNK_BYTES) {
-        // Optimized Delta-Sigma modulation loop: direct offset read with single pass & hoist scaling
-        let inOffsetL = 0;
-        let inOffsetR = 2;
-
-        for (let b = 0; b < blockSize; b++) {
-          let byteValL = 0;
-          let byteValR = 0;
-
-          for (let bit = 0; bit < 8; bit++) {
-            // Left Channel
-            const xL = ringBuf.readInt16LE(inOffsetL) * scale;
-            inOffsetL += 4;
-            s1_L += xL - y_L;
-            s2_L += s1_L - y_L;
-            if (s2_L >= 0) {
-              y_L = 1.0;
-              byteValL |= (1 << bit);
-            } else {
-              y_L = -1.0;
-            }
-
-            // Right Channel
-            const xR = ringBuf.readInt16LE(inOffsetR) * scale;
-            inOffsetR += 4;
-            s1_R += xR - y_R;
-            s2_R += s1_R - y_R;
-            if (s2_R >= 0) {
-              y_R = 1.0;
-              byteValR |= (1 << bit);
-            } else {
-              y_R = -1.0;
-            }
-          }
-          blockBuf[b] = byteValL;
-          blockBuf[blockSize + b] = byteValR;
-        }
-
-        // Shift remaining bytes in ring buffer
-        ringBuf.copy(ringBuf, 0, INPUT_CHUNK_BYTES, ringLen);
-        ringLen -= INPUT_CHUNK_BYTES;
-
-        if (!res.writableEnded) {
-          res.write(blockBuf);
-        }
-      }
-    });
-
-    proc.stdout.on('end', () => {
-      if (!res.writableEnded) {
-        res.end();
-      }
-    });
-
-    proc.on('error', err => {
-      console.error('[DLNA] DSD Modulation transcode process error:', err);
-    });
-
-    req.on('close', () => {
-      try { proc.kill(); } catch (e) {}
-    });
+    res.end(wavBuf);
   }
 
-  // Handle DSD (.dsf / .dff) on-the-fly decimation transcoding to 24-bit / 88.2 kHz FLAC
-  handleDsdTranscodeStream(req, res, filePath, startSec = 0, track = null) {
-    if (!this.ffmpegPath) {
-      res.writeHead(500);
-      res.end('FFmpeg not available for DSD decoding');
-      return;
-    }
-
-    if (req.method === 'HEAD') {
-      res.writeHead(200, {
-        'Content-Type': 'audio/flac',
-        'Access-Control-Allow-Origin': '*',
-        'transferMode.dlna.org': 'Streaming',
-        'contentFeatures.dlna.org': 'DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
-        'Transfer-Encoding': 'chunked'
-      });
-      res.end();
-      return;
-    }
-
-    if (this.currentDsdProcess) {
-      try { this.currentDsdProcess.kill(); } catch (e) {}
-      this.currentDsdProcess = null;
-    }
-
-    const ffmpegArgs = [];
-    if (startSec > 0) {
-      ffmpegArgs.push('-ss', startSec.toString());
-    }
-    ffmpegArgs.push(
-      '-threads', '2',
-      '-i', filePath,
-      '-af', 'volume=6dB',
-      '-c:a', 'flac',
-      '-compression_level', '0',
-      '-ar', '88200'
-    );
-
-    if (track) {
-      if (track.title) ffmpegArgs.push('-metadata', `title=${track.title}`);
-      if (track.artist) ffmpegArgs.push('-metadata', `artist=${track.artist}`);
-      if (track.album) ffmpegArgs.push('-metadata', `album=${track.album}`);
-      if (track.albumArtist || track.artist) ffmpegArgs.push('-metadata', `album_artist=${track.albumArtist || track.artist}`);
-      if (track.genre) ffmpegArgs.push('-metadata', `genre=${track.genre}`);
-      const trackNum = track.trackNumber || track.trackNo;
-      if (trackNum) ffmpegArgs.push('-metadata', `track=${trackNum}`);
-      if (track.year) ffmpegArgs.push('-metadata', `date=${track.year}`);
-    }
-
-    ffmpegArgs.push(
-      '-f', 'flac',
-      'pipe:1'
-    );
-
-    res.writeHead(200, {
-      'Content-Type': 'audio/flac',
-      'Access-Control-Allow-Origin': '*',
-      'transferMode.dlna.org': 'Streaming',
-      'contentFeatures.dlna.org': 'DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
-      'Transfer-Encoding': 'chunked'
-    });
-
-    const proc = spawn(this.ffmpegPath, ffmpegArgs, { windowsHide: true });
-    this.currentDsdProcess = proc;
-    proc.stdout.pipe(res);
-    proc.stderr.on('data', () => {});
-
-    proc.on('error', (err) => {
-      console.error('[DLNA] DSD transcode process error:', err);
-    });
-
-    req.on('close', () => {
-      try {
-        proc.kill();
-      } catch (e) {}
-    });
-  }
-
-  // Handle SoX Resampler (libsoxr) on-the-fly audiophile upsampling or 1-bit DSD modulation to 24-bit Hi-Res FLAC
+  // Handle High-Res PCM Upsampling to 24-bit WAV (Pure Native Engine)
   handleSoxTranscodeStream(req, res, filePath, startSec = 0, sampleRate = 192000, precision = 24, dsdMode = '', track = null) {
-    if (!this.ffmpegPath) {
+    const pcm = this.nativeAudioEngine.readPcmSamples(filePath, startSec);
+    if (!pcm) {
       res.writeHead(500);
-      res.end('FFmpeg not available for SoX Resampling');
+      res.end('Native PCM read failed for upsampling');
       return;
     }
 
+    let outBuf = null;
+    let mime = 'audio/wav';
+
+    if (dsdMode) {
+      outBuf = this.nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode);
+      mime = 'audio/x-dsf';
+    } else {
+      const up = this.nativeAudioEngine.upsampleHermite(pcm.left, pcm.right, pcm.sampleRate, sampleRate);
+      outBuf = this.nativeAudioEngine.encodeWav24(up.outL, up.outR, sampleRate);
+    }
+
+    const headers = {
+      'Content-Type': mime,
+      'Content-Length': outBuf.length,
+      'Accept-Ranges': 'bytes',
+      'Access-Control-Allow-Origin': '*',
+      'transferMode.dlna.org': 'Streaming',
+      'contentFeatures.dlna.org': 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000'
+    };
+
     if (req.method === 'HEAD') {
-      res.writeHead(200, {
-        'Content-Type': 'audio/flac',
-        'Access-Control-Allow-Origin': '*',
-        'transferMode.dlna.org': 'Streaming',
-        'contentFeatures.dlna.org': 'DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
-        'Transfer-Encoding': 'chunked'
-      });
+      res.writeHead(200, headers);
       res.end();
       return;
     }
 
-    if (this.currentDsdProcess) {
-      try { this.currentDsdProcess.kill(); } catch (e) {}
-      this.currentDsdProcess = null;
-    }
-
-    const afFilter = dsdMode
-      ? `aresample=resampler=soxr:precision=${precision}:cheby=1:dither_method=triangular_hp:osr=${sampleRate}`
-      : `aresample=resampler=soxr:precision=${precision}:cheby=1:osr=${sampleRate}`;
-
-    const ffmpegArgs = [];
-    if (startSec > 0) {
-      ffmpegArgs.push('-ss', startSec.toString());
-    }
-    ffmpegArgs.push(
-      '-threads', '2',
-      '-i', filePath,
-      '-af', afFilter,
-      '-c:a', 'flac',
-      '-compression_level', '0',
-      '-sample_fmt', 's32',
-      '-ar', sampleRate.toString()
-    );
-
-    if (track) {
-      if (track.title) ffmpegArgs.push('-metadata', `title=${track.title}`);
-      if (track.artist) ffmpegArgs.push('-metadata', `artist=${track.artist}`);
-      if (track.album) ffmpegArgs.push('-metadata', `album=${track.album}`);
-      if (track.albumArtist || track.artist) ffmpegArgs.push('-metadata', `album_artist=${track.albumArtist || track.artist}`);
-      if (track.genre) ffmpegArgs.push('-metadata', `genre=${track.genre}`);
-      const trackNum = track.trackNumber || track.trackNo;
-      if (trackNum) ffmpegArgs.push('-metadata', `track=${trackNum}`);
-      if (track.year) ffmpegArgs.push('-metadata', `date=${track.year}`);
-    }
-
-    ffmpegArgs.push(
-      '-f', 'flac',
-      'pipe:1'
-    );
-
-    res.writeHead(200, {
-      'Content-Type': 'audio/flac',
-      'Access-Control-Allow-Origin': '*',
-      'transferMode.dlna.org': 'Streaming',
-      'contentFeatures.dlna.org': 'DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
-      'Transfer-Encoding': 'chunked'
-    });
-
-    const proc = spawn(this.ffmpegPath, ffmpegArgs, { windowsHide: true });
-    this.currentDsdProcess = proc;
-    proc.stdout.pipe(res);
-    proc.stderr.on('data', () => {});
-
-    proc.on('error', (err) => {
-      console.error('[DLNA] SoX Resampler transcode process error:', err);
-      if (!res.headersSent) {
-        res.writeHead(500);
-        res.end('SoX transcode error');
-      }
-    });
-
-    req.on('close', () => {
-      try {
-        proc.kill();
-      } catch (e) {}
-    });
+    res.writeHead(200, headers);
+    res.end(outBuf);
   }
 
   // Handle album cover image serving for DLNA Renderers
