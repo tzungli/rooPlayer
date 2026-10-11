@@ -1495,14 +1495,31 @@ async function translateTextToZhTw(text) {
       const translated = await window.electronAPI.translateToZhTw(text);
       if (translated) return translated;
     }
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-TW&dt=t&q=${encodeURIComponent(text.trim())}`;
-    const res = await fetch(url);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data[0] && Array.isArray(data[0])) {
-        return data[0].map(s => (s && s[0]) ? s[0] : '').join('').trim();
+
+    const translateChunk = async (chunk) => {
+      const trimmed = chunk.trim();
+      if (!trimmed) return '';
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-TW&dt=t&q=${encodeURIComponent(trimmed)}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data[0] && Array.isArray(data[0])) {
+          return data[0].map(s => (s && s[0]) ? s[0] : '').join('').trim();
+        }
       }
+      return trimmed;
+    };
+
+    if (text.includes('\n\n')) {
+      const paragraphs = text.split('\n\n').filter(p => p.trim());
+      const results = [];
+      for (const p of paragraphs) {
+        results.push(await translateChunk(p));
+      }
+      return results.join('\n\n');
     }
+
+    return await translateChunk(text);
   } catch (err) {
     console.warn('Translate to zh-TW error:', err);
   }
@@ -2141,6 +2158,37 @@ let currentAlbumBioState = {
   isShowingOriginal: false
 };
 
+function cleanWikipediaAlbumExtract(rawText, maxChars = 2200) {
+  if (!rawText) return '';
+  let text = rawText.replace(/\r/g, '');
+  // Cut off non-narrative sections (track lists, references, personnel, external links, charts, certs)
+  const cutoffRegex = /\n==\s*(?:曲目(?:列表)?|Track listing|Personnel|制作人员|製作人員|参考资料|參考資料|References|外部链接|外部連結|External links|榜单|榜單|Charts|销售认证|銷售認證|Certifications|派台歌成績|發行歷史|Release history)[\s\S]*/i;
+  text = text.replace(cutoffRegex, '').trim();
+
+  // Format section titles nicely for reader
+  text = text.replace(/\n===\s*([^=\n]+)\s*===\n/g, '\n\n【$1】\n');
+  text = text.replace(/\n==\s*([^=\n]+)\s*==\n/g, '\n\n◆ $1 ◆\n');
+
+  // Normalize excessive newlines
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+
+  if (text.length > maxChars) {
+    const cut = text.slice(0, maxChars);
+    const lastParagraph = cut.lastIndexOf('\n\n');
+    if (lastParagraph > maxChars * 0.6) {
+      text = cut.slice(0, lastParagraph) + '\n\n...（更多典藏資料請參閱維基百科全文）';
+    } else {
+      const lastPeriod = Math.max(cut.lastIndexOf('。'), cut.lastIndexOf('. '));
+      if (lastPeriod > maxChars * 0.6) {
+        text = cut.slice(0, lastPeriod + 1) + ' ...（更多典藏資料請參閱維基百科全文）';
+      } else {
+        text = cut + '...';
+      }
+    }
+  }
+  return text;
+}
+
 async function fetchAlbumBio(album) {
   const loadingEl = document.getElementById('albumBioLoading');
   const textEl = document.getElementById('albumBioText');
@@ -2171,23 +2219,39 @@ async function fetchAlbumBio(album) {
         const data = await res.json();
         const hit = data.query?.search?.[0]?.title;
         if (hit) {
-          const zhSummaryUrl = `https://zh.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(hit)}`;
-          const sumRes = await fetch(zhSummaryUrl, {
-            headers: {
-              'User-Agent': 'rooPlayer/1.0',
-              'Accept-Language': 'zh-tw,zh-hant;q=0.9'
+          // Fetch full extract for rich narrative details
+          const zhExtractUrl = `https://zh.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&redirects=1&titles=${encodeURIComponent(hit)}&format=json&origin=*`;
+          const extRes = await fetch(zhExtractUrl);
+          if (extRes.ok) {
+            const extData = await extRes.json();
+            const pages = extData.query?.pages;
+            const raw = pages ? Object.values(pages)[0]?.extract : '';
+            if (raw) {
+              const cleaned = cleanWikipediaAlbumExtract(raw, 2200);
+              if (cleaned && cleaned.length >= 80) {
+                rawBioText = cleaned;
+              }
             }
-          });
-          if (sumRes.ok) {
-            const sumData = await sumRes.json();
-            if (sumData.extract && sumData.type !== 'disambiguation') {
-              rawBioText = sumData.extract;
+          }
+          if (!rawBioText) {
+            const zhSummaryUrl = `https://zh.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(hit)}`;
+            const sumRes = await fetch(zhSummaryUrl, {
+              headers: {
+                'User-Agent': 'rooPlayer/1.0',
+                'Accept-Language': 'zh-tw,zh-hant;q=0.9'
+              }
+            });
+            if (sumRes.ok) {
+              const sumData = await sumRes.json();
+              if (sumData.extract && sumData.type !== 'disambiguation') {
+                rawBioText = sumData.extract;
+              }
             }
           }
         }
       }
 
-      // 2. If no Chinese summary, try English Wikipedia Search
+      // 2. If no Chinese summary or too brief, try English Wikipedia Search
       if (!rawBioText) {
         const enSearchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(album.title + ' ' + album.artist + ' album')}&format=json&origin=*`;
         res = await fetch(enSearchUrl);
@@ -2195,13 +2259,29 @@ async function fetchAlbumBio(album) {
           const data = await res.json();
           const hit = data.query?.search?.[0]?.title;
           if (hit) {
-            const enSummaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(hit)}`;
-            const sumRes = await fetch(enSummaryUrl, { headers: { 'User-Agent': 'rooPlayer/1.0' } });
-            if (sumRes.ok) {
-              const sumData = await sumRes.json();
-              if (sumData.extract && sumData.type !== 'disambiguation') {
-                rawBioText = sumData.extract;
-                isFromEnWiki = true;
+            const enExtractUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&redirects=1&titles=${encodeURIComponent(hit)}&format=json&origin=*`;
+            const extRes = await fetch(enExtractUrl);
+            if (extRes.ok) {
+              const extData = await extRes.json();
+              const pages = extData.query?.pages;
+              const raw = pages ? Object.values(pages)[0]?.extract : '';
+              if (raw) {
+                const cleaned = cleanWikipediaAlbumExtract(raw, 2200);
+                if (cleaned && cleaned.length >= 80) {
+                  rawBioText = cleaned;
+                  isFromEnWiki = true;
+                }
+              }
+            }
+            if (!rawBioText) {
+              const enSummaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(hit)}`;
+              const sumRes = await fetch(enSummaryUrl, { headers: { 'User-Agent': 'rooPlayer/1.0' } });
+              if (sumRes.ok) {
+                const sumData = await sumRes.json();
+                if (sumData.extract && sumData.type !== 'disambiguation') {
+                  rawBioText = sumData.extract;
+                  isFromEnWiki = true;
+                }
               }
             }
           }
@@ -2211,9 +2291,9 @@ async function fetchAlbumBio(album) {
       // 3. Direct page summary fallback
       if (!rawBioText) {
         const directUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(album.title + ' (album)')}`;
-        res = await fetch(directUrl, { headers: { 'User-Agent': 'rooPlayer/1.0' } });
-        if (res.ok) {
-          const sumData = await res.json();
+        const dirRes = await fetch(directUrl, { headers: { 'User-Agent': 'rooPlayer/1.0' } });
+        if (dirRes.ok) {
+          const sumData = await dirRes.json();
           if (sumData.extract && sumData.type !== 'disambiguation') {
             rawBioText = sumData.extract;
             isFromEnWiki = true;
@@ -2255,8 +2335,8 @@ async function fetchAlbumBio(album) {
     const hasTranslationDiff = (translatedBioText.trim() !== rawBioText.trim());
     if (hasTranslationDiff) {
       sourceBadge.textContent = isFromEnWiki
-        ? '資料來源：維基百科音樂資料庫 (自動翻譯為繁體中文)'
-        : '資料來源：中文維基百科 (繁體中文)';
+        ? '資料來源：維基百科音樂資料庫 (深度介紹 / 自動翻譯為繁體中文)'
+        : '資料來源：中文維基百科音樂資料庫 (深度介紹 / 繁體中文)';
       if (btnToggleBioLang) {
         btnToggleBioLang.style.display = 'inline-flex';
         btnToggleBioLang.textContent = '檢視原文';
@@ -2278,17 +2358,38 @@ async function fetchAlbumBio(album) {
       if (btnToggleBioLang) btnToggleBioLang.style.display = 'none';
     }
   } else {
-    // Elegant fallback overview generated from local metadata
-    const sampleTrack = (album.tracks && album.tracks.length > 0) ? album.tracks[0].title : album.title;
-    const yearText = album.year ? `於 ${album.year} 年錄製發行` : '所精心打造';
+    // Elegant fallback overview generated from local metadata (doubled/tripled content density)
+    const sampleTracks = (album.tracks && album.tracks.length > 0)
+      ? album.tracks.slice(0, 3).map(t => `「${t.title}」`).join('、')
+      : `「${album.title}」`;
+    const totalDurationText = formatTotalAlbumDuration(album.tracks);
+    const yearText = album.year ? `於 ${album.year} 年錄製發行` : (album.date ? `於 ${album.date.slice(0, 4)} 年錄製發行` : '所精心打造');
     const genreText = album.genre && album.genre !== 'Various' ? album.genre : '多元精緻風格';
     const specKhz = album.sampleRate ? Math.round(album.sampleRate / 1000) : 44.1;
     const bitDepth = album.bitsPerSample || 16;
-    const formatLabel = `${album.formatName || 'PCM'} ${bitDepth}-bit / ${specKhz}kHz`;
+    const firstTrack = (album.tracks && album.tracks[0]) || {};
+    const fmt = getAudioFormatFromPath(firstTrack.filePath || album.filePath || '', album.formatName || 'PCM').toUpperCase();
+    const isDsd = fmt === 'DSF' || fmt === 'DFF' || fmt === 'DSD';
+    const isLossless = album.isLossless || ['WAV', 'FLAC', 'AIFF', 'ALAC', 'APE', 'DSF', 'DFF', 'DSD'].includes(fmt);
+    const channels = album.channels || firstTrack.channels || 2;
+    const channelDesc = channels === 1 ? '單聲道 (Mono)' : (channels === 2 ? '雙聲道立體聲 (Stereo)' : `${channels} 聲道環繞音場`);
+    const formatLabel = isDsd
+      ? `DSD 1-bit / ${album.sampleRate ? (album.sampleRate / 1000000).toFixed(1) : '2.8'}MHz Direct Stream Digital`
+      : `${fmt} ${bitDepth}-bit / ${specKhz}kHz ${isLossless ? '發燒無損母帶' : '數位音訊'}`;
 
-    textEl.textContent = `《${album.title}》是由知名演出者 ${album.artist} ${yearText}的代表性作品。全張專輯共收錄包含「${sampleTrack}」在內之 ${album.tracks.length} 首精彩錄音，曲風涵蓋 ${genreText}。本音樂庫以 ${formatLabel} 發燒母帶規格完整收錄，展現豐富的音場深度與動態細節。`;
+    const labelPart = album.label ? `，由唱片廠牌 ${album.label} 發行` : '';
+    const producerPart = album.producer ? `，由製作人 ${album.producer} 操刀製作` : '';
+    const composerPart = album.composer ? `，主要作曲由 ${album.composer} 執筆` : '';
+
+    const p1 = `《${album.title}》是由知名演出者 ${album.artist} ${yearText}的代表性音樂作品${labelPart}${producerPart}${composerPart}。作品在藝術性與音樂張力上皆深具份量，細膩融合了 ${genreText} 的核心精髓，展現出高度成熟的編曲層次與深厚的情感共鳴。`;
+
+    const p2 = `全張專輯共精選收錄 ${album.tracks.length} 首完整曲目錄音，總播放時間長達 ${totalDurationText}。其中包括焦點代表作如 ${sampleTracks} 等，在樂器對位、節奏鋪陳與人聲演繹之間呈現精緻的動態起伏，為樂迷帶來沉浸式的完整聽覺旅程。`;
+
+    const p3 = `母帶規格與聲學品質方面，本音樂庫以 ${formatLabel} 高規格完整珍藏，採 ${channelDesc} 架構。錄音具備寬闊的音場深度與豐富的微動態細節，殘響延伸與器樂質感皆表現優異。推薦透過 Bit-Perfect 原音直通輸出或開啟 DSP 升頻引擎，體驗至臻完美的發燒級聆賞享受。`;
+
+    textEl.textContent = `${p1}\n\n${p2}\n\n${p3}`;
     textEl.style.display = 'block';
-    sourceBadge.textContent = '音樂庫母帶元資料介紹 (繁體中文)';
+    sourceBadge.textContent = '音樂庫母帶深度元資料介紹 (繁體中文)';
     if (btnToggleBioLang) btnToggleBioLang.style.display = 'none';
   }
 }

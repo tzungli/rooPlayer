@@ -425,16 +425,34 @@ ipcMain.handle('audio:getAudioDuration', async (event, filePath) => {
 // Translation to Traditional Chinese (zh-TW) IPC
 ipcMain.handle('util:translateToZhTw', async (event, text) => {
   if (!text || typeof text !== 'string' || !text.trim()) return '';
-  try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-TW&dt=t&q=${encodeURIComponent(text.trim())}`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data[0] && Array.isArray(data[0])) {
-        const translated = data[0].map(s => (s && s[0]) ? s[0] : '').join('').trim();
-        if (translated) return translated;
+  const translateChunk = async (chunk) => {
+    const trimmed = chunk.trim();
+    if (!trimmed) return '';
+    try {
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-TW&dt=t&q=${encodeURIComponent(trimmed)}`;
+      const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data[0] && Array.isArray(data[0])) {
+          return data[0].map(s => (s && s[0]) ? s[0] : '').join('').trim();
+        }
       }
+    } catch (err) {
+      console.warn('Translate chunk failed:', err);
     }
+    return trimmed;
+  };
+
+  try {
+    if (text.includes('\n\n')) {
+      const paragraphs = text.split('\n\n').filter(p => p.trim());
+      const results = [];
+      for (const p of paragraphs) {
+        results.push(await translateChunk(p));
+      }
+      return results.join('\n\n');
+    }
+    return await translateChunk(text);
   } catch (err) {
     console.warn('Translate to Traditional Chinese failed:', err);
   }
