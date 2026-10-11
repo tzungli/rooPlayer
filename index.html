@@ -112,6 +112,10 @@
           <span class="nav-icon">📁</span>
           <span class="nav-label">本機資料夾管理</span>
         </button>
+        <button class="nav-item" data-view="about">
+          <span class="nav-icon">📖</span>
+          <span class="nav-label">說明</span>
+        </button>
       </div>
     </aside>
 
@@ -692,6 +696,266 @@
             <div class="kkbox-detail-tracklist-wrap">
               <div class="kkbox-track-list" id="kkboxDetailTracksList">
                 <!-- Tracks injected by JS -->
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- 11. ABOUT & USER MANUAL VIEW -->
+      <section id="viewAbout" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">軟體說明與操作手冊</h1>
+            <p class="page-subtitle">版本資訊、功能架構、授權條款、免責聲明與詳細選單使用指引。</p>
+          </div>
+        </div>
+
+        <div class="about-container">
+          <!-- 1. App Header Info Card -->
+          <div class="about-card app-info-hero">
+            <div class="app-info-left">
+              <img src="icon.png" alt="rooPlayer Logo" class="about-app-logo">
+              <div class="app-info-titles">
+                <div class="app-title-row">
+                  <h2>rooPlayer</h2>
+                  <span class="version-tag">v1.0.0 (Build 2026.10)</span>
+                  <span class="engine-tag">Core • Local Audiophile</span>
+                </div>
+                <p class="app-tagline">次世代發燒級數位音訊媒體庫與極致無損串流核心播放器</p>
+                <div class="app-meta-badges">
+                  <span class="meta-badge">64-bit Floating Engine</span>
+                  <span class="meta-badge">SoX Resampler VHQ</span>
+                  <span class="meta-badge">1-bit DSD SDM Modulator</span>
+                  <span class="meta-badge">DLNA / UPnP Bit-Perfect</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Navigation Tabs / Index -->
+          <div class="about-quick-nav">
+            <a href="#aboutSectionManual" class="about-nav-link">📖 各選單操作手冊</a>
+            <a href="#aboutSectionLicense" class="about-nav-link">📜 使用授權範圍</a>
+            <a href="#aboutSectionDisclaimer" class="about-nav-link">⚖️ 免責聲明</a>
+            <a href="#aboutSectionTech" class="about-nav-link">⚙️ 核心音訊規格</a>
+          </div>
+
+          <!-- 2. Detailed Menu User Manual -->
+          <div id="aboutSectionManual" class="about-card">
+            <div class="about-card-title">
+              <span class="title-icon">📖</span>
+              <h3>各選單功能與操作手冊</h3>
+            </div>
+            <p class="section-intro-text">
+              rooPlayer 採用直覺的模組化架構，將本地無損音樂收藏與先進 DSP 升頻、網路串流設備深度融合。以下為各選單的詳細操作說明：
+            </p>
+
+            <div class="manual-modules-grid">
+              <!-- Module 1: 我的音樂庫 -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge">總覽</span>
+                  <h4>首頁總覽 (Overview)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>音樂殿堂的儀表板。集中呈現目前音樂庫的<strong>專輯總數、曲目數量與 Hi-Res 高解析無損音樂統計</strong>。</p>
+                  <ul>
+                    <li><strong>快速掃描</strong>：點擊「新增本機音樂目錄」即可快速匯入音樂檔案夾。</li>
+                    <li><strong>隨機播放精選</strong>：一鍵隨機自音樂庫中抽取高品質曲目展開連續播放。</li>
+                    <li><strong>最近播放與特色推薦</strong>：直覺展示近期聆聽紀錄與發燒代表作品。</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Module 2: 專輯與演出者 -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge">曲庫瀏覽</span>
+                  <h4>專輯、演出者與曲目清單 (Albums / Artists / Tracks)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>提供多維度的音樂分類瀏覽視圖：</p>
+                  <ul>
+                    <li><strong>專輯檢視</strong>：依歌手、發行年份、曲風或播放次數排序。點擊專輯封面即可展開 Roon 風格之<strong>全曲目清單、高解析音訊標籤與演出者詳細介紹</strong>。</li>
+                    <li><strong>演出者檢視</strong>：聚合單一演出者的所有錄音室作品、合輯與年代脈絡。</li>
+                    <li><strong>曲目清單</strong>：全景列表檢視所有單曲，清楚標示 FLAC / WAV / AIFF / DSD 等格式、取樣率、聲道與時長。</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Module 3: 我的最愛 -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge">收藏管理</span>
+                  <h4>我的最愛 (Favorites: 專輯 / 歌曲 / 演出者)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>專屬個人發燒精選庫：</p>
+                  <ul>
+                    <li>在任何專輯卡片、曲目列或演出者頁面點擊<strong>愛心圖示 (♡)</strong> 即可加入我的最愛。</li>
+                    <li>在最愛頁面中支援「播放全部最愛」與「隨機播放最愛」快捷控制。</li>
+                    <li>最愛清單支援隨時備份匯出與無損合併匯入。</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Module 4: KKBOX 線上串流 -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge">線上串流</span>
+                  <h4>KKBOX 串流中心 (KKBOX Streaming)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>透過官方 KKBOX Open API 接軌百萬串流曲庫：</p>
+                  <ul>
+                    <li><strong>官方排行榜</strong>：即時探索綜合新歌榜、華語、西洋、日韓、嘻哈、搖滾等各語系榜單。</li>
+                    <li><strong>精選與新歌速爆</strong>：瀏覽官方策劃合輯與即時潮流發行。</li>
+                    <li><strong>搜尋與試聽</strong>：支援關鍵字即時檢索歌曲與歌單，整合原生播放器隨選即播。</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Module 5: 本機資料夾管理與資料庫匯入匯出 -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge">儲存與維護</span>
+                  <h4>本機資料夾管理與資料庫維護 (Storage)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>管理本機音樂檔案目錄與資料庫備份：</p>
+                  <ul>
+                    <li><strong>掃描本機資料夾</strong>：選取存放無損音訊的硬碟資料夾，引擎將自動以多執行緒高速分析 ID3 / FLAC / DSF 元資料與封面圖。</li>
+                    <li><strong>💾 匯出資料庫</strong>：將所有已收錄音樂資料夾、曲目母帶元資料、我的最愛收藏及播放次數統計完整匯出為標準 JSON 備份檔。</li>
+                    <li><strong>📥 匯入資料庫</strong>：匯入備份資料並執行智慧去重合併。已存在的資料夾與重複曲目將自動略過，並彈出<strong>詳細略過報告</strong>。</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Module 6: 訊號路徑與 DSP 升頻引擎 -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge">核心發燒功能</span>
+                  <h4>音訊路徑與升頻引擎 (Signal Path & DSP Engine)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>點擊播放控制器上方的發燒星芒徽章 ⚡ 即可喚起訊號路徑視窗：</p>
+                  <ul>
+                    <li><strong>左欄（即時音訊路徑）</strong>：即時追蹤從「原始母帶音源 ➔ 升頻引擎 ➔ 混音核心 ➔ WASAPI/DLNA 端點」的各處理節點狀態。</li>
+                    <li><strong>右欄（升頻引擎設定）</strong>：
+                      <br>• <strong>PCM 升頻</strong>：支援 2x、4x 整數倍頻（推薦相位最純淨）、固定 96k / 192k / 384k DXD 超取樣。
+                      <br>• <strong>1-bit DSD 調變</strong>：內建 5 階高頻噪聲整形 Delta-Sigma 調變器，支援即時轉制為 DSD64 (2.8MHz)、DSD128 (5.6MHz)、DSD256 (11.2MHz) 或 DSD512 (22.5MHz)。
+                      <br>• <strong>濾波精度</strong>：支援 20-bit HQ、28-bit VHQ（極致發燒）至 33-bit Ultra 高精度計算。
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Module 7: DLNA / UPnP 區域網路串流 -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge">串流端點</span>
+                  <h4>音訊輸出裝置與網路串流 (Audio Zones / DLNA / UPnP)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>無縫推播至客廳串流播放機、擴大機或網路 DAC：</p>
+                  <ul>
+                    <li>點擊播放控制器右側的<strong>「輸出裝置按鈕 (🔊/📡)」</strong>，系統將透過 SSDP 自動搜尋區網內的 UPnP/DLNA 渲染器（如 Eversolo、WiIM、Linn 等）。</li>
+                    <li>支援<strong>直接輸入 IP 探測</strong>，若路由器封鎖 UDP 廣播亦可快速手動連線。</li>
+                    <li>支援原生 DSF 直通與 PCM 升頻 DSD 比特流即時推送，DAC 自動鎖定 DSD 時脈。</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. License Terms -->
+          <div id="aboutSectionLicense" class="about-card">
+            <div class="about-card-title">
+              <span class="title-icon">📜</span>
+              <h3>使用授權範圍 (License & Scope of Use)</h3>
+            </div>
+            <div class="legal-content">
+              <div class="legal-block">
+                <h4>1. 個人與非商業使用授權</h4>
+                <p>
+                  rooPlayer 遵循 MIT 授權條款精神開發，供個人愛樂者、發燒音響玩家於個人電腦或家用網路環境中進行非商業性質之音訊播放、母帶數位檔案管理與數位訊號處理（DSP）。
+                </p>
+              </div>
+              <div class="legal-block">
+                <h4>2. 第三方元件與開放原始碼宣告</h4>
+                <p>本軟體整合了業界先進的開放原始碼專案與數位訊號處理演算法，相關智財權歸屬其原作者所有：</p>
+                <ul>
+                  <li><strong>Electron Framework</strong>：跨平台視窗執行環境 (Chromium / Node.js)。</li>
+                  <li><strong>@wasm-audio-decoders/flac</strong>：WebAssembly 高效能純本地 FLAC 無損解碼核心。</li>
+                  <li><strong>music-metadata</strong>：純 JavaScript 音訊標頭格式剖析與母帶元資料讀取引擎。</li>
+                  <li><strong>libsoxr / SoX Resampler 原理</strong>：Chebyshev 64 位元高階三次 Hermite 升頻超取樣多相濾波器。</li>
+                </ul>
+              </div>
+              <div class="legal-block">
+                <h4>3. 串流平台 API 授權遵循</h4>
+                <p>
+                  本軟體之線上曲庫功能係透過 KKBOX Open API 開放平台公開介面界接。所有曲目權利、封面圖片及 30 秒音樂試聽片段版權均屬 KKBOX 及各合作唱片公司所有。本程式嚴格遵守其條款，不對 Widevine DRM 加密之付費音訊進行破解或未授權側錄。
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Disclaimer -->
+          <div id="aboutSectionDisclaimer" class="about-card">
+            <div class="about-card-title">
+              <span class="title-icon">⚖️</span>
+              <h3>免責聲明 (Disclaimer)</h3>
+            </div>
+            <div class="legal-content">
+              <div class="legal-block">
+                <h4>1. 音訊硬體輸出與音量防護</h4>
+                <p>
+                  本軟體提供發燒級 DSP 升頻超取樣、1-bit DSD 調變以及 DLNA/UPnP 網路端點推送功能。由於高取樣率（如 384 kHz、DSD256、DSD512）會產生極寬頻率響應與高頻能量，使用者在切換升頻模式或更換 DAC 解碼裝置前，<strong>請務必先將音響擴大機或前級音量調至適當大小</strong>，以避免因硬體設備相容性或突波造成揚聲器、耳機或聽力損傷。開發團隊不對因音響器材操作不當所致之硬體損壞承擔責任。
+                </p>
+              </div>
+              <div class="legal-block">
+                <h4>2. 本機音訊檔案安全性</h4>
+                <p>
+                  rooPlayer 在執行音樂庫掃描、資料庫匯入/匯出及播放時，皆以<strong>唯讀 (Read-Only)</strong> 方式讀取您的原始無損音訊檔案。從資料庫移除資料夾僅刪除軟體內部的索引快取，不會刪除您實體硬碟中的任何音訊檔案。然而，使用者仍應對重要音樂母帶檔案建立常規備份。
+                </p>
+              </div>
+              <div class="legal-block">
+                <h4>3. 軟體現況提供 (AS-IS)</h4>
+                <p>
+                  本軟體依「現況」(AS-IS) 提供，不附帶任何明示或暗示之擔保，包括但不限於特定目的之適用性、不中斷性或無錯誤運作。在適用法律允許的最大範圍內，開發者均不對因使用或無法使用本軟體所產生之任何直接、間接或衍生性損害負責。
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 5. Technical Specifications -->
+          <div id="aboutSectionTech" class="about-card">
+            <div class="about-card-title">
+              <span class="title-icon">⚙️</span>
+              <h3>核心技術與發燒音訊規格 (Audiophile Specifications)</h3>
+            </div>
+            <div class="tech-spec-grid">
+              <div class="spec-row">
+                <span class="spec-label">支援音訊格式</span>
+                <span class="spec-value">FLAC (24/192), WAV (32-bit Float), AIFF, DSF (DSD64/128/256/512), DFF, MP3, M4A, AAC, OGG</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-label">PCM 升頻引擎</span>
+                <span class="spec-value">64-bit 浮點多相高階三次 Hermite 濾波器，支援 2x / 4x 整數倍頻、96k、192k、384k DXD</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-label">DSD 調變器</span>
+                <span class="spec-value">5 階超高頻噪聲整形 1-bit Delta-Sigma Modulator (2.8224 MHz ~ 22.5792 MHz 標準 Sony DSF 封裝)</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-label">網路串流架構</span>
+                <span class="spec-value">UPnP A/V Architecture v1.0, DLNA MediaRenderer, HTTP Progressive Streaming with Backpressure Flow Control</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-label">本地資料庫</span>
+                <span class="spec-value">高速 JSON 快取、路徑/元資料多重自動去重、完整我的最愛與播放計數同步機制</span>
               </div>
             </div>
           </div>

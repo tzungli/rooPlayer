@@ -5161,7 +5161,332 @@ body {
   border-color: rgba(0, 0, 0, 0.08) !important;
 }
 
+/* ============================================================
+   About View & User Manual Styles
+   ============================================================ */
+.about-container {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-width: 1040px;
+  padding-bottom: 40px;
+}
 
+.about-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 24px 28px;
+  box-shadow: var(--card-shadow);
+}
 
+.app-info-hero {
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.12) 0%, rgba(6, 182, 212, 0.06) 100%), var(--bg-card);
+  border-color: rgba(124, 58, 237, 0.3);
+}
 
+.app-info-left {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
 
+.about-app-logo {
+  width: 90px;
+  height: 90px;
+  border-radius: 18px;
+  object-fit: cover;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4), 0 0 20px rgba(124, 58, 237, 0.35);
+  flex-shrink: 0;
+}
+
+.app-info-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.app-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.app-title-row h2 {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: var(--text-main);
+  margin: 0;
+}
+
+.version-tag {
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(124, 58, 237, 0.2);
+  color: #c084fc;
+  border: 1px solid rgba(124, 58, 237, 0.4);
+  padding: 3px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.5px;
+}
+
+.engine-tag {
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-sub);
+  padding: 3px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.5px;
+}
+
+.app-tagline {
+  font-size: 13.5px;
+  color: var(--text-secondary, #94a3b8);
+  margin: 0;
+}
+
+.app-meta-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.meta-badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.about-quick-nav {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.about-nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-sub);
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.about-nav-link:hover {
+  background: rgba(124, 58, 237, 0.15);
+  color: #c084fc;
+  border-color: rgba(124, 58, 237, 0.4);
+}
+
+.about-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.about-card-title h3 {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0;
+}
+
+.title-icon {
+  font-size: 20px;
+}
+
+.section-intro-text {
+  font-size: 13px;
+  color: var(--text-sub);
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+/* Manual Modules Grid */
+.manual-modules-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .manual-modules-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.manual-item {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all 0.2s ease;
+}
+
+.manual-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(124, 58, 237, 0.3);
+}
+
+.manual-item-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.manual-item-header h4 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0;
+}
+
+.item-badge {
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(124, 58, 237, 0.2);
+  color: #c084fc;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+.manual-item-body {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary, #cbd5e1);
+}
+
+.manual-item-body p {
+  margin: 0 0 8px 0;
+}
+
+.manual-item-body ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.manual-item-body li {
+  margin-bottom: 4px;
+}
+
+/* Legal & Disclaimer Content */
+.legal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.legal-block h4 {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0 0 6px 0;
+}
+
+.legal-block p {
+  font-size: 13px;
+  color: var(--text-sub);
+  line-height: 1.65;
+  margin: 0;
+}
+
+.legal-block ul {
+  margin: 6px 0 0 0;
+  padding-left: 20px;
+  font-size: 12.5px;
+  color: var(--text-sub);
+  line-height: 1.6;
+}
+
+.legal-block li {
+  margin-bottom: 3px;
+}
+
+/* Technical Specification Grid */
+.tech-spec-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.spec-row {
+  display: flex;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  gap: 20px;
+  align-items: baseline;
+}
+
+.spec-label {
+  width: 140px;
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.spec-value {
+  font-size: 12.5px;
+  color: var(--text-sub);
+  line-height: 1.5;
+}
+
+@media (max-width: 680px) {
+  .spec-row {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .spec-label {
+    width: 100%;
+  }
+}
+
+/* Light Theme Overrides for About View */
+[data-theme="light"] .about-card {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .app-info-hero {
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.06) 0%, rgba(6, 182, 212, 0.03) 100%), #ffffff;
+  border-color: rgba(124, 58, 237, 0.2);
+}
+
+[data-theme="light"] .about-nav-link {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .manual-item {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .spec-row {
+  background: rgba(0, 0, 0, 0.015);
+  border-color: rgba(0, 0, 0, 0.06);
+}
