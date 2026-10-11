@@ -3327,12 +3327,27 @@ function updateSignalPathUI(track = null) {
     if (dspActivePrecisionHint) dspActivePrecisionHint.textContent = `${curPrecision}-bit VHQ`;
   }
 
-  if (!track) return;
+  if (!track) {
+    if (state.queue && state.queue.length > 0) {
+      track = state.queue[0];
+    } else if (state.tracks && state.tracks.length > 0) {
+      track = state.tracks[0];
+    } else {
+      track = {
+        title: '音訊測試曲目',
+        artist: 'Hi-Res Audio',
+        sampleRate: 44100,
+        bitsPerSample: 16,
+        formatName: 'FLAC',
+        isLossless: true
+      };
+    }
+  }
 
   const trkFmt = getAudioFormatFromPath(track.filePath || track.fileName, track.formatName || 'PCM').toUpperCase();
   const ext = trkFmt;
   const isNativeDsd = ext === 'DSF' || ext === 'DFF' || ext === 'DSD' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
-  const isDspActive = !track.isDemo && state.dsp && state.dsp.enabled;
+  const isDspActive = state.dsp && state.dsp.enabled;
 
   if (isDspActive) {
     const srcRate = track.sampleRate || 44100;
@@ -3351,22 +3366,23 @@ function updateSignalPathUI(track = null) {
 
       if (signalSoxArrow) signalSoxArrow.style.display = 'block';
       if (signalSoxStage) signalSoxStage.style.display = 'flex';
-      if (signalSoxTitle) signalSoxTitle.textContent = 'SoX Resampler & 1-bit DSD Modulator (SDM)';
-      if (signalSoxDesc) signalSoxDesc.textContent = `${state.dsp.precision}-bit VHQ 升頻調變：PCM ${srcKhz} ➔ ${modeUpper} (1-bit / ${mhz}) 噪聲整形`;
+      if (signalSoxTitle) signalSoxTitle.textContent = `升頻引擎：1-bit ${modeUpper} Delta-Sigma 調變`;
+      if (signalSoxDesc) signalSoxDesc.textContent = `超取樣升頻規格：PCM ${srcKhz} ➔ ${modeUpper} (1-bit / ${mhz} • ${state.dsp.precision}-bit VHQ 濾波精度 • 高頻噪聲整形)`;
 
       if (engineTitle) engineTitle.textContent = 'rooPlayer 1-bit DSD Modulator Engine';
-      if (engineDesc) engineDesc.textContent = '超寬頻 64-bit 浮點調變碼流，高頻噪聲上移至 100 kHz 射頻頻段，維持音訊帶平坦模擬聽感';
+      if (engineDesc) engineDesc.textContent = `超寬頻 64-bit 浮點即時調變碼流，高頻噪聲上移至 100 kHz 射頻頻段，維持音訊帶平坦模擬聽感`;
       if (signalPathDot) signalPathDot.className = 'signal-dot dsd-gold';
     } else {
-      if (signalPathBadge) signalPathBadge.textContent = `DSP (${state.dsp.rateMode.toUpperCase()}) | 24/${targetKhz} ⚡`;
+      const modeUpper = state.dsp.rateMode.toUpperCase();
+      if (signalPathBadge) signalPathBadge.textContent = `DSP (${modeUpper}) | 24/${targetKhz} ⚡`;
       if (statusPill) statusPill.textContent = 'DSP ENHANCED (SOX RESAMPLER)';
       if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
       if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless Input)';
 
       if (signalSoxArrow) signalSoxArrow.style.display = 'block';
       if (signalSoxStage) signalSoxStage.style.display = 'flex';
-      if (signalSoxTitle) signalSoxTitle.textContent = 'SoX Resampler (libsoxr VHQ)';
-      if (signalSoxDesc) signalSoxDesc.textContent = `${state.dsp.precision}-bit VHQ 浮點升頻：${srcKhz} ➔ ${targetKhz} (24-bit Hi-Res ${trkFmt})`;
+      if (signalSoxTitle) signalSoxTitle.textContent = `升頻引擎：SoX Resampler (${modeUpper})`;
+      if (signalSoxDesc) signalSoxDesc.textContent = `超取樣升頻規格：${srcKhz} ➔ 24-bit / ${targetKhz} (${state.dsp.precision}-bit VHQ 濾波精度 • 零相位失真還原)`;
 
       if (engineTitle) engineTitle.textContent = 'rooPlayer Core Audio Engine';
       if (engineDesc) engineDesc.textContent = `64-bit 浮點即時超取樣升頻核心 ➔ 輸出至 24-bit ${targetKhz}`;
