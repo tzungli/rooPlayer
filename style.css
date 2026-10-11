@@ -4837,6 +4837,175 @@ body {
   overflow: hidden;
 }
 
+/* ============================================================
+   KKBOX Light Theme Support
+   ============================================================ */
+[data-theme="light"] .kkbox-view-container {
+  background: var(--bg-main);
+}
+
+[data-theme="light"] .kkbox-header-bar {
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-color);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .kkbox-badge-name {
+  color: var(--text-main);
+}
+
+[data-theme="light"] .kkbox-view-switcher {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .kkbox-switch-btn {
+  color: var(--text-muted);
+}
+
+[data-theme="light"] .kkbox-switch-btn:hover {
+  color: var(--text-main);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .kkbox-switch-btn.active {
+  color: #000;
+  background: #00b4d8;
+  box-shadow: 0 2px 8px rgba(0, 180, 216, 0.3);
+}
+
+[data-theme="light"] .kkbox-search-box {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="light"] .kkbox-search-input {
+  color: var(--text-main);
+}
+
+[data-theme="light"] .kkbox-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+[data-theme="light"] .kkbox-info-banner {
+  background: rgba(0, 180, 216, 0.08);
+  border-bottom-color: rgba(0, 180, 216, 0.2);
+  color: #0284c7;
+}
+
+[data-theme="light"] .kkbox-info-banner .banner-close-btn {
+  color: #0284c7;
+}
+
+[data-theme="light"] .kkbox-section-title-wrap h2 {
+  color: var(--text-main);
+}
+
+[data-theme="light"] .kkbox-cat-chip {
+  background: #ffffff;
+  color: var(--text-sub);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .kkbox-cat-chip:hover {
+  background: #f1f5f9;
+  color: var(--text-main);
+}
+
+[data-theme="light"] .kkbox-cat-chip.active {
+  background: #00b4d8;
+  color: #ffffff;
+  border-color: #00b4d8;
+  box-shadow: 0 2px 8px rgba(0, 180, 216, 0.3);
+}
+
+[data-theme="light"] .kkbox-playlist-header-card {
+  background: linear-gradient(135deg, rgba(0, 180, 216, 0.12) 0%, #ffffff 100%);
+  border-color: rgba(0, 180, 216, 0.25);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .kkbox-header-card-title {
+  color: var(--text-main);
+}
+
+[data-theme="light"] .kkbox-header-card-desc {
+  color: var(--text-muted);
+}
+
+[data-theme="light"] .kkbox-track-row {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="light"] .kkbox-track-row:hover {
+  background: #f8fafc;
+  border-color: rgba(0, 180, 216, 0.4);
+}
+
+[data-theme="light"] .kkbox-track-title {
+  color: var(--text-main);
+}
+
+[data-theme="light"] .kkbox-track-artist {
+  color: var(--text-muted);
+}
+
+[data-theme="light"] .kkbox-playlist-card {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .kkbox-playlist-card:hover {
+  background: #ffffff;
+  border-color: rgba(0, 180, 216, 0.4);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .kkbox-playlist-title {
+  color: var(--text-main);
+}
+
+[data-theme="light"] .kkbox-btn-add-queue {
+  background: #f1f5f9;
+  color: var(--text-sub);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="light"] .kkbox-btn-add-queue:hover {
+  background: #e2e8f0;
+  color: var(--text-main);
+}
+
+[data-theme="light"] .kkbox-detail-banner {
+  background: linear-gradient(180deg, rgba(0, 180, 216, 0.12) 0%, #ffffff 100%);
+  border-color: rgba(0, 180, 216, 0.25);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .kkbox-detail-title {
+  color: var(--text-main);
+}
+
+[data-theme="light"] .kkbox-detail-desc {
+  color: var(--text-muted);
+}
+
+[data-theme="light"] .kkbox-login-modal-card {
+  background: #ffffff;
+  border-color: rgba(0, 180, 216, 0.3);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="light"] .kkbox-login-modal-card input {
+  background: #f8fafc !important;
+  color: var(--text-main) !important;
+  border-color: rgba(0, 0, 0, 0.15) !important;
+}
+
+
 
 
 

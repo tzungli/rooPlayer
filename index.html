@@ -706,7 +706,7 @@
       </div>
       <div class="modal-body" style="padding: 24px;">
         <p style="color: var(--text-muted); font-size: 13px; line-height: 1.6; margin-top: 0; margin-bottom: 20px;">
-          請輸入您的 KKBOX 帳號與密碼。登入後可聆聽 KKBOX 完整音樂曲庫、個人最愛與播放清單，享受高音質串流。
+          在此綁定您的 KKBOX 會員帳號。rooPlayer 透過 KKBOX Open API 與音訊串流伺服器為您同步官方排行榜、精選推薦與百萬曲庫作品。
         </p>
         
         <div class="form-group" style="margin-bottom: 16px;">
@@ -718,19 +718,21 @@
 
         <div class="form-group" style="margin-bottom: 20px;">
           <label style="display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;" for="kkboxInputPassword">
-            密碼
+            密碼 (選填)
           </label>
           <input type="password" id="kkboxInputPassword" class="form-control" placeholder="請輸入 KKBOX 密碼" autocomplete="current-password" style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: #fff; font-size: 14px;">
         </div>
 
         <div style="background: rgba(37, 213, 255, 0.08); border: 1px solid rgba(37, 213, 255, 0.25); border-radius: 8px; padding: 12px 14px; font-size: 12px; color: #a0d8ef; line-height: 1.6;">
-          🔒 <strong>安全連線提示</strong>：<br>
-          點擊「確認登入」後，系統將自動開啟 KKBOX 官方安全身分驗證頁面並自動帶入您的帳號密碼進行驗證。登入認證狀態將安全保存在本機隔離環境中，日後啟動 rooPlayer 免重複輸入。
+          ℹ️ <strong>KKBOX 串流技術說明</strong>：<br>
+          • <strong>API 串流長度</strong>：依據 KKBOX 官方開放平台 (Open API) 與唱片版權協議規範，所有第三方播放器透過 HTTP 串流協定獲取之官方直鏈皆為 30 秒高品質發燒試聽帶。<br>
+          • <strong>完整全曲與 Hi-Fi 無損</strong>：KKBOX 完整全曲與 24-bit Hi-Res 母帶串流受 <strong>Google Widevine DRM</strong> 加密保護，僅授權於 KKBOX 官方專用 App 或授權瀏覽器內部解密播放。<br>
+          • 系統已為您實作原生控制器完全相容（播放/暫停、進度條拖曳、清單循環、DLNA 串流），隨選隨播！
         </div>
       </div>
       <div class="modal-footer" style="padding: 16px 24px; display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid rgba(255,255,255,0.08);">
         <button class="btn btn-secondary" id="btnCancelKkboxLogin">取消</button>
-        <button class="btn btn-primary" id="btnSubmitKkboxLogin" style="background: #25d5ff; color: #000; font-weight: 600; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer;">確認登入 KKBOX</button>
+        <button class="btn btn-primary" id="btnSubmitKkboxLogin" style="background: #25d5ff; color: #000; font-weight: 600; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer;">儲存會員帳號</button>
       </div>
     </div>
   </div>

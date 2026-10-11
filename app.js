@@ -2909,24 +2909,35 @@ function playCurrentTrack() {
     stopDemoSynth();
 
     playerArtist.textContent = `⏳ 正在連接 KKBOX 官方音訊串流...`;
-    kkboxService.getTrackStreamUrl(track.kkboxId).then(streamUrl => {
-      if (!streamUrl) {
-        throw new Error('未取得有效音訊串流');
+    const setupAndPlay = (streamUrl) => {
+      if (nativeAudio.src !== streamUrl) {
+        nativeAudio.src = streamUrl;
       }
-      nativeAudio.src = streamUrl;
       return nativeAudio.play();
+    };
+
+    const streamPromise = (track.streamUrl)
+      ? Promise.resolve(track.streamUrl)
+      : kkboxService.getTrackStreamUrl(track.kkboxId).then(url => {
+          track.streamUrl = url;
+          return url;
+        });
+
+    streamPromise.then(streamUrl => {
+      if (!streamUrl) throw new Error('未取得有效音訊串流');
+      return setupAndPlay(streamUrl);
     }).then(() => {
       state.isPlaying = true;
-      btnPlayPause.textContent = '⏸';
+      updatePlayPauseBtnUI();
       playerArtist.textContent = `${track.artist} — ${track.album}`;
       totalTimeLabel.textContent = formatDuration(track.duration || 30);
       showToast(`🎵 正在播放 KKBOX 線上串流: 《${track.title}》`);
     }).catch(err => {
       console.error('KKBOX stream play error:', err);
-      playerArtist.textContent = `KKBOX 串流錯誤: ${err.message || '無法取得試聽音訊'}`;
+      playerArtist.textContent = `KKBOX 串流錯誤: ${err.message || '無法取得音訊'}`;
       showToast(`❌ KKBOX 播放失敗: ${err.message}`);
       state.isPlaying = false;
-      btnPlayPause.textContent = '▶';
+      updatePlayPauseBtnUI();
     });
   } else if (track.isDemo || !track.filePath) {
     isCurrentDsd = false;
@@ -3873,7 +3884,9 @@ function togglePlayPause() {
   }
 
   if (state.isPlaying) {
-    if (currentTrack.isDemo || !currentTrack.filePath) {
+    if (currentTrack.isKkbox) {
+      nativeAudio.pause();
+    } else if (currentTrack.isDemo || !currentTrack.filePath) {
       stopDemoSynth();
       pauseVirtualProgress();
     } else {
@@ -3882,7 +3895,21 @@ function togglePlayPause() {
     state.isPlaying = false;
     updatePlayPauseBtnUI();
   } else {
-    if (currentTrack.isDemo || !currentTrack.filePath) {
+    if (currentTrack.isKkbox) {
+      if (nativeAudio.src) {
+        nativeAudio.play().then(() => {
+          state.isPlaying = true;
+          updatePlayPauseBtnUI();
+        }).catch(err => {
+          console.warn('KKBOX resume failed, reloading:', err);
+          playCurrentTrack();
+        });
+        return;
+      } else {
+        playCurrentTrack();
+        return;
+      }
+    } else if (currentTrack.isDemo || !currentTrack.filePath) {
       playDemoSynth(currentTrack);
       resumeVirtualProgress();
     } else {
@@ -4082,7 +4109,7 @@ function playPrevTrack() {
       playDsdTrack(track, 0);
     } else if (isCurrentSox) {
       playSoxTrack(track, 0);
-    } else if (isLocalFile && nativeAudio.src) {
+    } else if ((isLocalFile || track.isKkbox) && nativeAudio.src) {
       nativeAudio.currentTime = 0;
     } else {
       virtualCurrentSec = 0;
@@ -4112,7 +4139,7 @@ function playPrevTrack() {
           playDsdTrack(track, 0);
         } else if (isCurrentSox) {
           playSoxTrack(track, 0);
-        } else if (isLocalFile && nativeAudio.src) {
+        } else if ((isLocalFile || track.isKkbox) && nativeAudio.src) {
           nativeAudio.currentTime = 0;
         } else {
           virtualCurrentSec = 0;
@@ -4157,7 +4184,7 @@ function onTrackEnded() {
       playDsdTrack(track, 0);
     } else if (isCurrentSox && track) {
       playSoxTrack(track, 0);
-    } else if (track && !track.isDemo && track.filePath && nativeAudio.src) {
+    } else if (track && (track.filePath || track.isKkbox) && nativeAudio.src) {
       nativeAudio.currentTime = 0;
       nativeAudio.play().catch(err => console.error('Repeat error:', err));
     } else {
@@ -4288,7 +4315,11 @@ scrubberBar.addEventListener('click', (e) => {
     return;
   }
 
-  if (track.isDemo || !track.filePath) {
+  if (track.isKkbox) {
+    if (nativeAudio.duration) {
+      nativeAudio.currentTime = ratio * nativeAudio.duration;
+    }
+  } else if (track.isDemo || !track.filePath) {
     virtualCurrentSec = Math.floor(ratio * virtualTotalSec);
     currentTimeLabel.textContent = formatDuration(virtualCurrentSec);
     scrubberFill.style.width = `${ratio * 100}%`;
