@@ -5362,7 +5362,7 @@ function setupScannerEvents() {
     }
   });
 
-  // Export Library Database
+  // Export Library Database (includes folders, tracks, favorites, and playStats)
   if (btnExportLibrary) {
     btnExportLibrary.addEventListener('click', async () => {
       if (!window.electronAPI || !window.electronAPI.exportLibrary) {
@@ -5370,11 +5370,21 @@ function setupScannerEvents() {
         return;
       }
 
-      const res = await window.electronAPI.exportLibrary();
+      // Collect current favorites and play counts
+      const currentFavorites = state.favorites || { albums: [], tracks: [], artists: [] };
+      const currentPlayStats = getPlayStats();
+
+      const res = await window.electronAPI.exportLibrary(null, {
+        favorites: currentFavorites,
+        playStats: currentPlayStats
+      });
       if (res && res.canceled) return;
 
       if (res && res.success) {
-        alert(`🎉 資料庫匯出成功！\n\n已儲存至：${res.filePath}\n包含資料夾：${res.folderCount} 個\n包含音訊曲目：${res.trackCount} 首`);
+        const favAlbs = (res.favoriteCounts && res.favoriteCounts.albums) || 0;
+        const favTrks = (res.favoriteCounts && res.favoriteCounts.tracks) || 0;
+        const favArts = (res.favoriteCounts && res.favoriteCounts.artists) || 0;
+        alert(`🎉 資料庫匯出成功！\n\n已儲存至：${res.filePath}\n• 收錄資料夾：${res.folderCount} 個\n• 音訊曲目：${res.trackCount} 首\n• 我的最愛：${favAlbs} 張專輯 / ${favTrks} 首歌曲 / ${favArts} 位演出者\n• 包含所有曲目與專輯播放統計次數`);
       } else {
         alert(`❌ 資料庫匯出失敗：${(res && res.error) || '未知錯誤'}`);
       }
@@ -5393,14 +5403,84 @@ function setupScannerEvents() {
       if (res && res.canceled) return;
 
       if (res && res.success) {
-        // Update local app state with merged data
+        // 1. Update tracks & folders state
         state.tracks = res.data.tracks || state.tracks;
         state.folders = res.data.folders || state.folders;
+
+        // 2. Merge Favorites (Albums, Tracks, Artists)
+        let favAddedCount = 0;
+        if (res.importedFavorites) {
+          if (!state.favorites) state.favorites = { albums: [], tracks: [], artists: [] };
+          if (!Array.isArray(state.favorites.albums)) state.favorites.albums = [];
+          if (!Array.isArray(state.favorites.tracks)) state.favorites.tracks = [];
+          if (!Array.isArray(state.favorites.artists)) state.favorites.artists = [];
+
+          // Merge albums
+          (res.importedFavorites.albums || []).forEach(albKey => {
+            if (albKey && !state.favorites.albums.some(k => k.toLowerCase() === albKey.toLowerCase())) {
+              state.favorites.albums.push(albKey);
+              favAddedCount++;
+            }
+          });
+          // Merge tracks
+          (res.importedFavorites.tracks || []).forEach(trkKey => {
+            if (trkKey && !state.favorites.tracks.some(k => k.toLowerCase() === trkKey.toLowerCase())) {
+              state.favorites.tracks.push(trkKey);
+              favAddedCount++;
+            }
+          });
+          // Merge artists
+          (res.importedFavorites.artists || []).forEach(artKey => {
+            if (artKey && !state.favorites.artists.some(k => k.toLowerCase() === artKey.toLowerCase())) {
+              state.favorites.artists.push(artKey);
+              favAddedCount++;
+            }
+          });
+
+          saveFavorites();
+          syncAllFavoriteUIs();
+        }
+
+        // 3. Merge Play Stats (Tracks and Albums play counts)
+        let playStatsMergedCount = 0;
+        if (res.importedPlayStats) {
+          const currentStats = getPlayStats();
+          if (!currentStats.tracks) currentStats.tracks = {};
+          if (!currentStats.albums) currentStats.albums = {};
+
+          if (res.importedPlayStats.tracks) {
+            for (const [k, count] of Object.entries(res.importedPlayStats.tracks)) {
+              if (typeof count === 'number' && count > 0) {
+                // Combine / take the max or sum of counts (sum represents combined plays across instances)
+                const prev = currentStats.tracks[k] || 0;
+                currentStats.tracks[k] = Math.max(prev, count);
+                playStatsMergedCount++;
+              }
+            }
+          }
+
+          if (res.importedPlayStats.albums) {
+            for (const [k, count] of Object.entries(res.importedPlayStats.albums)) {
+              if (typeof count === 'number' && count > 0) {
+                const prev = currentStats.albums[k] || 0;
+                currentStats.albums[k] = Math.max(prev, count);
+              }
+            }
+          }
+
+          savePlayStats(currentStats);
+        }
+
         rebuildLibraryCollections();
         renderAll();
 
-        // Show detailed import and skip report modal
-        showImportReportModal(res.report);
+        // 4. Attach stats to report and display report modal
+        const enrichedReport = {
+          ...res.report,
+          favAddedCount,
+          playStatsMergedCount
+        };
+        showImportReportModal(enrichedReport);
       } else {
         alert(`❌ 資料庫匯入失敗：${(res && res.error) || '未知錯誤'}`);
       }
@@ -5444,18 +5524,30 @@ function showImportReportModal(report) {
   const folderSkipped = report.folders.skipped.length;
   const trackAdded = report.tracks.addedCount;
   const trackSkipped = report.tracks.skippedCount;
+  const favAdded = report.favAddedCount || 0;
+  const playsMerged = report.playStatsMergedCount || 0;
 
   if (importReportStats) {
     importReportStats.innerHTML = `
-      <div class="import-report-stat-box" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 14px; text-align: center;">
+      <div class="import-report-stat-box" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; text-align: center;">
         <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">資料夾合併</div>
-        <div style="font-size: 20px; font-weight: 700; color: #10b981; margin: 4px 0;">+${folderAdded} <span style="font-size: 13px; font-weight: 400; color: var(--text-secondary);">新增</span></div>
-        <div style="font-size: 12px; color: #eab308;">略過重複：${folderSkipped} 個</div>
+        <div style="font-size: 18px; font-weight: 700; color: #10b981; margin: 3px 0;">+${folderAdded} <span style="font-size: 12px; font-weight: 400; color: var(--text-secondary);">新增</span></div>
+        <div style="font-size: 11px; color: #eab308;">略過重複：${folderSkipped} 個</div>
       </div>
-      <div class="import-report-stat-box" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 14px; text-align: center;">
+      <div class="import-report-stat-box" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; text-align: center;">
         <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">曲目資料合併</div>
-        <div style="font-size: 20px; font-weight: 700; color: #10b981; margin: 4px 0;">+${trackAdded} <span style="font-size: 13px; font-weight: 400; color: var(--text-secondary);">新增</span></div>
-        <div style="font-size: 12px; color: #eab308;">略過重複：${trackSkipped} 首</div>
+        <div style="font-size: 18px; font-weight: 700; color: #10b981; margin: 3px 0;">+${trackAdded} <span style="font-size: 12px; font-weight: 400; color: var(--text-secondary);">新增</span></div>
+        <div style="font-size: 11px; color: #eab308;">略過重複：${trackSkipped} 首</div>
+      </div>
+      <div class="import-report-stat-box" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; text-align: center;">
+        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">我的最愛合併</div>
+        <div style="font-size: 18px; font-weight: 700; color: #ec4899; margin: 3px 0;">+${favAdded} <span style="font-size: 12px; font-weight: 400; color: var(--text-secondary);">新增收藏</span></div>
+        <div style="font-size: 11px; color: var(--text-muted);">重複收藏自動略過</div>
+      </div>
+      <div class="import-report-stat-box" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; text-align: center;">
+        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">播放次數統計</div>
+        <div style="font-size: 18px; font-weight: 700; color: #8b5cf6; margin: 3px 0;">${playsMerged} <span style="font-size: 12px; font-weight: 400; color: var(--text-secondary);">首同步</span></div>
+        <div style="font-size: 11px; color: var(--text-muted);">保留最高播放數</div>
       </div>
     `;
   }

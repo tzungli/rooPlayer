@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('library:scanProgress', (_event, data) => callback(data));
   },
   loadSavedLibrary: () => ipcRenderer.invoke('library:loadSaved'),
-  exportLibrary: (defaultFilename) => ipcRenderer.invoke('library:export', defaultFilename),
+  exportLibrary: (defaultFilename, extraData) => ipcRenderer.invoke('library:export', defaultFilename, extraData),
   importLibrary: () => ipcRenderer.invoke('library:import'),
   removeFolder: (folderPath) => ipcRenderer.invoke('library:removeFolder', folderPath),
   updateAlbumArtist: (albumTitle, artistName) => ipcRenderer.invoke('library:updateAlbumArtist', albumTitle, artistName),

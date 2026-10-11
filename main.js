@@ -842,7 +842,7 @@ ipcMain.handle('library:updateAlbumArtist', async (event, albumTitle, artistName
   }
 });
 
-ipcMain.handle('library:export', async (event, defaultFilename) => {
+ipcMain.handle('library:export', async (event, defaultFilename, extraData) => {
   try {
     const existing = loadLibraryData();
     const d = new Date();
@@ -867,7 +867,9 @@ ipcMain.handle('library:export', async (event, defaultFilename) => {
       version: '1.0.0',
       exportedAt: new Date().toISOString(),
       folders: existing.folders || [],
-      tracks: existing.tracks || []
+      tracks: existing.tracks || [],
+      favorites: (extraData && extraData.favorites) ? extraData.favorites : { albums: [], tracks: [], artists: [] },
+      playStats: (extraData && extraData.playStats) ? extraData.playStats : { albums: {}, tracks: {} }
     };
 
     fs.writeFileSync(result.filePath, JSON.stringify(exportPayload, null, 2), 'utf-8');
@@ -876,7 +878,12 @@ ipcMain.handle('library:export', async (event, defaultFilename) => {
       success: true,
       filePath: result.filePath,
       folderCount: (exportPayload.folders || []).length,
-      trackCount: (exportPayload.tracks || []).length
+      trackCount: (exportPayload.tracks || []).length,
+      favoriteCounts: {
+        albums: (exportPayload.favorites.albums || []).length,
+        tracks: (exportPayload.favorites.tracks || []).length,
+        artists: (exportPayload.favorites.artists || []).length
+      }
     };
   } catch (err) {
     console.error('Failed to export library:', err);
@@ -1033,6 +1040,8 @@ ipcMain.handle('library:import', async () => {
     return {
       success: true,
       data: finalLib,
+      importedFavorites: importedData.favorites || null,
+      importedPlayStats: importedData.playStats || null,
       report
     };
   } catch (err) {
