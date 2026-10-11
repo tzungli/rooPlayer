@@ -5760,7 +5760,13 @@ async function switchAudioZone(target) {
 
       if (signalOutputIcon) signalOutputIcon.textContent = (dev.deviceCategory === 'tv') ? '📺' : '📡';
       if (signalOutputTitle) signalOutputTitle.textContent = `${dev.name} (DLNA / UPnP)`;
-      if (signalOutputDesc) signalOutputDesc.textContent = `透過區網即時串流至 ${dev.ip} (UPnP AVTransport)`;
+      if (signalOutputDesc) {
+        if (state.dsp && state.dsp.enabled && isDsdRateMode(state.dsp.rateMode)) {
+          signalOutputDesc.textContent = `透過區網即時傳輸 1-bit ${state.dsp.rateMode.toUpperCase()} DSF 串流至 ${dev.ip} (UPnP AVTransport)`;
+        } else {
+          signalOutputDesc.textContent = `透過區網即時串流至 ${dev.ip} (UPnP AVTransport)`;
+        }
+      }
 
       renderAudioDevicesList();
       showToast(`📡 已連線至串流節點：${dev.name}`);

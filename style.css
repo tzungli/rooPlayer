@@ -2168,9 +2168,23 @@ body {
   display: none !important;
 }
 
+[data-theme="light"] body,
 [data-theme="light"] #mainContent,
 [data-theme="light"] #appContainer {
+  background: var(--bg-main) !important;
   background-image: none !important;
+}
+
+[data-theme="light"] #mainContent::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="light"] #mainContent::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.22);
+}
+
+[data-theme="light"] .queue-drawer {
+  box-shadow: -2px 0 10px rgba(0, 0, 0, 0.05) !important;
 }
 
 [data-theme="light"] .hero-title {
