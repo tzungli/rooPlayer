@@ -1,9 +1,9 @@
 @echo off
-title Roon Media Manager
+title rooPlayer Audiophile Media Hub
 chcp 65001 > nul
 cd /d "%~dp0"
 echo ==============================================
-echo   正在啟動 Roon 音樂媒體管理器...
+echo   正在啟動 rooPlayer 音響級數位串流播放器...
 echo ==============================================
 npm start
 pause
