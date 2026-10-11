@@ -32,6 +32,8 @@ class DlnaManager extends EventEmitter {
     this.currentDspOptions = null;
     this.coverCache = new Map(); // filePath -> { mimeType, buffer }
     this.activeStreams = new Map(); // token -> streamInfo
+    this.nativeDspStreamer = options.nativeDspStreamer || require('./native-dsp-streamer');
+    this.currentStreamSession = null;
     this._playOpCounter = 0;
     this._activePlayPromise = null;
     this._pollSessionCounter = 0;
@@ -90,6 +92,10 @@ class DlnaManager extends EventEmitter {
           } else if (dsdModMatch || pathname === '/dsd-mod-stream' || pathname === '/dsd-mod-stream/') {
             const token = dsdModMatch ? dsdModMatch[1] : null;
             const streamInfo = token ? this.activeStreams.get(token) : null;
+            if (streamInfo && streamInfo.filePath && fs.existsSync(streamInfo.filePath)) {
+              this.handleLocalAudioStream(req, res, streamInfo.filePath);
+              return;
+            }
             const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
             const startSec = (streamInfo && streamInfo.startSec) !== undefined
               ? streamInfo.startSec
@@ -113,6 +119,10 @@ class DlnaManager extends EventEmitter {
           } else if (dsdMatch || pathname === '/dsd-stream' || pathname === '/dsd-stream/') {
             const token = dsdMatch ? dsdMatch[1] : null;
             const streamInfo = token ? this.activeStreams.get(token) : null;
+            if (streamInfo && streamInfo.filePath && fs.existsSync(streamInfo.filePath)) {
+              this.handleLocalAudioStream(req, res, streamInfo.filePath);
+              return;
+            }
             const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
             const startSec = (streamInfo && streamInfo.startSec) !== undefined
               ? streamInfo.startSec
@@ -127,6 +137,10 @@ class DlnaManager extends EventEmitter {
           } else if (soxMatch || pathname === '/sox-stream' || pathname === '/sox-stream/') {
             const token = soxMatch ? soxMatch[1] : null;
             const streamInfo = token ? this.activeStreams.get(token) : null;
+            if (streamInfo && streamInfo.filePath && fs.existsSync(streamInfo.filePath)) {
+              this.handleLocalAudioStream(req, res, streamInfo.filePath);
+              return;
+            }
             const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
             const startSec = (streamInfo && streamInfo.startSec) !== undefined
               ? streamInfo.startSec
@@ -932,11 +946,18 @@ class DlnaManager extends EventEmitter {
       return { success: false, cancelled: true };
     }
 
+    // Cancel any existing DSP progressive streaming session from previous track
+    if (this.currentStreamSession) {
+      this.currentStreamSession.cancel();
+      this.currentStreamSession = null;
+    }
+
     const localIp = this.getLocalIp();
     const ext = (track.formatName || '').toUpperCase();
     const isNativeDsd = ext === 'DSF' || ext === 'DFF' || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
     const isNativeDsf = !!(track.filePath && /\.dsf$/i.test(track.filePath));
     const isDsdUpsample = !!(dspOptions && dspOptions.enabled && dspOptions.dsdMode);
+    const isTv = (dev.deviceCategory === 'tv');
 
     // Register active stream token for clean, URL-safe endpoint without long query parameters
     const streamToken = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
@@ -947,32 +968,66 @@ class DlnaManager extends EventEmitter {
       this.activeStreams.delete(oldestKey);
     }
 
+    let activeFilePath = track.filePath;
     let streamUrl = '';
     let mimeType = 'audio/flac';
     let protocolInfo = 'http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
 
     if (isDsdUpsample) {
-      // 1-bit DSD Delta-Sigma Modulation upsampling (DSD64/128/256/512 in Sony DSF container)
-      streamUrl = `http://${localIp}:${this.streamingPort}/dsd-mod-stream/${streamToken}/audio.dsf`;
-      mimeType = 'audio/x-dsf';
-      protocolInfo = 'http-get:*:audio/x-dsf:*';
+      if (isTv) {
+        // Smart TV compatibility: TV cannot decode DSD bitstreams; provide High-Res 24-bit 96kHz WAV
+        const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, 96000, 24, track);
+        this.currentStreamSession = session;
+        activeFilePath = session.filePath;
+        streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
+        mimeType = 'audio/wav';
+        protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
+      } else {
+        // Audiophile streamer / DAC: Progressive on-the-fly DSD modulation in DSF container
+        const session = await this.nativeDspStreamer.createDsdSession(streamToken, track.filePath, startSec, dspOptions.dsdMode, track);
+        this.currentStreamSession = session;
+        activeFilePath = session.filePath;
+        streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.dsf`;
+        mimeType = 'audio/x-dsf';
+        protocolInfo = 'http-get:*:audio/x-dsf:*';
+      }
     } else if (isNativeDsf && (!dspOptions || !dspOptions.enabled)) {
-      // Bit-perfect native DSF file direct streaming
-      streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/track.dsf`;
-      mimeType = 'audio/x-dsf';
-      protocolInfo = 'http-get:*:audio/x-dsf:*';
+      if (isTv) {
+        // Smart TV: decimate DSF to 24-bit 88.2kHz WAV
+        const session = await this.nativeDspStreamer.createDsdDecimateSession(streamToken, track.filePath, startSec, track);
+        this.currentStreamSession = session;
+        activeFilePath = session.filePath;
+        streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
+        mimeType = 'audio/wav';
+        protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
+      } else {
+        // Audiophile streamer: Bit-perfect native DSF direct streaming
+        activeFilePath = track.filePath;
+        streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/track.dsf`;
+        mimeType = 'audio/x-dsf';
+        protocolInfo = 'http-get:*:audio/x-dsf:*';
+      }
     } else if (isNativeDsd) {
       // Native DFF or DSF needing PCM decimation to 24-bit 88.2kHz WAV
-      streamUrl = `http://${localIp}:${this.streamingPort}/dsd-stream/${streamToken}/audio.wav`;
+      const session = await this.nativeDspStreamer.createDsdDecimateSession(streamToken, track.filePath, startSec, track);
+      this.currentStreamSession = session;
+      activeFilePath = session.filePath;
+      streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
       mimeType = 'audio/wav';
       protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
     } else if (dspOptions && dspOptions.enabled) {
-      // PCM High-Res Upsampling to 24-bit WAV
-      streamUrl = `http://${localIp}:${this.streamingPort}/sox-stream/${streamToken}/audio.wav`;
+      // PCM High-Res Progressive Upsampling to 24-bit WAV
+      const targetRate = dspOptions.sampleRate || 192000;
+      const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, targetRate, dspOptions.precision || 24, track);
+      this.currentStreamSession = session;
+      activeFilePath = session.filePath;
+      streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
       mimeType = 'audio/wav';
       protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
     } else {
+      // Direct pass-through: zero latency, zero CPU!
       const fileExt = path.extname(track.filePath).toLowerCase() || '.flac';
+      activeFilePath = track.filePath;
       streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/track${fileExt}`;
       if (fileExt === '.mp3') {
         mimeType = 'audio/mpeg';
@@ -994,7 +1049,7 @@ class DlnaManager extends EventEmitter {
 
     this.activeStreams.set(streamToken, {
       track,
-      filePath: track.filePath,
+      filePath: activeFilePath,
       startSec,
       dspOptions,
       isDsd: isNativeDsd,
@@ -1175,6 +1230,10 @@ class DlnaManager extends EventEmitter {
     if (!dev) return;
 
     this.stopPositionPolling();
+    if (this.currentStreamSession) {
+      this.currentStreamSession.cancel();
+      this.currentStreamSession = null;
+    }
     try {
       await this.sendSoapRequest(
         dev.avControlUrl,
@@ -1315,8 +1374,8 @@ class DlnaManager extends EventEmitter {
 
         const stateUpper = (info.state || '').toUpperCase();
 
-        // Mark that device has successfully transitioned into PLAYING or TRANSITIONING
-        if (stateUpper === 'PLAYING' || stateUpper === 'TRANSITIONING') {
+        // Mark that device has successfully transitioned into PLAYING
+        if (stateUpper === 'PLAYING') {
           this.hasStartedPlaying = true;
         }
 
@@ -1326,32 +1385,27 @@ class DlnaManager extends EventEmitter {
           state: info.state
         });
 
-        const timeSinceStart = Date.now() - this.trackPlayTimestamp;
-        // Safety guard: device must have genuinely transitioned to PLAYING and played at least 6 seconds,
-        // or 20 seconds must have elapsed since play command, avoiding early STOPPED buffer blips
-        const canTriggerEnded = (this.hasStartedPlaying && timeSinceStart > 6000) || (timeSinceStart > 20000);
+        // Robust Track Ended Guard:
+        // A track has genuinely finished only when it was playing AND:
+        // 1. Explicitly reported COMPLETED, OR
+        // 2. Reported STOPPED and progress is within 2.5 seconds of total track duration, OR
+        // 3. Progress reached duration limit for 2 consecutive ticks
+        const isCompleted = (stateUpper === 'COMPLETED');
+        const reachedDuration = (totalDurationSec > 8 && (actualSec >= totalDurationSec - 2.5));
+        const isStoppedAtEnd = (stateUpper === 'STOPPED' && reachedDuration);
 
-        // Condition A: Standard DLNA state change to STOPPED / NO_MEDIA_PRESENT / COMPLETED
-        const isDeviceStopped = (
-          stateUpper === 'STOPPED' ||
-          stateUpper === 'NO_MEDIA_PRESENT' ||
-          stateUpper === 'COMPLETED'
-        );
-
-        if (canTriggerEnded && isDeviceStopped && this.playbackState === 'PLAYING') {
-          console.log(`[DLNA] Track finished on renderer (state=${stateUpper}, elapsed=${timeSinceStart}ms), triggering next track`);
+        if (this.hasStartedPlaying && (isCompleted || isStoppedAtEnd) && this.playbackState === 'PLAYING') {
+          console.log(`[DLNA] Track finished on renderer (state=${stateUpper}, progress=${actualSec}/${totalDurationSec}s), triggering next track`);
           this.playbackState = 'STOPPED';
           this.stopPositionPolling();
           this.emit('track-ended');
           return;
         }
 
-        // Condition B: Time-based threshold guard
-        // If reported progress reaches total duration (or within 1.5s of end)
-        if (canTriggerEnded && this.playbackState === 'PLAYING' && totalDurationSec > 10) {
+        // Time-based threshold guard
+        if (this.hasStartedPlaying && this.playbackState === 'PLAYING' && totalDurationSec > 10) {
           if (actualSec >= totalDurationSec || (totalDurationSec - actualSec <= 1.5 && actualSec > 0)) {
             nearEndCount++;
-            // If near end for 2 consecutive ticks (2 seconds)
             if (nearEndCount >= 2) {
               console.log(`[DLNA] Track reached duration limit (${actualSec}/${totalDurationSec}s), triggering next track`);
               this.playbackState = 'STOPPED';
@@ -1380,6 +1434,13 @@ class DlnaManager extends EventEmitter {
   // Cleanup on app exit
   async destroy() {
     this.stopPositionPolling();
+    if (this.currentStreamSession) {
+      try { this.currentStreamSession.cancel(); } catch (e) {}
+      this.currentStreamSession = null;
+    }
+    if (this.nativeDspStreamer) {
+      try { this.nativeDspStreamer.destroy(); } catch (e) {}
+    }
     if (this.currentDsdProcess) {
       try { this.currentDsdProcess.kill(); } catch (e) {}
       this.currentDsdProcess = null;
