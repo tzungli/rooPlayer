@@ -852,7 +852,13 @@
           <span class="now-playing-badge">NOW PLAYING</span>
           <span class="now-playing-subtitle">正在播放詳情與歌詞</span>
         </div>
-        <div class="now-playing-source-tag" id="nowPlayingSourceTag">母帶音訊串流</div>
+        <div class="now-playing-header-right" style="display: flex; align-items: center; gap: 12px; margin-right: 36px;">
+          <div class="now-playing-header-controls" style="display: flex; align-items: center; gap: 8px;">
+            <button class="np-header-ctrl-btn" id="btnNPHeaderPrev" title="上一首">⏮ 上一首</button>
+            <button class="np-header-ctrl-btn" id="btnNPHeaderNext" title="下一首">下一首 ⏭</button>
+          </div>
+          <div class="now-playing-source-tag" id="nowPlayingSourceTag" style="margin-right: 0;">母帶音訊串流</div>
+        </div>
       </div>
 
       <!-- Main 3-Column Layout -->
@@ -895,7 +901,11 @@
               <span>🎵</span>
               <span style="font-weight: 700;">專輯播放列表</span>
             </div>
-            <span class="now-playing-count-pill" id="nowPlayingTracklistCount">0 首歌曲</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <button class="np-header-ctrl-btn" id="btnNPPlaylistPrev" title="上一首">⏮</button>
+              <button class="np-header-ctrl-btn" id="btnNPPlaylistNext" title="下一首">⏭</button>
+              <span class="now-playing-count-pill" id="nowPlayingTracklistCount">0 首歌曲</span>
+            </div>
           </div>
           <div class="now-playing-tracklist-scroll" id="nowPlayingTracklistContainer">
             <!-- Dynamic Track items -->

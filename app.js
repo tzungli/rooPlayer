@@ -2820,9 +2820,39 @@ function closeAlbumDetail() {
 }
 
 // ----------------- Player & Audio Engine -----------------
+function findAlbumForTrack(track) {
+  if (!track || !state.albums || !state.albums.length) return null;
+  // 1. Try to find by track's filePath matching one of album.tracks
+  if (track.filePath) {
+    const byFile = state.albums.find(a => a.tracks && a.tracks.some(tr => tr.filePath && tr.filePath === track.filePath));
+    if (byFile) return byFile;
+  }
+  // 2. Try to match album title & artist
+  const trkAlbum = (track.album || '').trim().toLowerCase();
+  const trkArtist = (track.artist || '').trim().toLowerCase();
+  if (trkAlbum && trkArtist) {
+    const byBoth = state.albums.find(a => 
+      (a.title || '').trim().toLowerCase() === trkAlbum && 
+      ((a.artist || '').trim().toLowerCase() === trkArtist || (a.albumArtist || '').trim().toLowerCase() === trkArtist)
+    );
+    if (byBoth) return byBoth;
+  }
+  // 3. Try to match album title alone (handles compilation albums or various artists)
+  if (trkAlbum) {
+    const byTitle = state.albums.find(a => (a.title || '').trim().toLowerCase() === trkAlbum);
+    if (byTitle) return byTitle;
+  }
+  // 4. Try matching track title in album tracks
+  if (track.title) {
+    const byTrackTitle = state.albums.find(a => a.tracks && a.tracks.some(tr => tr.title && tr.title === track.title));
+    if (byTrackTitle) return byTrackTitle;
+  }
+  return null;
+}
+
 function getEnrichedTrack(track) {
   if (!track) return track;
-  const foundAlbum = state.albums.find(a => a.title === track.album && (a.artist || '').toLowerCase() === (track.artist || '').toLowerCase());
+  const foundAlbum = findAlbumForTrack(track);
   return {
     ...track,
     cover: track.cover || (foundAlbum ? foundAlbum.cover : null) || null,
@@ -2855,7 +2885,7 @@ function playCurrentTrack() {
   const track = state.queue[state.currentTrackIndex];
 
   // Record to recently played albums
-  const foundAlbum = state.albums.find(a => a.title === track.album && a.artist.toLowerCase() === track.artist.toLowerCase());
+  const foundAlbum = findAlbumForTrack(track);
   if (foundAlbum) {
     recordRecentlyPlayed(foundAlbum);
   }
@@ -2894,6 +2924,15 @@ function playCurrentTrack() {
 
   // Update Signal Path Badge & Modal
   updateSignalPathUI(track);
+
+  // Update Queue and Now Playing modal content immediately for all playback outputs (DLNA, local, DSD, KKBOX)
+  updateQueueActiveItem();
+  if (typeof updateNowPlayingModalContent === 'function') {
+    const npModal = document.getElementById('nowPlayingModal');
+    if (npModal && npModal.style.display !== 'none') {
+      updateNowPlayingModalContent();
+    }
+  }
 
   // 1. Play audio via DLNA if a network zone is selected
   if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
@@ -3791,7 +3830,7 @@ function updatePlayPauseBtnUI() {
 function updateNowPlayingModalContent() {
   if (state.currentTrackIndex < 0 || !state.queue[state.currentTrackIndex]) return;
   const track = state.queue[state.currentTrackIndex];
-  const foundAlbum = state.albums.find(a => a.title === track.album && a.artist.toLowerCase() === track.artist.toLowerCase());
+  const foundAlbum = findAlbumForTrack(track);
 
   // 1. Left: Cover Art & Track Info
   const defaultCover = createSvgCover(track.album || track.title, track.artist, '#27272a', '#09090b');
@@ -3858,7 +3897,9 @@ function updateNowPlayingModalContent() {
   if (tracklistScroll) {
     tracklistScroll.innerHTML = '';
     tracklistSource.forEach((t, idx) => {
-      const isCurrent = (t.title === track.title && (t.artist || '').toLowerCase() === (track.artist || '').toLowerCase());
+      const isCurrent = (track.filePath && t.filePath)
+        ? (t.filePath === track.filePath)
+        : (t.title === track.title && (t.artist || '').toLowerCase() === (track.artist || '').toLowerCase());
       const row = document.createElement('div');
       row.className = `np-track-item ${isCurrent ? 'active' : ''}`;
       row.innerHTML = `
@@ -3868,7 +3909,21 @@ function updateNowPlayingModalContent() {
         </div>
         <div class="np-track-dur">${formatDuration(t.duration)}</div>
       `;
+      row.dataset.trackNum = t.trackNumber || (idx + 1);
       row.onclick = () => {
+        // Immediate visual response
+        tracklistScroll.querySelectorAll('.np-track-item').forEach(el => {
+          el.classList.remove('active');
+          const numEl = el.querySelector('.np-track-num');
+          if (numEl && numEl.textContent === '🔊') {
+            const trackNum = el.dataset.trackNum || '';
+            numEl.textContent = trackNum;
+          }
+        });
+        row.classList.add('active');
+        const curNumEl = row.querySelector('.np-track-num');
+        if (curNumEl) curNumEl.textContent = '🔊';
+
         const queueIdx = state.queue.findIndex(qt => (qt.filePath && t.filePath) ? qt.filePath === t.filePath : qt.title === t.title);
         if (queueIdx >= 0) {
           state.currentTrackIndex = queueIdx;
@@ -5367,18 +5422,17 @@ function setupPlayerControls() {
     }
   });
 
-  const btnNPPrev = document.getElementById('btnNowPlayingPrev');
-  if (btnNPPrev) {
-    btnNPPrev.addEventListener('click', () => btnPrev.click());
-  }
-  const btnNPNext = document.getElementById('btnNowPlayingNext');
-  if (btnNPNext) {
-    btnNPNext.addEventListener('click', () => btnNext.click());
-  }
-  const btnNPPlayPause = document.getElementById('btnNowPlayingPlayPause');
-  if (btnNPPlayPause) {
-    btnNPPlayPause.addEventListener('click', () => togglePlayPause());
-  }
+  const attachNpControl = (id, fn) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', fn);
+  };
+  attachNpControl('btnNowPlayingPrev', () => playPrevTrack());
+  attachNpControl('btnNowPlayingNext', () => playNextTrack(false));
+  attachNpControl('btnNowPlayingPlayPause', () => togglePlayPause());
+  attachNpControl('btnNPHeaderPrev', () => playPrevTrack());
+  attachNpControl('btnNPHeaderNext', () => playNextTrack(false));
+  attachNpControl('btnNPPlaylistPrev', () => playPrevTrack());
+  attachNpControl('btnNPPlaylistNext', () => playNextTrack(false));
   const npScrubber = document.getElementById('nowPlayingScrubber');
   if (npScrubber) {
     npScrubber.addEventListener('click', (e) => {
