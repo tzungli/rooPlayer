@@ -10,6 +10,37 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const EventEmitter = require('events');
+const { fileURLToPath } = require('url');
+
+// Robust helper to resolve file://, media://, and plain local paths on Windows & POSIX
+function resolveLocalCoverPath(src) {
+  if (!src || typeof src !== 'string') return null;
+  src = src.trim();
+  if (src.startsWith('data:') || src.startsWith('http://') || src.startsWith('https://')) {
+    return null;
+  }
+  if (src.startsWith('file://')) {
+    try {
+      return fileURLToPath(src);
+    } catch (e) {
+      let clean = src.replace(/^file:\/\/\/?/, '');
+      clean = decodeURIComponent(clean);
+      if (/^[a-zA-Z]:[\\/]/.test(clean)) {
+        return clean.replace(/\//g, '\\');
+      }
+      return '/' + clean;
+    }
+  }
+  if (src.startsWith('media://')) {
+    let clean = src.replace(/^media:\/\/\/?/i, '');
+    clean = decodeURIComponent(clean);
+    if (/^[a-zA-Z]:[\\/]/.test(clean)) {
+      return clean.replace(/\//g, '\\');
+    }
+    return '/' + clean;
+  }
+  return src;
+}
 
 class DlnaManager extends EventEmitter {
   constructor(options = {}) {
@@ -18,6 +49,7 @@ class DlnaManager extends EventEmitter {
     this.devices = new Map(); // id -> device details
     this.activeDeviceId = 'local'; // 'local' or device.id
     this.currentTrack = null;
+    this.currentStreamToken = null;
     this.streamingServer = null;
     this.streamingPort = 0;
     this.ssdpSocket = null;
@@ -30,7 +62,8 @@ class DlnaManager extends EventEmitter {
     this.trackPlayTimestamp = 0;
     this.hasStartedPlaying = false;
     this.currentDspOptions = null;
-    this.coverCache = new Map(); // filePath -> { mimeType, buffer }
+    this.coverCache = new Map(); // key -> { mimeType, buffer }
+    this._pendingCoverPromises = new Map(); // key -> Promise
     this.activeStreams = new Map(); // token -> streamInfo
     this.nativeDspStreamer = options.nativeDspStreamer || require('./native-dsp-streamer');
     this.currentStreamSession = null;
@@ -40,9 +73,26 @@ class DlnaManager extends EventEmitter {
   }
 
   // Determine machine's local LAN IPv4 address
-  getLocalIp() {
+  getLocalIp(targetDeviceIp = null) {
     const interfaces = os.networkInterfaces();
     let fallback = '127.0.0.1';
+
+    // If target device IP provided, prioritize network interface on the same subnet
+    if (targetDeviceIp && typeof targetDeviceIp === 'string') {
+      const parts = targetDeviceIp.split('.');
+      if (parts.length === 4) {
+        const prefix3 = `${parts[0]}.${parts[1]}.${parts[2]}.`;
+        const prefix2 = `${parts[0]}.${parts[1]}.`;
+        for (const [name, addrs] of Object.entries(interfaces)) {
+          for (const a of addrs) {
+            if (a.family === 'IPv4' && !a.internal) {
+              if (a.address.startsWith(prefix3)) return a.address;
+              if (a.address.startsWith(prefix2)) return a.address;
+            }
+          }
+        }
+      }
+    }
 
     for (const [name, addrs] of Object.entries(interfaces)) {
       for (const a of addrs) {
@@ -164,12 +214,30 @@ class DlnaManager extends EventEmitter {
               console.error('handleSoxTranscodeStream error:', e);
               if (!res.headersSent) { res.writeHead(500); res.end('Upsample stream error'); }
             });
-          } else if (coverMatch || pathname === '/cover' || pathname === '/cover/') {
-            const token = coverMatch ? coverMatch[1] : null;
-            const streamInfo = token ? this.activeStreams.get(token) : null;
-            const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
-            const track = streamInfo ? streamInfo.track : this.currentTrack;
-            this.handleCoverImage(req, res, filePath, track);
+          } else if (
+            coverMatch ||
+            pathname === '/cover' ||
+            pathname === '/cover/' ||
+            pathname === '/cover.jpg' ||
+            pathname === '/cover.png' ||
+            pathname === '/albumart.jpg' ||
+            pathname === '/artwork.jpg'
+          ) {
+            let token = coverMatch ? coverMatch[1] : null;
+            if (token && (token === 'cover.jpg' || token === 'cover.png' || token === 'cover')) {
+              token = null;
+            }
+            const streamInfo = token ? this.activeStreams.get(token) : (this.currentStreamToken ? this.activeStreams.get(this.currentStreamToken) : null);
+            const effectiveToken = token || this.currentStreamToken;
+            const track = (streamInfo && streamInfo.track) || this.currentTrack;
+            const filePath = (track && track.filePath) || (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
+            this.handleCoverImage(req, res, filePath, track, effectiveToken).catch(err => {
+              console.error('[DLNA] handleCoverImage error:', err);
+              if (!res.headersSent) {
+                res.writeHead(500);
+                res.end('Cover error');
+              }
+            });
           } else {
             res.writeHead(404);
             res.end('Not found');
@@ -432,15 +500,181 @@ class DlnaManager extends EventEmitter {
     }
   }
 
-  // Handle album cover image serving for DLNA Renderers
-  async handleCoverImage(req, res, filePath, track = null) {
+  // Asynchronously resolve album artwork buffer and mimeType across all possible cover sources
+  async resolveCoverBuffer(track = null, filePath = null, token = null) {
+    const candidateKeys = [
+      token,
+      track && track.cover,
+      track && track.filePath,
+      track && track.id,
+      filePath
+    ].filter(Boolean);
+
+    // 1. Check in-memory coverCache
+    for (const key of candidateKeys) {
+      if (this.coverCache.has(key)) {
+        return this.coverCache.get(key);
+      }
+    }
+
+    // Lock deduplication promise if already in flight for this token/track
+    const lockKey = token || (track && (track.id || track.filePath || track.cover)) || filePath;
+    if (lockKey && this._pendingCoverPromises.has(lockKey)) {
+      return await this._pendingCoverPromises.get(lockKey);
+    }
+
+    const fetchPromise = (async () => {
+      try {
+        // 2. Check track.cover if present
+        if (track && track.cover && typeof track.cover === 'string') {
+          const coverSrc = track.cover.trim();
+
+          // 2a. Base64 data URL
+          if (coverSrc.startsWith('data:')) {
+            const match = coverSrc.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              const mimeType = match[1] || 'image/jpeg';
+              const buffer = Buffer.from(match[2], 'base64');
+              this.cacheCover(candidateKeys, mimeType, buffer);
+              return { mimeType, buffer };
+            }
+          }
+
+          // 2b. Remote HTTP or HTTPS URL (TIDAL, KKBOX, etc.)
+          if (coverSrc.startsWith('http://') || coverSrc.startsWith('https://')) {
+            try {
+              const resp = await fetch(coverSrc, { signal: AbortSignal.timeout(6000) });
+              if (resp.ok) {
+                const arrayBuf = await resp.arrayBuffer();
+                const buffer = Buffer.from(arrayBuf);
+                const rawMime = resp.headers.get('content-type') || 'image/jpeg';
+                const mimeType = rawMime.split(';')[0].trim();
+                this.cacheCover(candidateKeys, mimeType, buffer);
+                return { mimeType, buffer };
+              }
+            } catch (fetchErr) {
+              console.warn('[DLNA] Failed to fetch remote cover URL:', coverSrc, fetchErr.message);
+            }
+          }
+
+          // 2c. Local file URL (file://, file:///) or media URL (media://) or direct local path
+          const localPath = resolveLocalCoverPath(coverSrc);
+          if (localPath && fs.existsSync(localPath)) {
+            try {
+              const buffer = fs.readFileSync(localPath);
+              const ext = path.extname(localPath).toLowerCase();
+              const mimeType = (ext === '.png') ? 'image/png' : (ext === '.webp' ? 'image/webp' : 'image/jpeg');
+              this.cacheCover(candidateKeys, mimeType, buffer);
+              return { mimeType, buffer };
+            } catch (readErr) {
+              console.warn('[DLNA] Failed to read local cover file:', localPath, readErr.message);
+            }
+          }
+        }
+
+        // 3. Fallback: Search in track's original audio file directory
+        const audioPath = (track && track.filePath) || filePath;
+        if (audioPath && fs.existsSync(audioPath)) {
+          const dir = path.dirname(audioPath);
+          const candidates = [
+            'cover.jpg', 'cover.jpeg', 'cover.png',
+            'Cover.jpg', 'Cover.jpeg', 'Cover.png',
+            'folder.jpg', 'folder.jpeg', 'folder.png',
+            'Folder.jpg', 'Folder.jpeg', 'Folder.png',
+            'front.jpg', 'front.jpeg', 'front.png',
+            'Front.jpg', 'Front.jpeg', 'Front.png',
+            'album.jpg', 'album.jpeg', 'album.png',
+            'Album.jpg', 'Album.jpeg', 'Album.png'
+          ];
+          for (const name of candidates) {
+            const full = path.join(dir, name);
+            if (fs.existsSync(full)) {
+              try {
+                const buffer = fs.readFileSync(full);
+                const mimeType = name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+                this.cacheCover(candidateKeys, mimeType, buffer);
+                return { mimeType, buffer };
+              } catch (e) {}
+            }
+          }
+
+          // 4. Fallback: Parse embedded cover via music-metadata
+          try {
+            const mm = await import('music-metadata');
+            const metadata = await mm.parseFile(audioPath, { skipCovers: false });
+            if (metadata.common && metadata.common.picture && metadata.common.picture.length > 0) {
+              const pic = metadata.common.picture[0];
+              const buffer = Buffer.from(pic.data);
+              const mimeType = pic.format || 'image/jpeg';
+              this.cacheCover(candidateKeys, mimeType, buffer);
+              return { mimeType, buffer };
+            }
+          } catch (mmErr) {
+            // ignore
+          }
+        }
+
+        // 5. Fallback: Project icon (icon.png)
+        const iconPath = path.join(__dirname, 'icon.png');
+        if (fs.existsSync(iconPath)) {
+          try {
+            const buffer = fs.readFileSync(iconPath);
+            return { mimeType: 'image/png', buffer };
+          } catch (e) {}
+        }
+
+        // 6. Minimal 1x1 JPEG fallback
+        return { mimeType: 'image/jpeg', buffer: FALLBACK_JPEG };
+      } finally {
+        if (lockKey) this._pendingCoverPromises.delete(lockKey);
+      }
+    })();
+
+    if (lockKey) {
+      this._pendingCoverPromises.set(lockKey, fetchPromise);
+    }
+    return await fetchPromise;
+  }
+
+  // Handle album cover image serving for DLNA Renderers with standard UPnP/DLNA headers
+  async handleCoverImage(req, res, filePath, track = null, token = null) {
     const sendCover = (mime, buf) => {
-      res.writeHead(200, {
-        'Content-Type': mime || 'image/jpeg',
+      const isPng = !!(mime && mime.toLowerCase().includes('png'));
+      const dlnaPn = isPng ? 'PNG_LRG' : 'JPEG_LRG';
+      const safeMime = isPng ? 'image/png' : 'image/jpeg';
+      const headers = {
+        'Content-Type': safeMime,
         'Content-Length': buf.length,
         'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'public, max-age=86400'
-      });
+        'Cache-Control': 'public, max-age=86400',
+        'Accept-Ranges': 'bytes',
+        'Connection': 'keep-alive',
+        'contentFeatures.dlna.org': `DLNA.ORG_PN=${dlnaPn};DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=00900000000000000000000000000000`,
+        'transferMode.dlna.org': 'Interactive'
+      };
+
+      if (req.headers && req.headers.range) {
+        const range = req.headers.range;
+        const match = range.match(/bytes=(\d+)-(\d*)/);
+        if (match) {
+          const start = parseInt(match[1], 10);
+          const end = match[2] ? parseInt(match[2], 10) : buf.length - 1;
+          if (start < buf.length && end < buf.length && start <= end) {
+            const chunk = buf.subarray(start, end + 1);
+            headers['Content-Range'] = `bytes ${start}-${end}/${buf.length}`;
+            headers['Content-Length'] = chunk.length;
+            res.writeHead(206, headers);
+            if (req.method === 'HEAD') {
+              res.end();
+            } else {
+              res.end(chunk);
+            }
+            return;
+          }
+        }
+      }
+
+      res.writeHead(200, headers);
       if (req.method === 'HEAD') {
         res.end();
       } else {
@@ -449,87 +683,27 @@ class DlnaManager extends EventEmitter {
     };
 
     try {
-      // 1. If track object contains base64 cover data URL or local file path
-      if (track && track.cover && typeof track.cover === 'string') {
-        if (track.cover.startsWith('data:')) {
-          const match = track.cover.match(/^data:([^;]+);base64,(.+)$/);
-          if (match) {
-            const mime = match[1];
-            const buf = Buffer.from(match[2], 'base64');
-            if (filePath) this.cacheCover(filePath, mime, buf);
-            sendCover(mime, buf);
-            return;
-          }
-        } else if (fs.existsSync(track.cover)) {
-          const ext = path.extname(track.cover).toLowerCase();
-          const mime = (ext === '.png') ? 'image/png' : 'image/jpeg';
-          const buf = fs.readFileSync(track.cover);
-          if (filePath) this.cacheCover(filePath, mime, buf);
-          sendCover(mime, buf);
-          return;
-        }
-      }
-
-      // 2. Check in-memory coverCache
-      if (filePath && this.coverCache.has(filePath)) {
-        const cached = this.coverCache.get(filePath);
-        sendCover(cached.mimeType || 'image/jpeg', cached.buffer);
-        return;
-      }
-
-      // 3. Check local directory for cover/folder image files
-      if (filePath && fs.existsSync(filePath)) {
-        const dir = path.dirname(filePath);
-        const candidates = [
-          'cover.jpg', 'cover.jpeg', 'cover.png',
-          'folder.jpg', 'folder.jpeg', 'folder.png',
-          'front.jpg', 'front.jpeg', 'front.png',
-          'album.jpg', 'album.jpeg', 'album.png'
-        ];
-        for (const name of candidates) {
-          const full = path.join(dir, name);
-          if (fs.existsSync(full)) {
-            const buf = fs.readFileSync(full);
-            const mime = (name.endsWith('.png')) ? 'image/png' : 'image/jpeg';
-            this.cacheCover(filePath, mime, buf);
-            sendCover(mime, buf);
-            return;
-          }
-        }
-
-        // 4. Fallback: Parse embedded cover via music-metadata
-        try {
-          const mm = await import('music-metadata');
-          const metadata = await mm.parseFile(filePath, { skipCovers: false });
-          if (metadata.common && metadata.common.picture && metadata.common.picture.length > 0) {
-            const pic = metadata.common.picture[0];
-            const buf = Buffer.from(pic.data);
-            const mime = pic.format || 'image/jpeg';
-            this.cacheCover(filePath, mime, buf);
-            sendCover(mime, buf);
-            return;
-          }
-        } catch (err) {
-          // ignore metadata parse error
-        }
-      }
-
-      // 5. Ultimate fallback: Return valid 1x1 JPEG so renderer never gets 404
-      sendCover('image/jpeg', FALLBACK_JPEG);
+      const { mimeType, buffer } = await this.resolveCoverBuffer(track, filePath, token);
+      sendCover(mimeType, buffer);
     } catch (err) {
-      console.warn('handleCoverImage error:', err);
+      console.warn('[DLNA] handleCoverImage error:', err);
       if (!res.headersSent) {
         sendCover('image/jpeg', FALLBACK_JPEG);
       }
     }
   }
 
-  cacheCover(filePath, mimeType, buffer) {
-    if (this.coverCache.size > 100) {
-      const firstKey = this.coverCache.keys().next().value;
-      this.coverCache.delete(firstKey);
+  cacheCover(keys, mimeType, buffer) {
+    if (!buffer || buffer.length === 0) return;
+    const keyList = Array.isArray(keys) ? keys : [keys];
+    for (const key of keyList) {
+      if (!key) continue;
+      if (this.coverCache.size > 200) {
+        const firstKey = this.coverCache.keys().next().value;
+        this.coverCache.delete(firstKey);
+      }
+      this.coverCache.set(key, { mimeType: mimeType || 'image/jpeg', buffer });
     }
-    this.coverCache.set(filePath, { mimeType, buffer });
   }
 
   // Initialize SSDP Discovery
@@ -959,7 +1133,7 @@ class DlnaManager extends EventEmitter {
       this.currentStreamSession = null;
     }
 
-    const localIp = this.getLocalIp();
+    const localIp = this.getLocalIp(dev ? dev.ip : null);
     const ext = (track.formatName || '').toUpperCase();
     const isNativeDsd = ext === 'DSF' || ext === 'DFF' || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
     const isNativeDsf = !!(track.filePath && /\.dsf$/i.test(track.filePath));
@@ -1070,15 +1244,12 @@ class DlnaManager extends EventEmitter {
 
     this.streamStartSec = startSec || 0;
 
-    // Cache artwork if track contains cover data URL
-    if (track.cover && typeof track.cover === 'string' && track.cover.startsWith('data:')) {
-      const match = track.cover.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) {
-        const mime = match[1];
-        const buffer = Buffer.from(match[2], 'base64');
-        this.cacheCover(track.filePath, mime, buffer);
-      }
-    }
+    this.currentStreamToken = streamToken;
+
+    // Proactively pre-resolve and cache album artwork buffer for instantaneous serving to DLNA renderer
+    this.resolveCoverBuffer(track, activeFilePath, streamToken).catch(err => {
+      console.warn('[DLNA] Proactive resolveCoverBuffer error:', err.message);
+    });
 
     const coverUrl = `http://${localIp}:${this.streamingPort}/cover/${streamToken}/cover.jpg`;
 
@@ -1120,9 +1291,11 @@ class DlnaManager extends EventEmitter {
 
     didlParts.push(
       `    <upnp:albumArtURI dlna:profileID="JPEG_TN">${coverUrl}</upnp:albumArtURI>`,
+      `    <upnp:albumArtURI dlna:profileID="JPEG_SM">${coverUrl}</upnp:albumArtURI>`,
       `    <upnp:albumArtURI dlna:profileID="JPEG_MED">${coverUrl}</upnp:albumArtURI>`,
       `    <upnp:albumArtURI dlna:profileID="JPEG_LRG">${coverUrl}</upnp:albumArtURI>`,
       `    <upnp:albumArtURI>${coverUrl}</upnp:albumArtURI>`,
+      `    <upnp:icon>${coverUrl}</upnp:icon>`,
       `    <upnp:class>object.item.audioItem.musicTrack</upnp:class>`
     );
 
@@ -1141,6 +1314,15 @@ class DlnaManager extends EventEmitter {
     } else {
       didlParts.push(`    <res protocolInfo="${protocolInfo}" ${durationAttr}>${streamUrl}</res>`);
     }
+
+    // Secondary artwork resources placed AFTER audio resources
+    didlParts.push(
+      `    <res protocolInfo="http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_LRG;DLNA.ORG_FLAGS=00900000000000000000000000000000">${coverUrl}</res>`,
+      `    <res protocolInfo="http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_MED;DLNA.ORG_FLAGS=00900000000000000000000000000000">${coverUrl}</res>`,
+      `    <res protocolInfo="http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_TN;DLNA.ORG_FLAGS=00900000000000000000000000000000">${coverUrl}</res>`,
+      `    <res protocolInfo="http-get:*:image/jpeg:*">${coverUrl}</res>`,
+      `    <res protocolInfo="http-get:*:image/png:*">${coverUrl}</res>`
+    );
 
     didlParts.push(
       '  </item>',
