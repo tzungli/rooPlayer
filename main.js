@@ -19,6 +19,28 @@ process.on('unhandledRejection', (reason, promise) => {
 
 const nativeAudioEngine = require('./native-audio-engine');
 const mm = require('music-metadata');
+const ffmpegPath = require('ffmpeg-static');
+
+async function getDurationWithFfmpeg(filePath) {
+  return new Promise((resolve) => {
+    if (!filePath || !fs.existsSync(filePath)) return resolve(0);
+    const ff = spawn(ffmpegPath, ['-i', filePath], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    ff.stderr.on('data', d => { stderr += d.toString(); });
+    ff.on('close', () => {
+      const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      if (match) {
+        const hours = parseFloat(match[1]);
+        const mins = parseFloat(match[2]);
+        const secs = parseFloat(match[3]);
+        resolve(Math.round(hours * 3600 + mins * 60 + secs));
+      } else {
+        resolve(0);
+      }
+    });
+    ff.on('error', () => resolve(0));
+  });
+}
 
 const DlnaManager = require('./dlna-manager');
 let dlnaManager = null;
@@ -233,6 +255,20 @@ app.on('window-all-closed', async () => {
 let dsdStreamServer = null;
 let dsdStreamPort = 0;
 
+function getDsdStreamPort() {
+  if (dsdStreamPort > 0) return Promise.resolve(dsdStreamPort);
+  return new Promise((resolve) => {
+    let attempts = 0;
+    const interval = setInterval(() => {
+      attempts++;
+      if (dsdStreamPort > 0 || attempts > 40) {
+        clearInterval(interval);
+        resolve(dsdStreamPort || 9099);
+      }
+    }, 50);
+  });
+}
+
 let currentMainStreamProc = null;
 
 function startDsdStreamingServer() {
@@ -341,6 +377,155 @@ function startDsdStreamingServer() {
           'Access-Control-Allow-Origin': '*'
         });
         res.end(outWav);
+        return;
+      }
+
+      // TIDAL Realtime Lossless Audio Streaming & Local Server
+      if (reqUrl.pathname === '/tidal-stream') {
+        const trackId = reqUrl.searchParams.get('id');
+        const safeId = String(trackId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+        if (!safeId) {
+          res.writeHead(400);
+          res.end('Missing track id');
+          return;
+        }
+
+        const targetFile = path.join(TIDAL_CACHE_DIR, `${safeId}.flac`);
+
+        // 1. If file is already cached on disk (>64KB), stream with full Range support
+        if (fs.existsSync(targetFile)) {
+          try {
+            const stat = fs.statSync(targetFile);
+            if (stat.size > 64 * 1024) {
+              const fileSize = stat.size;
+              const range = req.headers.range;
+
+              if (req.method === 'HEAD') {
+                res.writeHead(200, {
+                  'Content-Type': 'audio/flac',
+                  'Content-Length': fileSize,
+                  'Accept-Ranges': 'bytes',
+                  'Access-Control-Allow-Origin': '*'
+                });
+                res.end();
+                return;
+              }
+
+              if (range) {
+                const parts = range.replace(/bytes=/, '').split('-');
+                const start = parseInt(parts[0], 10);
+                const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+                const chunkSize = (end - start) + 1;
+                res.writeHead(206, {
+                  'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                  'Accept-Ranges': 'bytes',
+                  'Content-Length': chunkSize,
+                  'Content-Type': 'audio/flac',
+                  'Access-Control-Allow-Origin': '*'
+                });
+                fs.createReadStream(targetFile, { start, end }).pipe(res);
+              } else {
+                res.writeHead(200, {
+                  'Content-Length': fileSize,
+                  'Content-Type': 'audio/flac',
+                  'Accept-Ranges': 'bytes',
+                  'Access-Control-Allow-Origin': '*'
+                });
+                fs.createReadStream(targetFile).pipe(res);
+              }
+              return;
+            }
+          } catch (err) {
+            console.warn('[StreamServer] Error reading cached TIDAL file:', err);
+          }
+        }
+
+        // 2. Not cached: stream on-the-fly via FFmpeg and write cache simultaneously
+        const info = tidalManifestMap.get(safeId);
+        if (!info || !info.manifestXml) {
+          res.writeHead(404);
+          res.end('TIDAL stream manifest not found');
+          return;
+        }
+
+        if (req.method === 'HEAD') {
+          res.writeHead(200, {
+            'Content-Type': 'audio/flac',
+            'Access-Control-Allow-Origin': '*',
+            'Transfer-Encoding': 'chunked'
+          });
+          res.end();
+          return;
+        }
+
+        res.writeHead(200, {
+          'Content-Type': 'audio/flac',
+          'Access-Control-Allow-Origin': '*',
+          'Transfer-Encoding': 'chunked'
+        });
+
+        const tempMpd = path.join(TIDAL_CACHE_DIR, `temp_${safeId}_${Date.now()}.mpd`);
+        const tempFlac = path.join(TIDAL_CACHE_DIR, `temp_${safeId}_${Date.now()}.flac`);
+        try {
+          fs.writeFileSync(tempMpd, info.manifestXml, 'utf-8');
+        } catch (e) {
+          console.error('[StreamServer] Failed to write temp MPD:', e);
+          res.end();
+          return;
+        }
+
+        const ff = spawn(ffmpegPath, [
+          '-loglevel', 'error',
+          '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,data',
+          '-i', tempMpd,
+          '-c', 'copy',
+          '-f', 'flac',
+          'pipe:1',
+          '-c', 'copy',
+          tempFlac
+        ]);
+
+        ff.stdout.pipe(res);
+
+        req.on('close', () => {
+          try { ff.stdout.unpipe(res); } catch (_) {}
+        });
+
+        ff.on('close', (code) => {
+          setTimeout(() => {
+            try { if (fs.existsSync(tempMpd)) fs.unlinkSync(tempMpd); } catch (_) {}
+          }, 1000);
+
+          if (code === 0 && fs.existsSync(tempFlac)) {
+            try {
+              const stat = fs.statSync(tempFlac);
+              if (stat.size > 64 * 1024) {
+                if (fs.existsSync(targetFile)) fs.unlinkSync(targetFile);
+                fs.renameSync(tempFlac, targetFile);
+                console.log(`[TIDAL] Successfully cached track ${safeId} to disk (${stat.size} bytes)`);
+              } else {
+                try { fs.unlinkSync(tempFlac); } catch (_) {}
+              }
+            } catch (_) {}
+          } else {
+            try { if (fs.existsSync(tempFlac)) fs.unlinkSync(tempFlac); } catch (_) {}
+          }
+        });
+
+        ff.on('error', (err) => {
+          console.error('[StreamServer] FFmpeg stream error:', err);
+          setTimeout(() => {
+            try { if (fs.existsSync(tempMpd)) fs.unlinkSync(tempMpd); } catch (_) {}
+            try { if (fs.existsSync(tempFlac)) fs.unlinkSync(tempFlac); } catch (_) {}
+          }, 1000);
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end('FFmpeg stream error');
+          } else {
+            res.end();
+          }
+        });
+
         return;
       }
 
@@ -461,6 +646,573 @@ ipcMain.handle('util:translateToZhTw', async (event, text) => {
     console.warn('Translate to Traditional Chinese failed:', err);
   }
   return text;
+});
+
+// ==========================================================
+// TIDAL Streaming Subsystem IPC & Auth
+// ==========================================================
+const TIDAL_AUTH_FILE = path.join(app.getPath('userData'), 'rooplayer_tidal_auth.json');
+
+function loadTidalAuth() {
+  try {
+    if (fs.existsSync(TIDAL_AUTH_FILE)) {
+      return JSON.parse(fs.readFileSync(TIDAL_AUTH_FILE, 'utf-8'));
+    }
+  } catch (e) {
+    console.warn('[TIDAL] Failed to read auth file:', e);
+  }
+  return null;
+}
+
+function saveTidalAuth(data) {
+  try {
+    fs.writeFileSync(TIDAL_AUTH_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    return true;
+  } catch (e) {
+    console.error('[TIDAL] Failed to save auth file:', e);
+    return false;
+  }
+}
+
+function clearTidalAuth() {
+  try {
+    if (fs.existsSync(TIDAL_AUTH_FILE)) {
+      fs.unlinkSync(TIDAL_AUTH_FILE);
+    }
+    const tidalSession = session.fromPartition('persist:tidal');
+    tidalSession.clearStorageData().catch(() => {});
+    return true;
+  } catch (e) {
+    console.error('[TIDAL] Failed to clear auth:', e);
+    return false;
+  }
+}
+
+ipcMain.handle('tidal:getStoredAuth', () => loadTidalAuth());
+ipcMain.handle('tidal:saveAuth', (event, data) => saveTidalAuth(data));
+ipcMain.handle('tidal:logout', () => clearTidalAuth());
+
+const TIDAL_CACHE_DIR = path.join(app.getPath('userData'), 'tidal_cache');
+if (!fs.existsSync(TIDAL_CACHE_DIR)) {
+  try { fs.mkdirSync(TIDAL_CACHE_DIR, { recursive: true }); } catch (_) {}
+}
+
+const tidalManifestMap = new Map();
+const activeTidalCachePromises = new Map();
+
+ipcMain.handle('tidal:getStreamUrl', async (event, trackId, playbackInfo) => {
+  if (!trackId) return null;
+  const safeId = String(trackId).replace(/[^a-zA-Z0-9_-]/g, '');
+  const targetFile = path.join(TIDAL_CACHE_DIR, `${safeId}.flac`);
+
+  let cachedFile = null;
+  if (fs.existsSync(targetFile)) {
+    try {
+      const stat = fs.statSync(targetFile);
+      if (stat.size > 64 * 1024) {
+        cachedFile = targetFile;
+      }
+    } catch (_) {}
+  }
+
+  if (playbackInfo && playbackInfo.manifest) {
+    let manifestXml = '';
+    try {
+      manifestXml = Buffer.from(playbackInfo.manifest, 'base64').toString('utf-8');
+    } catch (_) {}
+    tidalManifestMap.set(safeId, {
+      manifestXml,
+      manifestMimeType: playbackInfo.manifestMimeType,
+      bitDepth: playbackInfo.bitDepth || 16,
+      sampleRate: playbackInfo.sampleRate || 44100,
+      audioQuality: playbackInfo.audioQuality || 'LOSSLESS'
+    });
+  }
+
+  const port = await getDsdStreamPort();
+  const streamUrl = `http://127.0.0.1:${port}/tidal-stream?id=${safeId}`;
+
+  return {
+    streamUrl,
+    filePath: cachedFile,
+    bitDepth: playbackInfo ? (playbackInfo.bitDepth || 16) : 16,
+    sampleRate: playbackInfo ? (playbackInfo.sampleRate || 44100) : 44100,
+    audioQuality: playbackInfo ? (playbackInfo.audioQuality || 'LOSSLESS') : 'LOSSLESS'
+  };
+});
+
+ipcMain.handle('tidal:cacheTrack', async (event, trackId, streamUrlOrInfo, optionalInfo) => {
+  if (!trackId) return null;
+  const safeId = String(trackId).replace(/[^a-zA-Z0-9_-]/g, '');
+  const targetFile = path.join(TIDAL_CACHE_DIR, `${safeId}.flac`);
+
+  if (fs.existsSync(targetFile)) {
+    try {
+      const stat = fs.statSync(targetFile);
+      if (stat.size > 64 * 1024) {
+        return targetFile;
+      }
+    } catch (_) {}
+  }
+
+  if (activeTidalCachePromises.has(safeId)) {
+    return await activeTidalCachePromises.get(safeId);
+  }
+
+  const cachePromise = (async () => {
+    try {
+      let info = (optionalInfo && optionalInfo.manifest) ? optionalInfo : null;
+      if (!info && typeof streamUrlOrInfo === 'object' && streamUrlOrInfo && streamUrlOrInfo.manifest) {
+        info = streamUrlOrInfo;
+      }
+      if (!info) {
+        info = tidalManifestMap.get(safeId);
+      }
+
+      let manifestXml = (info && info.manifestXml) ? info.manifestXml : null;
+      if (!manifestXml && info && info.manifest) {
+        try {
+          manifestXml = Buffer.from(info.manifest, 'base64').toString('utf-8');
+        } catch (_) {}
+      }
+
+      if (manifestXml) {
+        const tempMpd = path.join(TIDAL_CACHE_DIR, `cache_temp_${safeId}_${Date.now()}.mpd`);
+        const tempFlac = path.join(TIDAL_CACHE_DIR, `cache_temp_${safeId}_${Date.now()}.flac`);
+        fs.writeFileSync(tempMpd, manifestXml, 'utf-8');
+
+        await new Promise((resolve, reject) => {
+          const ff = spawn(ffmpegPath, [
+            '-loglevel', 'error',
+            '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,data',
+            '-i', tempMpd,
+            '-c', 'copy',
+            tempFlac
+          ]);
+          ff.on('close', (code) => {
+            setTimeout(() => { try { if (fs.existsSync(tempMpd)) fs.unlinkSync(tempMpd); } catch (_) {} }, 500);
+            if (code === 0 && fs.existsSync(tempFlac)) {
+              resolve();
+            } else {
+              try { if (fs.existsSync(tempFlac)) fs.unlinkSync(tempFlac); } catch (_) {}
+              reject(new Error(`FFmpeg remux cache exited with code ${code}`));
+            }
+          });
+          ff.on('error', (err) => {
+            setTimeout(() => { try { if (fs.existsSync(tempMpd)) fs.unlinkSync(tempMpd); } catch (_) {} }, 500);
+            try { if (fs.existsSync(tempFlac)) fs.unlinkSync(tempFlac); } catch (_) {}
+            reject(err);
+          });
+        });
+
+        if (fs.existsSync(tempFlac)) {
+          try {
+            if (fs.existsSync(targetFile)) fs.unlinkSync(targetFile);
+            fs.renameSync(tempFlac, targetFile);
+            console.log(`[TIDAL] Cache finished for track ${safeId}`);
+            return targetFile;
+          } catch (e) {
+            console.warn('[TIDAL] Failed to rename cached FLAC:', e);
+          }
+        }
+      }
+
+      // Fallback: If streamUrlOrInfo is direct HTTP download URL
+      const directUrl = typeof streamUrlOrInfo === 'string' ? streamUrlOrInfo : null;
+      if (directUrl && directUrl.startsWith('http') && !directUrl.includes('/tidal-stream')) {
+        const res = await fetch(directUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const arrayBuf = await res.arrayBuffer();
+        fs.writeFileSync(targetFile, Buffer.from(arrayBuf));
+        return targetFile;
+      }
+
+      return null;
+    } catch (err) {
+      console.error('[TIDAL] Failed to cache track:', trackId, err);
+      return null;
+    } finally {
+      activeTidalCachePromises.delete(safeId);
+    }
+  })();
+
+  activeTidalCachePromises.set(safeId, cachePromise);
+  return await cachePromise;
+});
+
+// Universal backend API proxy to avoid renderer CORS and enable direct Node fetch
+ipcMain.handle('tidal:api', async (event, { endpoint, method = 'GET', body = null, token = '' }) => {
+  const url = endpoint.startsWith('http') ? endpoint : `https://api.tidal.com/v1${endpoint}`;
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  };
+
+  const options = {
+    method: method || 'GET',
+    headers
+  };
+  if (body && (method === 'POST' || method === 'PUT')) {
+    options.body = typeof body === 'string' ? body : JSON.stringify(body);
+  }
+
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    let errText = '';
+    try { errText = await res.text(); } catch (_) {}
+    throw new Error(`TIDAL API HTTP ${res.status}: ${errText || res.statusText}`);
+  }
+  return await res.json();
+});
+
+// Window-based official TIDAL Web Login & Token Capturer
+let activeTidalAuthWin = null;
+let activeTidalFinishLogin = null;
+
+ipcMain.handle('tidal:loginWithWindow', async () => {
+  return new Promise((resolve) => {
+    let resolved = false;
+
+    // Close any previous auth window if open
+    if (activeTidalAuthWin && !activeTidalAuthWin.isDestroyed()) {
+      try { activeTidalAuthWin.close(); } catch (_) {}
+    }
+
+    const authWin = new BrowserWindow({
+      width: 560,
+      height: 780,
+      title: 'TIDAL 官方帳號登入 — rooPlayer',
+      parent: mainWindow || undefined,
+      modal: false,
+      autoHideMenuBar: true,
+      webPreferences: {
+        partition: 'persist:tidal',
+        nodeIntegration: false,
+        contextIsolation: true
+      }
+    });
+    authWin.setMenu(null);
+    activeTidalAuthWin = authWin;
+
+    const tidalSession = session.fromPartition('persist:tidal');
+    const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+    tidalSession.setUserAgent(chromeUA);
+    authWin.webContents.setUserAgent(chromeUA);
+
+    // Allow third-party OAuth popups (e.g. Google, Apple, Facebook login)
+    authWin.webContents.setWindowOpenHandler(({ url }) => {
+      return { action: 'allow' };
+    });
+
+    const finishLogin = async (token, source = 'unknown') => {
+      if (resolved || !token) return;
+      token = String(token).trim();
+      if (token.length < 25) return;
+
+      console.log(`[TIDAL] Validating token from ${source} (${token.substring(0, 12)}...)...`);
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4500);
+
+        const sessRes = await fetch('https://api.tidal.com/v1/sessions', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'User-Agent': chromeUA
+          },
+          signal: controller.signal
+        }).catch(err => {
+          console.warn('[TIDAL] Verify fetch warning:', err.message);
+          return null;
+        });
+        clearTimeout(timeoutId);
+
+        // If explicitly unauthorized (401), this is a guest/bootstrap token, not a user token
+        if (sessRes && sessRes.status === 401) {
+          console.log('[TIDAL] Token is unauthenticated guest token (401), ignoring and waiting for user login...');
+          return;
+        }
+
+        let sess = null;
+        if (sessRes && sessRes.ok) {
+          sess = await sessRes.json().catch(() => null);
+        }
+
+        resolved = true;
+        activeTidalFinishLogin = null;
+        clearInterval(pollTimer);
+
+        const authData = {
+          accessToken: token,
+          userId: (sess && sess.userId) ? String(sess.userId) : '',
+          sessionId: (sess && sess.sessionId) || '',
+          countryCode: (sess && sess.countryCode) || 'TW',
+          channel: (sess && sess.channel) || '',
+          updatedAt: new Date().toISOString()
+        };
+
+        console.log('[TIDAL] Login successfully captured and verified! User ID:', authData.userId || 'Authenticated');
+        saveTidalAuth(authData);
+
+        setTimeout(() => {
+          try {
+            if (authWin && !authWin.isDestroyed()) authWin.close();
+          } catch (_) {}
+        }, 500);
+
+        resolve({ success: true, auth: authData });
+      } catch (err) {
+        console.warn('[TIDAL] Session check error:', err);
+        // Fallback: if token looks like a valid JWT (starts with eyJ), accept it
+        if (!resolved && token.startsWith('eyJ')) {
+          resolved = true;
+          activeTidalFinishLogin = null;
+          clearInterval(pollTimer);
+          const authData = {
+            accessToken: token,
+            countryCode: 'TW',
+            updatedAt: new Date().toISOString()
+          };
+          saveTidalAuth(authData);
+          setTimeout(() => {
+            try {
+              if (authWin && !authWin.isDestroyed()) authWin.close();
+            } catch (_) {}
+          }, 500);
+          resolve({ success: true, auth: authData });
+        }
+      }
+    };
+
+    activeTidalFinishLogin = finishLogin;
+
+    // Helper: extract Bearer token from header dictionary
+    const extractBearer = (headers) => {
+      if (!headers) return null;
+      for (const [k, v] of Object.entries(headers)) {
+        if (k.toLowerCase() === 'authorization') {
+          const strVal = Array.isArray(v) ? v[0] : String(v);
+          if (strVal && strVal.toLowerCase().startsWith('bearer ')) {
+            return strVal.slice(7).trim();
+          }
+        }
+      }
+      return null;
+    };
+
+    // 1. Intercept ALL outgoing requests across all domains in this session
+    const filterAll = { urls: ['*://*/*'] };
+
+    const onBeforeHeaders = (details, callback) => {
+      const token = extractBearer(details.requestHeaders);
+      if (token && !resolved) {
+        finishLogin(token, `onBeforeSendHeaders:${details.url}`);
+      }
+      callback({ requestHeaders: details.requestHeaders });
+    };
+
+    const onSentHeaders = (details) => {
+      const token = extractBearer(details.requestHeaders);
+      if (token && !resolved) {
+        finishLogin(token, `onSendHeaders:${details.url}`);
+      }
+    };
+
+    tidalSession.webRequest.onBeforeSendHeaders(filterAll, onBeforeHeaders);
+    tidalSession.webRequest.onSendHeaders(filterAll, onSentHeaders);
+
+    // 2. Active in-page probe function
+    const probePage = async () => {
+      if (resolved || authWin.isDestroyed()) return;
+
+      // 2-a. Check session cookies for JWT token
+      try {
+        const cookies = await tidalSession.cookies.get({ domain: '.tidal.com' });
+        for (const c of cookies) {
+          if (c.value && c.value.startsWith('eyJ') && c.value.length > 30) {
+            finishLogin(c.value, `cookie:${c.name}`);
+            return;
+          }
+        }
+      } catch (_) {}
+
+      // 2-b. Probe localStorage / sessionStorage / window
+      try {
+        const pageToken = await authWin.webContents.executeJavaScript(`
+          (function() {
+            try {
+              if (window.__tidal_captured_token__) return window.__tidal_captured_token__;
+
+              const stores = [window.localStorage, window.sessionStorage];
+              for (const s of stores) {
+                if (!s) continue;
+                for (let i = 0; i < s.length; i++) {
+                  const k = s.key(i);
+                  const v = s.getItem(k);
+                  if (!v) continue;
+
+                  // Direct JWT match
+                  const m = v.match(/eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_-]{10,}/);
+                  if (m) return m[0];
+
+                  // JSON deep search
+                  if (v.includes('token') || v.includes('Token') || v.includes('auth') || v.includes('Auth')) {
+                    try {
+                      const obj = JSON.parse(v);
+                      const search = (o) => {
+                        if (!o || typeof o !== 'object') return null;
+                        for (const prop in o) {
+                          const val = o[prop];
+                          if (typeof val === 'string' && val.length > 25) {
+                            if (val.startsWith('ey') || prop.toLowerCase().includes('token')) return val;
+                          } else if (typeof val === 'object') {
+                            const res = search(val);
+                            if (res) return res;
+                          }
+                        }
+                        return null;
+                      };
+                      const found = search(obj);
+                      if (found) return found;
+                    } catch (_) {}
+                  }
+                }
+              }
+            } catch(e) {}
+            return null;
+          })()
+        `).catch(() => null);
+
+        if (pageToken && typeof pageToken === 'string' && pageToken.length > 25 && !resolved) {
+          finishLogin(pageToken, 'executeJS:storage');
+          return;
+        }
+      } catch (_) {}
+
+      // 2-c. If already inside listen.tidal.com and not in login form, inject in-page fetch patch & sync button
+      try {
+        const curUrl = authWin.webContents.getURL();
+        if (curUrl && curUrl.includes('listen.tidal.com') && !curUrl.includes('/login')) {
+          await authWin.webContents.executeJavaScript(`
+            (function() {
+              // Monkey patch fetch & XHR to catch the next API request
+              if (!window.__tidal_hook_installed__) {
+                window.__tidal_hook_installed__ = true;
+                const origFetch = window.fetch;
+                window.fetch = function(...args) {
+                  try {
+                    const opts = args[1];
+                    if (opts && opts.headers) {
+                      let h = opts.headers;
+                      let auth = null;
+                      if (h instanceof Headers) auth = h.get('authorization') || h.get('Authorization');
+                      else if (typeof h === 'object') auth = h['Authorization'] || h['authorization'];
+                      if (auth && auth.startsWith('Bearer ')) {
+                        window.__tidal_captured_token__ = auth.slice(7).trim();
+                      }
+                    }
+                  } catch(_) {}
+                  return origFetch.apply(this, args);
+                };
+
+                const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+                XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+                  try {
+                    if (header && header.toLowerCase() === 'authorization' && value && value.startsWith('Bearer ')) {
+                      window.__tidal_captured_token__ = value.slice(7).trim();
+                    }
+                  } catch(_) {}
+                  return origSetHeader.apply(this, arguments);
+                };
+
+                // Trigger a benign internal fetch to provoke token transmission
+                try {
+                  fetch('https://api.tidal.com/v1/sessions').catch(() => {});
+                } catch(_) {}
+              }
+
+              // Inject floating sync bar on top of the TIDAL web player
+              if (!document.getElementById('rooplayer-sync-banner')) {
+                const banner = document.createElement('div');
+                banner.id = 'rooplayer-sync-banner';
+                banner.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:99999999;background:#000;border:2px solid #00e5ff;padding:8px 18px;border-radius:24px;color:#00e5ff;font-family:sans-serif;font-size:13px;font-weight:bold;cursor:pointer;box-shadow:0 6px 20px rgba(0,229,255,0.4);display:flex;align-items:center;gap:8px;';
+                banner.innerHTML = '<span>💎 已進入 TIDAL 首頁？點此立即同步授權至 rooPlayer</span>';
+                banner.onclick = function() {
+                  banner.innerHTML = '<span>⏳ 正在同步授權...</span>';
+                  try { fetch('https://api.tidal.com/v1/sessions').catch(() => {}); } catch(_) {}
+                };
+                document.body.appendChild(banner);
+              }
+            })()
+          `).catch(() => {});
+        }
+      } catch (_) {}
+    };
+
+    // Run active probe periodically every 1000ms
+    const pollTimer = setInterval(probePage, 1000);
+
+    // Event hooks on navigation
+    authWin.webContents.on('did-navigate', probePage);
+    authWin.webContents.on('did-navigate-in-page', probePage);
+    authWin.webContents.on('did-finish-load', probePage);
+
+    // Load official Web Player login entry point
+    authWin.loadURL('https://listen.tidal.com/login');
+
+    authWin.on('closed', () => {
+      activeTidalAuthWin = null;
+      activeTidalFinishLogin = null;
+      clearInterval(pollTimer);
+      try {
+        tidalSession.webRequest.onBeforeSendHeaders(filterAll, null);
+        tidalSession.webRequest.onSendHeaders(filterAll, null);
+      } catch (_) {}
+      if (!resolved) {
+        resolve({ success: false, error: '使用者關閉了登入視窗' });
+      }
+    });
+  });
+});
+
+// Manual/Immediate Probe Trigger IPC (when user clicks "已完成登入，立即擷取")
+ipcMain.handle('tidal:probeAuth', async () => {
+  if (activeTidalAuthWin && !activeTidalAuthWin.isDestroyed() && typeof activeTidalFinishLogin === 'function') {
+    try {
+      const tidalSession = session.fromPartition('persist:tidal');
+      // 1. Check cookies
+      const cookies = await tidalSession.cookies.get({ domain: '.tidal.com' });
+      for (const c of cookies) {
+        if (c.value && c.value.startsWith('eyJ') && c.value.length > 30) {
+          await activeTidalFinishLogin(c.value, `manualProbe:cookie:${c.name}`);
+          return { success: true };
+        }
+      }
+
+      // 2. Trigger fetch and inspect in page
+      const tok = await activeTidalAuthWin.webContents.executeJavaScript(`
+        (async function() {
+          if (window.__tidal_captured_token__) return window.__tidal_captured_token__;
+          for (let i = 0; i < localStorage.length; i++) {
+            const v = localStorage.getItem(localStorage.key(i));
+            if (!v) continue;
+            const m = v.match(/eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_-]{10,}/);
+            if (m) return m[0];
+          }
+          return null;
+        })()
+      `).catch(() => null);
+
+      if (tok && typeof tok === 'string' && tok.length > 25) {
+        await activeTidalFinishLogin(tok, 'manualProbe:executeJS');
+        return { success: true };
+      }
+    } catch (e) {
+      console.warn('[TIDAL] manualProbe error:', e);
+    }
+  }
+  return { success: false, error: '未檢測到登入視窗中的有效授權' };
 });
 
 // DLNA / UPnP MediaRenderer IPC handlers
@@ -834,7 +1586,8 @@ function saveLibrary(newTracks, folderPath) {
     if (!normalizedTarget.endsWith(path.sep)) normalizedTarget += path.sep;
 
     const otherTracks = (existing.tracks || []).filter(t => {
-      if (!t.filePath) return false;
+      if (t && t.isTidal) return true;
+      if (!t || !t.filePath) return false;
       const normalizedTrack = path.normalize(t.filePath).toLowerCase();
       return !normalizedTrack.startsWith(normalizedTarget);
     });
@@ -875,16 +1628,16 @@ function loadLibraryData() {
           const data = JSON.parse(raw);
           (data.folders || []).forEach(f => folderSet.add(f));
           (data.tracks || []).forEach(t => {
-            if (t && t.filePath) {
-              const normPath = path.normalize(t.filePath).toLowerCase();
+            if (t && (t.filePath || t.isTidal)) {
+              const normKey = t.isTidal ? `tidal_${t.tidalId || t.id}` : path.normalize(t.filePath).toLowerCase();
               if (t.cover && t.cover.startsWith('data:image')) {
                 t.cover = sanitizeTrackCover(t.cover);
                 modified = true;
               }
-              if (!trackPathMap.has(normPath)) {
-                trackPathMap.set(normPath, t);
+              if (!trackPathMap.has(normKey)) {
+                trackPathMap.set(normKey, t);
               } else {
-                const existing = trackPathMap.get(normPath);
+                const existing = trackPathMap.get(normKey);
                 if (!existing.cover && t.cover) {
                   existing.cover = t.cover;
                 }
@@ -971,7 +1724,8 @@ ipcMain.handle('library:removeFolder', async (event, folderPath) => {
   if (!normalizedTarget.endsWith(path.sep)) normalizedTarget += path.sep;
 
   const remainingTracks = (existing.tracks || []).filter(t => {
-    if (!t.filePath) return false;
+    if (t && t.isTidal) return true;
+    if (!t || !t.filePath) return false;
     const normalizedTrack = path.normalize(t.filePath).toLowerCase();
     return !normalizedTrack.startsWith(normalizedTarget);
   });
@@ -989,6 +1743,22 @@ ipcMain.handle('library:removeFolder', async (event, folderPath) => {
   };
   fs.writeFileSync(LIBRARY_FILE, JSON.stringify(data), 'utf-8');
   return data;
+});
+
+ipcMain.handle('library:saveTracks', async (event, tracks) => {
+  try {
+    const existing = loadLibraryData();
+    const data = {
+      updatedAt: new Date().toISOString(),
+      folders: existing.folders || [],
+      tracks: Array.isArray(tracks) ? tracks : []
+    };
+    fs.writeFileSync(LIBRARY_FILE, JSON.stringify(data), 'utf-8');
+    return { success: true, count: data.tracks.length };
+  } catch (err) {
+    console.error('Failed to save library tracks:', err);
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle('library:updateAlbumArtist', async (event, albumTitle, artistName) => {

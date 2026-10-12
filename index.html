@@ -115,6 +115,15 @@
           <span class="nav-label">KKBOX</span>
           <span class="badge" id="kkboxStatusBadge" style="background: rgba(37, 213, 255, 0.15); color: #25d5ff; border: 1px solid rgba(37, 213, 255, 0.35);">在線</span>
         </button>
+        <button class="nav-item" data-view="tidal" id="navItemTidal">
+          <span class="nav-icon" style="color: #00e5ff; display: inline-flex; align-items: center; justify-content: center;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="M4 10.182L7.273 7 10.545 10.182 7.273 13.364 4 10.182zm6.545 6.545L13.818 13.545 17.091 16.727 13.818 19.909 10.545 16.727zm0-13.09L13.818 0.455 17.091 3.636 13.818 6.818 10.545 3.636zm6.545 6.545L20.364 7 23.636 10.182 20.364 13.364 17.091 10.182z"/>
+            </svg>
+          </span>
+          <span class="nav-label">TIDAL</span>
+          <span class="badge" id="tidalStatusBadge" style="background: rgba(0, 229, 255, 0.12); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.3);">未登入</span>
+        </button>
       </div>
 
       <div class="nav-group">
@@ -368,6 +377,20 @@
               <div class="album-grid streaming-catalog-grid" id="streamingCatalogGrid">
                 <!-- Injected via JS -->
               </div>
+
+              <!-- TIDAL Online Matching Tracks -->
+              <div class="streaming-tracks-block" id="streamingTracksBlock" style="display: none; margin-top: 24px;">
+                <div class="streaming-catalog-header">
+                  <h3 style="display: flex; align-items: center; gap: 8px;">
+                    <span style="color: #00e5ff;">💎</span>
+                    <span>TIDAL 相符歌曲曲目 (直接點播)</span>
+                  </h3>
+                  <span id="streamingTracksCount">0 首</span>
+                </div>
+                <div class="tidal-track-list" id="streamingTracksList">
+                  <!-- Injected via JS -->
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -414,7 +437,24 @@
                 <button class="btn btn-primary" id="btnPlayAlbumNow">▶ 播放專輯</button>
                 <button class="btn btn-secondary" id="btnShuffleAlbum">🔀 隨機播放</button>
                 <button class="btn btn-secondary" id="btnFavAlbumDetail"><svg class="fav-svg-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> <span>加入最愛專輯</span></button>
+                <button class="btn btn-secondary" id="btnTidalLibraryToggle" style="display: none;">
+                  <span id="btnTidalLibraryToggleIcon">➕</span> <span id="btnTidalLibraryToggleText">加入曲庫</span>
+                </button>
               </div>
+            </div>
+          </div>
+
+          <!-- Roon-Style Album Versions (本機與線上版本比對切換) -->
+          <div class="album-versions-section" id="albumVersionsSection" style="display: none;">
+            <div class="album-versions-header">
+              <div class="album-versions-title">
+                <span>💿 其他發行版本 / VERSIONS</span>
+                <span class="versions-count-badge" id="albumVersionsCountBadge">2 個版本</span>
+              </div>
+              <span class="versions-hint-text">點擊切換不同音質規格或發行版本</span>
+            </div>
+            <div class="album-versions-grid" id="albumVersionsGrid">
+              <!-- Injected via JS -->
             </div>
           </div>
 
@@ -606,8 +646,8 @@
         <div class="artist-section-block">
           <div class="section-header">
             <div class="header-with-tag">
-              <h2>🌐 線上專輯探索 (本機未收錄)</h2>
-              <div class="streaming-platforms-tags">
+              <h2 id="artistOnlineSectionTitle">🌐 線上專輯探索 (本機未收錄)</h2>
+              <div class="streaming-platforms-tags" id="artistOnlinePlatformTags">
                 <span class="platform-tag tidal">Tidal</span>
                 <span class="platform-tag qobuz">Qobuz</span>
                 <span class="platform-tag kkbox">KKBOX</span>
@@ -617,7 +657,7 @@
             </div>
             <span class="section-count-badge" id="artistMissingAlbumsCount">載入中...</span>
           </div>
-          <p class="section-desc">比對線上音樂資料庫，為您挖掘該歌手尚未收藏的經典專輯，點擊按鈕可直接前往 Tidal、Qobuz Hi-Res、KKBOX、Apple Music 或 Spotify 平台搜尋聆聽。</p>
+          <p class="section-desc" id="artistOnlineSectionDesc">比對線上音樂資料庫，為您挖掘該歌手尚未收藏的經典專輯，點擊按鈕可直接前往 Tidal、Qobuz Hi-Res、KKBOX、Apple Music 或 Spotify 平台搜尋聆聽。</p>
           
           <div class="bio-loading" id="missingAlbumsLoading">
             <span class="spinner"></span> 正在比對線上音樂庫 (Tidal / Qobuz / KKBOX 支援)...
@@ -959,6 +999,224 @@
         </div>
       </section>
 
+      <!-- 10.5 TIDAL HI-RES STREAMING VIEW (Native rooPlayer Explorer) -->
+      <section id="viewTidal" class="content-view">
+        <div class="tidal-view-container">
+          <!-- TIDAL Top Navigation Toolbar -->
+          <div class="tidal-header-bar">
+            <div class="tidal-header-left">
+              <div class="tidal-brand-badge">
+                <span class="tidal-badge-logo">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <path d="M4 10.182L7.273 7 10.545 10.182 7.273 13.364 4 10.182zm6.545 6.545L13.818 13.545 17.091 16.727 13.818 19.909 10.545 16.727zm0-13.09L13.818 0.455 17.091 3.636 13.818 6.818 10.545 3.636zm6.545 6.545L20.364 7 23.636 10.182 20.364 13.364 17.091 10.182z"/>
+                  </svg>
+                </span>
+                <span class="tidal-badge-name">TIDAL</span>
+                <span class="tidal-badge-tag">HI-RES EXPLORER</span>
+              </div>
+              <div class="tidal-view-switcher">
+                <button class="tidal-switch-btn active" id="btnTidalTabFeatured" title="探索 TIDAL 官方推薦與發燒母帶">
+                  💎 發燒推薦
+                </button>
+                <button class="tidal-switch-btn" id="btnTidalTabNewReleases" title="最新發行 Hi-Res 專輯">
+                  🆕 最新發行
+                </button>
+                <button class="tidal-switch-btn" id="btnTidalTabCollection" title="瀏覽我的 TIDAL 雲端最愛收藏">
+                  ❤️ 我的收藏
+                </button>
+              </div>
+            </div>
+
+            <div class="tidal-header-right">
+              <div class="tidal-search-box">
+                <span class="tidal-search-icon">🔍</span>
+                <input type="text" id="tidalSearchInput" placeholder="在 TIDAL Hi-Res 百萬曲庫搜尋歌曲/專輯/演出者..." class="tidal-search-input">
+                <button class="btn btn-sm btn-tidal-search" id="btnTidalSearch">搜尋</button>
+              </div>
+              <button class="btn btn-sm btn-tidal-account" id="btnOpenTidalAccount" title="TIDAL 帳號與連線資訊">
+                💎 TIDAL 帳號
+              </button>
+            </div>
+          </div>
+
+          <!-- TIDAL Status Banner -->
+          <div class="tidal-info-banner" id="tidalInfoBanner">
+            <span class="banner-icon">💎</span>
+            <span class="banner-text" id="tidalBannerText">💡 TIDAL 發燒無損曲庫：支援 24-bit/192kHz Hi-Res MAX、SoX Hermite 即時倍頻與 1-bit DSD 調變，可一鍵點播整張專輯或無縫加入本機曲庫。</span>
+            <button class="banner-close-btn" id="btnCloseTidalBanner">✕</button>
+          </div>
+
+          <!-- Logged Out Welcome View (If TIDAL not yet connected) -->
+          <div id="tidalNotConnectedBanner" class="tidal-not-connected-banner" style="display: none;">
+            <div class="not-connected-icon">💎</div>
+            <h2>尚未連線至 TIDAL 發燒雲端曲庫</h2>
+            <p>登入您的 TIDAL 帳號，即可以 rooPlayer 原生音訊引擎直接串流 24-bit Hi-Res MAX 母帶音質，並無縫整合本機與線上曲庫。</p>
+            <button class="btn btn-primary" id="btnTidalConnectNow">立即登入 TIDAL</button>
+          </div>
+
+          <!-- Main Sub-View Container -->
+          <div id="tidalExplorerContainer">
+            <!-- Pane 1: Featured & Hi-Res Picks -->
+            <div class="tidal-content-pane active" id="tidalPaneFeatured">
+              <div class="tidal-api-view-inner">
+                <div class="tidal-section-title-wrap">
+                  <div>
+                    <h2>💎 發燒推薦與精選母帶 (Hi-Res Masters)</h2>
+                    <span class="tidal-sub-desc">TIDAL 官方精選 Hi-Res 24-bit 高解析錄音室母帶 • 支援整張一鍵播放與加入曲庫</span>
+                  </div>
+                  <div class="tidal-pane-actions">
+                    <button class="btn btn-sm btn-secondary" id="btnRefreshTidalFeatured">🔄 重新整理</button>
+                  </div>
+                </div>
+                <!-- Curated genre/mood filter chips -->
+                <div class="tidal-filter-chips-bar" id="tidalFeaturedFilterChips">
+                  <button class="tidal-chip-btn active" data-curated="audiophile">發燒名盤</button>
+                  <button class="tidal-chip-btn" data-curated="vocal">發燒女聲</button>
+                  <button class="tidal-chip-btn" data-curated="classical">古典交響</button>
+                  <button class="tidal-chip-btn" data-curated="jazz">經典爵士</button>
+                  <button class="tidal-chip-btn" data-curated="pop">西洋潮流</button>
+                </div>
+                <div class="album-grid" id="tidalFeaturedGrid">
+                  <div class="tidal-loading-indicator">⏳ 正在載入 TIDAL 發燒推薦專輯...</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pane 2: New Releases -->
+            <div class="tidal-content-pane" id="tidalPaneNewReleases" style="display: none;">
+              <div class="tidal-api-view-inner">
+                <div class="tidal-section-title-wrap">
+                  <div>
+                    <h2>🆕 最新發行專輯 (New Releases)</h2>
+                    <span class="tidal-sub-desc">全球官方同步首發無損母帶專輯與新單曲</span>
+                  </div>
+                  <div class="tidal-pane-actions">
+                    <button class="btn btn-sm btn-secondary" id="btnRefreshTidalNewReleases">🔄 重新整理</button>
+                  </div>
+                </div>
+                <div class="album-grid" id="tidalNewReleasesGrid">
+                  <div class="tidal-loading-indicator">⏳ 正在載入 TIDAL 最新發行專輯...</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pane 3: My Collection -->
+            <div class="tidal-content-pane" id="tidalPaneCollection" style="display: none;">
+              <div class="tidal-api-view-inner">
+                <div class="tidal-section-title-wrap">
+                  <div>
+                    <h2>❤️ 我的 TIDAL 雲端收藏</h2>
+                    <span class="tidal-sub-desc" id="tidalCollectionSubDesc">已同步您的 TIDAL 帳號收藏清單</span>
+                  </div>
+                  <div class="tidal-collection-switchers">
+                    <button class="btn-sub-tab active" id="btnTidalSubFavAlbums">💿 最愛專輯 (<span id="tidalFavAlbumsCountBadge">0</span>)</button>
+                    <button class="btn-sub-tab" id="btnTidalSubFavTracks">🎵 最愛歌曲 (<span id="tidalFavTracksCountBadge">0</span>)</button>
+                    <button class="btn-sub-tab" id="btnTidalSubPlaylists">📑 我的歌單 (<span id="tidalPlaylistsCountBadge">0</span>)</button>
+                    <button class="btn btn-sm btn-secondary" id="btnRefreshTidalCollection" style="margin-left: 8px;">🔄 重新整理</button>
+                  </div>
+                </div>
+
+                <!-- Sub-pane 3-1: Fav Albums Grid -->
+                <div id="tidalSubViewFavAlbums">
+                  <div class="album-grid" id="tidalFavAlbumsGrid">
+                    <div class="tidal-loading-indicator">⏳ 正在載入您的 TIDAL 最愛專輯...</div>
+                  </div>
+                </div>
+
+                <!-- Sub-pane 3-2: Fav Tracks Table -->
+                <div id="tidalSubViewFavTracks" style="display: none;">
+                  <div class="tidal-tracklist-toolbar">
+                    <button class="btn btn-primary btn-sm" id="btnPlayAllTidalFavTracks">▶ 播放全部最愛歌曲</button>
+                    <button class="btn btn-secondary btn-sm" id="btnImportTidalFavTracksToQueue">📥 匯入至播放佇列</button>
+                  </div>
+                  <div class="tracklist-table-container">
+                    <table class="tracklist-table" id="tidalFavTracksTable">
+                      <thead>
+                        <tr>
+                          <th style="width: 45px;">#</th>
+                          <th style="width: 38px;"></th>
+                          <th style="width: 44%;">曲目名稱</th>
+                          <th style="width: 18%;">演出者</th>
+                          <th style="width: 20%;">專輯</th>
+                          <th style="width: 100px;">音訊規格</th>
+                          <th style="width: 70px; text-align: right;">時長</th>
+                        </tr>
+                      </thead>
+                      <tbody id="tidalFavTracksTbody">
+                        <!-- Injected via JS -->
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <!-- Sub-pane 3-3: Playlists Grid -->
+                <div id="tidalSubViewPlaylists" style="display: none;">
+                  <div class="album-grid" id="tidalPlaylistsGrid">
+                    <!-- Injected via JS -->
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pane 4: In-View Search Results -->
+            <div class="tidal-content-pane" id="tidalPaneSearch" style="display: none;">
+              <div class="tidal-api-view-inner">
+                <div class="tidal-section-title-wrap">
+                  <div>
+                    <h2>🔍 TIDAL 線上搜尋結果</h2>
+                    <span class="tidal-sub-desc" id="tidalSearchSummary">搜尋中...</span>
+                  </div>
+                  <div class="tidal-pane-actions">
+                    <button class="btn btn-sm btn-secondary" id="btnTidalBackFromSearch">❮ 返回發燒推薦</button>
+                  </div>
+                </div>
+
+                <div class="tidal-search-section">
+                  <h3 class="tidal-search-group-title">💿 相符專輯 Albums</h3>
+                  <div class="album-grid" id="tidalSearchAlbumsGrid">
+                    <!-- Injected via JS -->
+                  </div>
+                </div>
+
+                <div class="tidal-search-section" style="margin-top: 24px;">
+                  <h3 class="tidal-search-group-title">🎵 相符曲目 Tracks</h3>
+                  <div class="tidal-track-list" id="tidalSearchTracksList">
+                    <!-- Injected via JS -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Secondary Sub-View: Playlist Drill-down Detail View -->
+          <div id="tidalPlaylistDetailView" class="tidal-detail-view" style="display: none;">
+            <div class="tidal-detail-header">
+              <button class="btn btn-sm btn-secondary" id="btnTidalPlaylistBackToList" style="margin-bottom: 16px;">❮ 返回列表</button>
+              <div class="tidal-detail-banner">
+                <img id="tidalPlaylistDetailCover" class="tidal-detail-cover" src="" alt="Cover" onerror="this.src='default_cover.png'">
+                <div class="tidal-detail-info">
+                  <span class="tidal-detail-badge" id="tidalPlaylistDetailType">TIDAL PLAYLIST</span>
+                  <h1 class="tidal-detail-title" id="tidalPlaylistDetailTitle">歌單名稱</h1>
+                  <p class="tidal-detail-desc" id="tidalPlaylistDetailDesc">歌單描述與簡介</p>
+                  <div class="tidal-detail-meta" id="tidalPlaylistDetailMeta">共 0 首歌曲</div>
+                  <div class="tidal-detail-actions">
+                    <button class="btn btn-primary" id="btnTidalPlayPlaylistAll">▶ 立即播放全部</button>
+                    <button class="btn btn-secondary" id="btnTidalImportPlaylistToQueue">📥 匯入至播放佇列</button>
+                    <button class="btn btn-secondary" id="btnTidalShufflePlaylist">🔀 隨機播放</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="tidal-detail-tracklist-wrap">
+              <div class="tidal-track-list" id="tidalPlaylistTracksList">
+                <!-- Tracks injected by JS -->
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
       <!-- 11. ABOUT & USER MANUAL VIEW -->
       <section id="viewAbout" class="content-view">
         <div class="view-header">
@@ -1263,6 +1521,96 @@
       </div>
     </div>
   </div>
+
+  <!-- TIDAL Account Login & Settings Modal -->
+  <div id="tidalLoginModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card tidal-login-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap" style="display: flex; align-items: center;">
+          <span class="tidal-logo-badge">TIDAL</span>
+          <h3 style="margin: 0; font-size: 16px; font-weight: 600;">TIDAL 發燒串流帳號連線</h3>
+        </div>
+        <button class="icon-btn" id="btnCloseTidalLogin">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <!-- Status Panel: Logged Out -->
+        <div id="tidalLoggedOutView">
+          <p style="color: var(--text-muted); font-size: 13px; line-height: 1.6; margin-top: 0; margin-bottom: 20px;">
+            在 rooPlayer 登入您的 TIDAL 帳號，享受如 Roon 般無縫融合本機與雲端的 Hi-Res Lossless FLAC 發燒串流體驗。
+          </p>
+
+          <div class="tidal-auth-action-box" style="text-align: center; padding: 24px 16px; background: rgba(0, 229, 255, 0.05); border: 1px solid rgba(0, 229, 255, 0.2); border-radius: 12px; margin-bottom: 20px;">
+            <div style="font-size: 32px; margin-bottom: 12px;">🌊</div>
+            <h4 style="margin: 0 0 8px 0; font-size: 16px; color: var(--text-main);">一鍵開啟 TIDAL 官方登入</h4>
+            <p style="margin: 0 0 16px 0; font-size: 12px; color: var(--text-muted);">
+              點擊下方按鈕將開啟 TIDAL 官方登入視窗，支援 Email、Google、Apple 或 Facebook 登入，完成後自動授權綁定。
+            </p>
+            <button class="btn btn-primary" id="btnTidalStartLogin" style="background: #00e5ff; color: #000; font-weight: 700; border: none; padding: 10px 28px; border-radius: 20px; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 4px 14px rgba(0, 229, 255, 0.3);">
+              <span>🔑 開啟官方登入視窗</span>
+            </button>
+            <div id="tidalLoginLoading" style="display: none; margin-top: 14px; font-size: 13px; color: #00e5ff; font-weight: 600;">
+              <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px;">
+                <span class="spinner" style="width: 14px; height: 14px; border-width: 2px;"></span>
+                <span>正在等待登入完成並自動擷取授權...</span>
+              </div>
+              <button id="btnTidalProbeNow" type="button" style="display: block; margin: 8px auto 0; padding: 6px 16px; background: rgba(0, 229, 255, 0.15); border: 1px solid #00e5ff; color: #00e5ff; border-radius: 14px; font-size: 12px; font-weight: 700; cursor: pointer;">
+                🔄 若視窗已進入 TIDAL 首頁，點此立即完成同步
+              </button>
+            </div>
+          </div>
+
+          <!-- Advanced collapsible manual token -->
+          <details style="font-size: 12px; color: var(--text-muted); cursor: pointer;">
+            <summary style="margin-bottom: 8px; color: var(--text-sub); outline: none;">進階：手動貼上 Access Token 或自訂連線</summary>
+            <div class="tidal-manual-box" style="padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; margin-top: 6px;">
+              <div class="form-group" style="margin-bottom: 10px;">
+                <label style="display: block; font-size: 11px; margin-bottom: 4px; color: var(--text-sub);">OAuth Access Token</label>
+                <input type="text" id="tidalInputManualToken" class="form-control" placeholder="Bearer Token..." style="width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 6px; font-size: 12px;">
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="tidalInputUserId" placeholder="User ID (選填)" style="flex: 1; padding: 6px 10px; border-radius: 6px; font-size: 12px;">
+                <button class="btn btn-sm btn-secondary" id="btnTidalSaveManualToken" style="padding: 6px 14px; border-radius: 4px; cursor: pointer;">儲存 Token</button>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <!-- Logged In View -->
+        <div id="tidalLoggedInView" style="display: none;">
+          <div style="display: flex; align-items: center; gap: 16px; padding: 16px; background: rgba(0, 229, 255, 0.08); border: 1px solid rgba(0, 229, 255, 0.25); border-radius: 12px; margin-bottom: 20px;">
+            <div style="width: 48px; height: 48px; border-radius: 50%; background: #00e5ff; color: #000; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 900;">
+              T
+            </div>
+            <div style="flex: 1;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <h4 style="margin: 0; font-size: 15px; color: var(--text-main);" id="tidalProfileName">TIDAL 官方已連線</h4>
+                <span class="tidal-tier-badge" id="tidalProfileTier">Hi-Res MAX</span>
+              </div>
+              <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;" id="tidalProfileInfo">
+                國家/地區: TW | 連線就緒
+              </div>
+            </div>
+          </div>
+
+          <div class="tidal-feature-box" style="border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 14px; font-size: 12px; line-height: 1.6; margin-bottom: 20px;">
+            ✨ <strong>Roon 級串流核心功能已就緒</strong>：<br>
+            • <strong>聲音引擎直通</strong>：TIDAL 無損串流支援 1-bit DSD 調變器（5階/7階）升頻與多相濾波器。<br>
+            • <strong>混合曲庫整合</strong>：可隨時將 TIDAL 專輯「加入我的曲庫」，與本機硬碟檔案融為一體。<br>
+            • <strong>DLNA 投播</strong>：支援一鍵將 TIDAL 高解析串流推送至您的數位串流機與擴大機。
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; gap: 10px;">
+            <button class="btn btn-secondary" id="btnTidalRelogin" style="padding: 8px 18px; border-radius: 6px; cursor: pointer;">重新連線</button>
+            <button class="btn btn-danger" id="btnTidalLogout" style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); padding: 8px 18px; border-radius: 6px; cursor: pointer;">中斷連線 (登出)</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 16px 24px; display: flex; justify-content: flex-end; border-top: 1px solid var(--border-color);">
+        <button class="btn btn-secondary" id="btnCancelTidalLogin">關閉</button>
+      </div>
+    </div>
+  </div>
+
 
   <!-- Now Playing Modal: Album Artwork, Playlist & Online Lyrics -->
   <div id="nowPlayingModal" class="modal-overlay" style="display: none;">
@@ -1659,6 +2007,7 @@
   <!-- Hidden native HTML5 Audio element -->
   <audio id="nativeAudio"></audio>
 
+  <script src="tidal-service.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

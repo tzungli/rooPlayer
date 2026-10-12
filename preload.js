@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('library:scanProgress', (_event, data) => callback(data));
   },
   loadSavedLibrary: () => ipcRenderer.invoke('library:loadSaved'),
+  saveLibraryTracks: (tracks) => ipcRenderer.invoke('library:saveTracks', tracks),
   exportLibrary: (defaultFilename, extraData) => ipcRenderer.invoke('library:export', defaultFilename, extraData),
   importLibrary: () => ipcRenderer.invoke('library:import'),
   removeFolder: (folderPath) => ipcRenderer.invoke('library:removeFolder', folderPath),
@@ -27,6 +28,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSoxStreamUrl: (filePath, startSec = 0, sampleRate = 192000, precision = 28, dsdMode = '', dsdOrder = 5, filterPhase = 'linear') => ipcRenderer.invoke('audio:getSoxStreamUrl', filePath, startSec, sampleRate, precision, dsdMode, dsdOrder, filterPhase),
   getAudioDuration: (filePath) => ipcRenderer.invoke('audio:getAudioDuration', filePath),
   translateToZhTw: (text) => ipcRenderer.invoke('util:translateToZhTw', text),
+
+  // TIDAL Streaming Subsystem
+  tidalLoginWithWindow: () => ipcRenderer.invoke('tidal:loginWithWindow'),
+  tidalProbeAuth: () => ipcRenderer.invoke('tidal:probeAuth'),
+  tidalGetStoredAuth: () => ipcRenderer.invoke('tidal:getStoredAuth'),
+  tidalSaveAuth: (data) => ipcRenderer.invoke('tidal:saveAuth', data),
+  tidalLogout: () => ipcRenderer.invoke('tidal:logout'),
+  tidalApi: (options) => ipcRenderer.invoke('tidal:api', options),
+  tidalGetStreamUrl: (trackId, playbackInfo) => ipcRenderer.invoke('tidal:getStreamUrl', trackId, playbackInfo),
+  tidalCacheTrack: (trackId, streamUrlOrInfo, optionalInfo) => ipcRenderer.invoke('tidal:cacheTrack', trackId, streamUrlOrInfo, optionalInfo),
 
   // DLNA / UPnP Subsystem
   getDlnaDevices: () => ipcRenderer.invoke('dlna:getDevices'),

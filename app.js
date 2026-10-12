@@ -418,6 +418,7 @@ async function initApp() {
   initAudioZones();
   initDspControls();
   initKkboxStreaming();
+  initTidalStreaming();
 
   // Load saved library or fall back to showcase demo data
   let saved = null;
@@ -902,6 +903,7 @@ function getAlbumKey(album) {
 function getTrackKey(track) {
   if (!track) return '';
   if (track.filePath) return track.filePath;
+  if (track.isTidal) return `tidal_${track.tidalId || track.id}`;
   return `${(track.title || '').trim()}___${(track.artist || '').trim()}`.toLowerCase();
 }
 
@@ -1170,18 +1172,24 @@ function rebuildLibraryCollections() {
     t.genre = canonicalizeGenre(t.genre, t);
 
     // Albums grouping
-    const albumKey = `${t.album}___${t.artist}`;
+    const albumKey = t.isTidal 
+      ? `tidal_album_${t.tidalAlbumId || t.albumId || (t.album + '___' + t.artist)}` 
+      : `${t.album}___${t.artist}`;
+
     if (!albumMap.has(albumKey)) {
       albumMap.set(albumKey, {
         id: albumKey,
+        isTidal: !!t.isTidal,
+        tidalId: t.tidalAlbumId || t.albumId || t.tidalId || null,
+        audioQuality: t.audioQuality || null,
         title: t.album,
         artist: t.artist,
         year: t.year,
         date: t.date || null,
         genre: t.genre,
         cover: formatCoverSrc(t.cover),
-        isLossless: t.isLossless,
-        formatName: t.formatName,
+        isLossless: t.isLossless !== undefined ? t.isLossless : true,
+        formatName: t.formatName || (t.isTidal ? 'FLAC' : 'PCM'),
         sampleRate: t.sampleRate,
         bitsPerSample: t.bitsPerSample,
         label: t.label || null,
@@ -1193,6 +1201,11 @@ function rebuildLibraryCollections() {
     }
     const alb = albumMap.get(albumKey);
     alb.tracks.push(t);
+    if (t.isTidal) {
+      alb.isTidal = true;
+      if (!alb.tidalId && (t.tidalAlbumId || t.albumId)) alb.tidalId = t.tidalAlbumId || t.albumId;
+      if (!alb.audioQuality && t.audioQuality) alb.audioQuality = t.audioQuality;
+    }
     if (!alb.cover && t.cover) alb.cover = formatCoverSrc(t.cover);
     if ((!alb.genre || alb.genre === 'Unknown') && t.genre && t.genre !== 'Unknown') alb.genre = t.genre;
     if (!alb.year && t.year) alb.year = t.year;
@@ -1220,6 +1233,18 @@ function rebuildLibraryCollections() {
 
   // Post-process albums: inherit cover from any child track, sort tracks
   albumMap.forEach(alb => {
+    if (alb.isTidal) {
+      alb.formatName = 'FLAC';
+      alb.isLossless = true;
+      const isHiRes = alb.audioQuality === 'HI_RES_LOSSLESS' || alb.audioQuality === 'HIRES' || (alb.bitsPerSample && alb.bitsPerSample >= 24) || (alb.sampleRate && alb.sampleRate > 48000);
+      if (isHiRes) {
+        alb.bitsPerSample = alb.bitsPerSample || 24;
+        alb.sampleRate = alb.sampleRate || 96000;
+      } else {
+        alb.bitsPerSample = alb.bitsPerSample || 16;
+        alb.sampleRate = alb.sampleRate || 44100;
+      }
+    }
     if (isUnknownArtist(alb.artist)) {
       const cachedArt = getCachedResolvedArtist(alb.title);
       if (cachedArt) {
@@ -1259,7 +1284,8 @@ const viewDirtyState = {
   favTracks: true,
   favArtists: true,
   history: true,
-  kkbox: true
+  kkbox: true,
+  tidal: true
 };
 
 function markAllViewsDirty() {
@@ -1270,8 +1296,8 @@ function markAllViewsDirty() {
 
 function renderViewIfNeeded(viewId) {
   if (!viewId) viewId = 'overview';
-  // If not dirty and not kkbox, preserve already-built DOM and avoid reflow
-  if (!viewDirtyState[viewId] && viewId !== 'kkbox') return;
+  // If not dirty and not kkbox or tidal, preserve already-built DOM and avoid reflow
+  if (!viewDirtyState[viewId] && viewId !== 'kkbox' && viewId !== 'tidal') return;
 
   switch (viewId) {
     case 'overview':
@@ -1306,6 +1332,9 @@ function renderViewIfNeeded(viewId) {
       break;
     case 'kkbox':
       onOpenKkboxView();
+      break;
+    case 'tidal':
+      onOpenTidalView();
       break;
     default:
       break;
@@ -1939,7 +1968,12 @@ function createAlbumCard(album) {
   const isDsd = fmt === 'DSF' || fmt === 'DFF' || fmt === 'DSD';
 
   let qualityTagHtml = '';
-  if (isDsd) {
+  if (album.isTidal) {
+    const isHiRes = album.audioQuality === 'HI_RES_LOSSLESS' || album.audioQuality === 'HIRES' || (album.bitsPerSample && album.bitsPerSample >= 24) || (album.sampleRate && album.sampleRate > 48000);
+    qualityTagHtml = isHiRes
+      ? `<span class="album-quality-tag tag-tidal-hires">TIDAL MAX</span>`
+      : `<span class="album-quality-tag tag-tidal">TIDAL FLAC</span>`;
+  } else if (isDsd) {
     qualityTagHtml = `<span class="album-quality-tag tag-dsd">DSD</span>`;
   } else if (album.bitsPerSample >= 24 || album.sampleRate > 48000) {
     qualityTagHtml = `<span class="album-quality-tag tag-hires">${fmt} 24b</span>`;
@@ -2360,11 +2394,13 @@ function renderArtistLocalAlbums(localAlbums) {
   });
 }
 
-// 2-4. Fetch Missing Online Albums (Tidal / Qobuz / KKBOX)
 async function fetchArtistMissingAlbums(artistName, localAlbums) {
   const loadingEl = document.getElementById('missingAlbumsLoading');
   const container = document.getElementById('artistMissingAlbumsGrid');
   const countBadge = document.getElementById('artistMissingAlbumsCount');
+  const titleEl = document.getElementById('artistOnlineSectionTitle');
+  const tagsEl = document.getElementById('artistOnlinePlatformTags');
+  const descEl = document.getElementById('artistOnlineSectionDesc');
 
   loadingEl.style.display = 'flex';
   container.innerHTML = '';
@@ -2376,6 +2412,133 @@ async function fetchArtistMissingAlbums(artistName, localAlbums) {
     .trim();
 
   const localTitlesNormalized = new Set(localAlbums.map(a => normalize(a.title)));
+
+  // If TIDAL is logged in, use TIDAL official discography!
+  if (window.tidalService && window.tidalService.isLoggedIn) {
+    if (titleEl) titleEl.innerHTML = '💎 TIDAL 歷年完整發行作品 (直接播放 & 收錄)';
+    if (tagsEl) tagsEl.innerHTML = `
+      <span class="platform-tag tidal" style="background:#000;color:#00e5ff;border:1px solid #00e5ff;font-weight:700;">TIDAL Hi-Res MAX</span>
+      <span class="platform-tag" style="background:rgba(255,255,255,0.08);color:#d4d4d8;">Bit-Perfect Lossless</span>
+    `;
+    if (descEl) descEl.textContent = '已連接 TIDAL 雲端資料庫。您可以直接點擊播放該專輯以 rooPlayer 音訊引擎聆聽，或點擊「加入曲庫」無縫整合至本機收藏。';
+
+    try {
+      const artistObj = await window.tidalService.searchArtist(artistName);
+      if (artistObj && artistObj.id) {
+        const tidalAlbums = await window.tidalService.getArtistAlbums(artistObj.id, 50);
+        if (tidalAlbums && tidalAlbums.length > 0) {
+          loadingEl.style.display = 'none';
+          countBadge.textContent = `共 ${tidalAlbums.length} 張作品`;
+
+          const seenTidalTitles = new Set();
+          tidalAlbums.forEach(alb => {
+            const normTitle = normalize(alb.title);
+            if (seenTidalTitles.has(normTitle)) return;
+            seenTidalTitles.add(normTitle);
+
+            const card = document.createElement('div');
+            card.className = 'album-card tidal-discography-card';
+            card.dataset.tidalId = String(alb.tidalId);
+
+            const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
+            const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
+            const inLib = isTidalAlbumInLibrary(alb.tidalId);
+            const hasLocal = localTitlesNormalized.has(normTitle);
+
+            const isHiRes = alb.audioQuality === 'HI_RES_LOSSLESS' || alb.audioQuality === 'HIRES';
+            const qualityBadgeHtml = isHiRes
+              ? `<span class="album-quality-tag tag-tidal-hires">TIDAL MAX</span>`
+              : `<span class="album-quality-tag tag-tidal">TIDAL FLAC</span>`;
+
+            let statusText = '';
+            if (inLib) {
+              statusText = '<span style="color:#00e5ff;font-weight:700;">✓ 已在曲庫</span>';
+            } else if (hasLocal) {
+              statusText = '<span style="color:#a1a1aa;">📁 本機已有</span>';
+            }
+
+            card.innerHTML = `
+              <div class="album-art-wrap">
+                <img src="${coverSrc}" class="album-art-img" alt="${escapeXml(alb.title)}" loading="lazy">
+                ${qualityBadgeHtml}
+                <button class="card-play-btn" title="播放整張 TIDAL 專輯">▶</button>
+              </div>
+              <div class="album-meta">
+                <div class="album-title" title="${escapeXml(alb.title)}">${escapeXml(alb.title)}</div>
+                <div class="album-artist">${escapeXml(alb.artist)}</div>
+                <div class="album-year">${alb.year ? alb.year + ' • ' : ''}${alb.numberOfTracks ? alb.numberOfTracks + ' 首 • ' : ''}${statusText}</div>
+              </div>
+              <div class="tidal-card-actions">
+                <button class="btn-tidal-lib-action ${inLib ? 'in-library' : ''}" data-tidal-id="${alb.tidalId}">${inLib ? '✓ 已在曲庫' : '➕ 加入曲庫'}</button>
+              </div>
+            `;
+
+            // Click play button
+            const playBtn = card.querySelector('.card-play-btn');
+            if (playBtn) {
+              playBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                playTidalAlbum(alb.tidalId);
+              });
+            }
+
+            // Click add to library button
+            const libBtn = card.querySelector('.btn-tidal-lib-action');
+            if (libBtn) {
+              libBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (isTidalAlbumInLibrary(alb.tidalId)) {
+                  if (confirm(`確定要將《${alb.title}》從曲庫移除嗎？`)) {
+                    await removeTidalAlbumFromLibrary(alb.tidalId);
+                  }
+                } else {
+                  await addTidalAlbumToLibrary(alb.tidalId, alb);
+                }
+              });
+            }
+
+            // Explicit click on album artwork cover opens full album details
+            const artWrap = card.querySelector('.album-art-wrap');
+            if (artWrap) {
+              artWrap.style.cursor = 'pointer';
+              artWrap.addEventListener('click', (e) => {
+                if (e.target.closest('.card-play-btn')) return;
+                e.stopPropagation();
+                openAlbumDetail(alb);
+              });
+            }
+
+            // Click card body opens album details
+            card.addEventListener('click', (e) => {
+              if (e.target.closest('.card-play-btn') || e.target.closest('.btn-tidal-lib-action')) return;
+              openAlbumDetail(alb);
+            });
+
+            container.appendChild(card);
+          });
+          return;
+        }
+      }
+    } catch (tidalErr) {
+      console.warn('TIDAL artist discography fetch error:', tidalErr);
+    }
+  } else {
+    if (titleEl) titleEl.innerHTML = '🌐 線上專輯探索 (本機未收錄)';
+    if (tagsEl) tagsEl.innerHTML = `
+      <span class="platform-tag tidal">Tidal</span>
+      <span class="platform-tag qobuz">Qobuz</span>
+      <span class="platform-tag kkbox">KKBOX</span>
+      <span class="platform-tag apple">Apple Music</span>
+      <span class="platform-tag spotify">Spotify</span>
+    `;
+    if (descEl) descEl.innerHTML = '比對線上音樂資料庫，為您挖掘該歌手尚未收藏的經典專輯。 <a href="#" id="linkLoginTidalFromArtist" style="color:#00e5ff;margin-left:8px;font-weight:bold;text-decoration:underline;cursor:pointer;">💎 登入 TIDAL 一鍵串流與收錄</a>';
+    setTimeout(() => {
+      const link = document.getElementById('linkLoginTidalFromArtist');
+      if (link && typeof openTidalLoginModal === 'function') {
+        link.onclick = (e) => { e.preventDefault(); openTidalLoginModal(); };
+      }
+    }, 50);
+  }
 
   let missingAlbums = [];
 
@@ -3354,6 +3517,7 @@ async function fetchOnlineAlbumCredits(album) {
 
 function getAudioFormatFromPath(filePath, fallback = 'PCM') {
   if (!filePath || typeof filePath !== 'string') return fallback;
+  if (filePath.startsWith('tidal_') || filePath.includes('tidal')) return 'FLAC';
   const match = filePath.match(/\.([a-zA-Z0-9]+)(?:[\?#]|$)/);
   if (!match) return fallback;
   const ext = match[1].toUpperCase();
@@ -3751,17 +3915,26 @@ function renderAlbumArtistRecommendations(album) {
 
 function renderDetailTracklist(album) {
   detailTracklistTbody.innerHTML = '';
+  if (!album || !Array.isArray(album.tracks) || !album.tracks.length) {
+    return;
+  }
   album.tracks.forEach((t, idx) => {
     const tr = document.createElement('tr');
     const isFav = isTrackFavorite(t);
     const trackWithArtist = t.artist ? t : { ...t, artist: album.artist };
     const onlineLinksHtml = generateTrackOnlineLinks(trackWithArtist);
 
-    const trackFmt = getAudioFormatFromPath(t.filePath || t.fileName, t.formatName || 'PCM').toUpperCase();
-    const isTrackDsd = trackFmt === 'DSF' || trackFmt === 'DFF' || trackFmt === 'DSD';
-    const trackChipText = isTrackDsd
-      ? `DSD 1b`
-      : `${trackFmt} ${t.bitsPerSample || 16}b`;
+    let trackChipText = '';
+    if (t.isTidal) {
+      const isHiRes = t.audioQuality === 'HI_RES_LOSSLESS' || t.audioQuality === 'HIRES' || (t.bitDepth && t.bitDepth >= 24) || (t.bitsPerSample && t.bitsPerSample >= 24);
+      trackChipText = isHiRes ? 'TIDAL MAX 24b' : 'TIDAL FLAC 16b';
+    } else {
+      const trackFmt = getAudioFormatFromPath(t.filePath || t.fileName, t.formatName || 'PCM').toUpperCase();
+      const isTrackDsd = trackFmt === 'DSF' || trackFmt === 'DFF' || trackFmt === 'DSD';
+      trackChipText = isTrackDsd
+        ? `DSD 1b`
+        : `${trackFmt} ${t.bitsPerSample || 16}b`;
+    }
 
     tr.innerHTML = `
       <td>${t.trackNumber || (idx + 1)}</td>
@@ -3792,6 +3965,315 @@ function renderDetailTracklist(album) {
     detailTracklistTbody.appendChild(tr);
   });
   setupResizableTable('detailTracklistTable', 'album_detail_tracks');
+}
+
+// ==========================================================
+// Roon-Style TIDAL Hybrid Unified Library & Versions Engine
+// ==========================================================
+
+function isTidalAlbumInLibrary(tidalAlbumId) {
+  if (!tidalAlbumId || !state.tracks) return false;
+  const tidStr = String(tidalAlbumId);
+  return state.tracks.some(t => t.isTidal && (String(t.tidalAlbumId) === tidStr || String(t.albumId) === tidStr));
+}
+
+async function addTidalAlbumToLibrary(tidalAlbumId, preloadedData = null) {
+  if (!window.tidalService) {
+    showToast('⚠️ TIDAL 服務尚未啟動');
+    return false;
+  }
+  if (isTidalAlbumInLibrary(tidalAlbumId)) {
+    showToast('ℹ️ 此專輯已在您的音樂庫中');
+    return true;
+  }
+
+  showToast('⏳ 正在將 TIDAL 專輯加入曲庫...');
+  try {
+    let albumData = preloadedData;
+    if (!albumData || !albumData.tracks || albumData.tracks.length === 0) {
+      albumData = await window.tidalService.getAlbum(tidalAlbumId);
+    }
+
+    if (!albumData || !albumData.tracks || albumData.tracks.length === 0) {
+      throw new Error('無法取得專輯曲目資訊');
+    }
+
+    const album = albumData.album || albumData;
+    const tracks = albumData.tracks;
+
+    tracks.forEach(tr => {
+      tr.isTidal = true;
+      tr.tidalAlbumId = tidalAlbumId;
+      tr.album = album.title;
+      tr.artist = tr.artist || album.artist;
+      tr.cover = tr.cover || album.cover;
+      tr.genre = tr.genre || album.genre || 'Pop';
+    });
+
+    state.tracks = [...state.tracks, ...tracks];
+    rebuildLibraryCollections();
+
+    if (window.electronAPI && window.electronAPI.saveLibraryTracks) {
+      await window.electronAPI.saveLibraryTracks(state.tracks);
+    }
+
+    showToast(`✅ 已將《${album.title}》加入曲庫 (${tracks.length} 首曲目)`);
+
+    if (state.activeAlbumDetail && (String(state.activeAlbumDetail.tidalId) === String(tidalAlbumId) || state.activeAlbumDetail.id === `tidal_album_${tidalAlbumId}`)) {
+      updateAlbumDetailLibraryButton(state.activeAlbumDetail);
+    }
+
+    document.querySelectorAll(`.btn-tidal-lib-action[data-tidal-id="${tidalAlbumId}"]`).forEach(btn => {
+      btn.className = 'btn-tidal-lib-action in-library';
+      btn.innerHTML = '✓ 已在曲庫';
+    });
+
+    return true;
+  } catch (err) {
+    console.error('Failed to add TIDAL album to library:', err);
+    showToast(`❌ 加入曲庫失敗: ${err.message || '網路或認證錯誤'}`);
+    return false;
+  }
+}
+
+async function removeTidalAlbumFromLibrary(tidalAlbumId) {
+  if (!tidalAlbumId || !state.tracks) return false;
+  const tidStr = String(tidalAlbumId);
+
+  const beforeCount = state.tracks.length;
+  state.tracks = state.tracks.filter(t => !(t.isTidal && (String(t.tidalAlbumId) === tidStr || String(t.albumId) === tidStr)));
+  const removed = beforeCount - state.tracks.length;
+
+  if (removed > 0) {
+    rebuildLibraryCollections();
+    if (window.electronAPI && window.electronAPI.saveLibraryTracks) {
+      await window.electronAPI.saveLibraryTracks(state.tracks);
+    }
+    showToast(`🗑️ 已從曲庫移除該專輯 (共 ${removed} 首曲目)`);
+
+    if (state.activeAlbumDetail && (String(state.activeAlbumDetail.tidalId) === String(tidalAlbumId) || state.activeAlbumDetail.id === `tidal_album_${tidalAlbumId}`)) {
+      updateAlbumDetailLibraryButton(state.activeAlbumDetail);
+    }
+
+    document.querySelectorAll(`.btn-tidal-lib-action[data-tidal-id="${tidalAlbumId}"]`).forEach(btn => {
+      btn.className = 'btn-tidal-lib-action';
+      btn.innerHTML = '➕ 加入曲庫';
+    });
+
+    return true;
+  }
+  return false;
+}
+
+async function playTidalAlbum(tidalAlbumId) {
+  if (!window.tidalService) {
+    showToast('⚠️ TIDAL 服務尚未啟動');
+    return;
+  }
+  showToast('⏳ 正在連接 TIDAL 載入專輯音訊...');
+  try {
+    const data = await window.tidalService.getAlbum(tidalAlbumId);
+    if (data && data.tracks && data.tracks.length > 0) {
+      showToast(`▶ 正在播放 TIDAL 專輯: 《${data.album.title}》`);
+      playTrackList(data.tracks, 0);
+    } else {
+      showToast('⚠️ 未能取得專輯曲目');
+    }
+  } catch (err) {
+    console.error('Play TIDAL album error:', err);
+    showToast(`❌ 播放失敗: ${err.message}`);
+  }
+}
+
+function updateAlbumDetailLibraryButton(album) {
+  const btn = document.getElementById('btnTidalLibraryToggle');
+  const icon = document.getElementById('btnTidalLibraryToggleIcon');
+  const text = document.getElementById('btnTidalLibraryToggleText');
+  if (!btn) return;
+
+  if (album && album.isTidal) {
+    btn.style.display = 'inline-flex';
+    const inLib = isTidalAlbumInLibrary(album.tidalId);
+    if (inLib) {
+      btn.className = 'btn btn-secondary in-library';
+      if (icon) icon.textContent = '✓';
+      if (text) text.textContent = '已在曲庫 (從曲庫移除)';
+      btn.title = '點擊從音樂庫中移除此專輯';
+      btn.onclick = async () => {
+        if (confirm(`確定要將《${album.title}》從您的音樂庫中移除嗎？`)) {
+          await removeTidalAlbumFromLibrary(album.tidalId);
+          updateAlbumDetailLibraryButton(album);
+        }
+      };
+    } else {
+      btn.className = 'btn btn-secondary not-in-library';
+      if (icon) icon.textContent = '➕';
+      if (text) text.textContent = '加入曲庫';
+      btn.title = '點擊將此 TIDAL 專輯加入您的本機音樂庫中';
+      btn.onclick = async () => {
+        await addTidalAlbumToLibrary(album.tidalId, album);
+        updateAlbumDetailLibraryButton(album);
+      };
+    }
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+async function renderAlbumVersions(album) {
+  const versionsSection = document.getElementById('albumVersionsSection');
+  const versionsGrid = document.getElementById('albumVersionsGrid');
+  const versionsCountBadge = document.getElementById('albumVersionsCountBadge');
+  if (!versionsSection || !versionsGrid) return;
+
+  versionsSection.style.display = 'none';
+  versionsGrid.innerHTML = '';
+
+  const norm = (s) => (s || '').toLowerCase().replace(/\(.*?\)|\[.*?\]/g, '').replace(/[^a-z0-9\u4e00-\u9fa5]/g, '').trim();
+  const currentTitleNorm = norm(album.title);
+  if (!currentTitleNorm) return;
+
+  const versions = [];
+  const seenKeys = new Set();
+  const seenTidalIds = new Set();
+  const seenSpecs = new Set();
+
+  const getSemanticKey = (v) => {
+    const src = v.isTidal ? 'tidal' : 'local';
+    const specs = (v.specs || '').toLowerCase().replace(/\s+/g, '');
+    const trk = v.trackCount || 0;
+    return `${src}:::${specs}:::${trk}`;
+  };
+
+  const currentFirstTrack = (album.tracks && album.tracks[0]) || {};
+  const currentFmt = getAudioFormatFromPath(currentFirstTrack.filePath || currentFirstTrack.fileName, album.formatName || 'PCM').toUpperCase();
+  const currentBitDepth = album.bitsPerSample || currentFirstTrack.bitsPerSample || 16;
+  const currentRate = album.sampleRate || currentFirstTrack.sampleRate || 44100;
+  const currentRateKhz = formatKhz(currentRate);
+
+  const curVer = {
+    album: album,
+    isCurrent: true,
+    isTidal: !!album.isTidal,
+    sourceName: album.isTidal ? 'TIDAL 官方串流' : '本機檔案 (Local)',
+    format: currentFmt,
+    specs: album.isTidal
+      ? ((album.audioQuality === 'HI_RES_LOSSLESS' || album.bitsPerSample >= 24) ? 'Hi-Res 24-bit / 96kHz MAX' : 'Lossless 16-bit / 44.1kHz')
+      : `${currentFmt} ${currentBitDepth}-bit / ${currentRateKhz}`,
+    trackCount: (album.tracks && album.tracks.length) || album.numberOfTracks || 0,
+    year: album.year || ''
+  };
+
+  versions.push(curVer);
+  seenKeys.add(String(album.id));
+  if (album.tidalId) seenTidalIds.add(String(album.tidalId));
+  seenSpecs.add(getSemanticKey(curVer));
+
+  // 1. Scan other local or library albums
+  state.albums.forEach(alb => {
+    if (!alb) return;
+    if (String(alb.id) === String(album.id)) return;
+    if (seenKeys.has(String(alb.id))) return;
+    if (alb.tidalId && seenTidalIds.has(String(alb.tidalId))) return;
+
+    if (norm(alb.title) === currentTitleNorm) {
+      const tr0 = (alb.tracks && alb.tracks[0]) || {};
+      const f = getAudioFormatFromPath(tr0.filePath || tr0.fileName, alb.formatName || 'PCM').toUpperCase();
+      const b = alb.bitsPerSample || tr0.bitsPerSample || 16;
+      const r = formatKhz(alb.sampleRate || tr0.sampleRate || 44100);
+
+      const candVer = {
+        album: alb,
+        isCurrent: false,
+        isTidal: !!alb.isTidal,
+        sourceName: alb.isTidal ? 'TIDAL 官方串流' : '本機檔案 (Local)',
+        format: f,
+        specs: alb.isTidal
+          ? ((alb.audioQuality === 'HI_RES_LOSSLESS' || alb.bitsPerSample >= 24) ? 'Hi-Res 24-bit / 96kHz MAX' : 'Lossless 16-bit / 44.1kHz')
+          : `${f} ${b}-bit / ${r}`,
+        trackCount: (alb.tracks && alb.tracks.length) || alb.numberOfTracks || 0,
+        year: alb.year || ''
+      };
+
+      const semKey = getSemanticKey(candVer);
+      if (seenSpecs.has(semKey)) return;
+
+      seenKeys.add(String(alb.id));
+      if (alb.tidalId) seenTidalIds.add(String(alb.tidalId));
+      seenSpecs.add(semKey);
+      versions.push(candVer);
+    }
+  });
+
+  // 2. Scan TIDAL online catalog versions
+  if (window.tidalService && window.tidalService.isLoggedIn) {
+    try {
+      const searchRes = await window.tidalService.searchAlbumVersions(album.title, album.artist);
+      (searchRes || []).forEach(ta => {
+        if (!ta) return;
+        const tidStr = String(ta.tidalId || ta.id || '');
+        if (tidStr && seenTidalIds.has(tidStr)) return;
+
+        if (norm(ta.title) === currentTitleNorm) {
+          const isHiRes = ta.audioQuality === 'HI_RES_LOSSLESS' || ta.audioQuality === 'HIRES' || (ta.mediaMetadata?.tags?.includes('HIRES_LOSSLESS'));
+          const candVer = {
+            album: ta,
+            isCurrent: false,
+            isTidal: true,
+            isOnlineOnly: !isTidalAlbumInLibrary(ta.tidalId),
+            sourceName: 'TIDAL 官方串流',
+            format: 'FLAC',
+            specs: isHiRes ? 'Hi-Res 24-bit / 96kHz MAX' : 'Lossless 16-bit / 44.1kHz',
+            trackCount: ta.numberOfTracks || 0,
+            year: ta.year || ''
+          };
+
+          const semKey = getSemanticKey(candVer);
+          if (seenSpecs.has(semKey)) return;
+
+          if (tidStr) seenTidalIds.add(tidStr);
+          seenSpecs.add(semKey);
+          versions.push(candVer);
+        }
+      });
+    } catch (e) {
+      console.warn('Online version search warning:', e);
+    }
+  }
+
+  if (versions.length > 1) {
+    if (versionsCountBadge) versionsCountBadge.textContent = `${versions.length} 個版本`;
+    versionsSection.style.display = 'block';
+
+    versions.forEach(ver => {
+      const card = document.createElement('div');
+      card.className = `album-version-card ${ver.isCurrent ? 'active' : ''}`;
+      const icon = ver.isTidal ? '💎' : '📁';
+      const badgeClass = ver.isTidal
+        ? ((ver.specs.includes('24-bit') || ver.specs.includes('MAX')) ? 'tag-tidal-hires' : 'tag-tidal')
+        : 'tag-hires';
+
+      card.innerHTML = `
+        <div class="version-source-icon">${icon}</div>
+        <div class="version-card-meta">
+          <div class="version-card-specs">
+            <span class="album-quality-tag ${badgeClass}" style="position:static;display:inline-block;margin-right:4px;">${ver.isTidal ? (ver.specs.includes('24-bit') ? 'TIDAL MAX' : 'TIDAL FLAC') : ver.format}</span>
+            <span>${escapeXml(ver.sourceName)}</span>
+          </div>
+          <div class="version-card-sub">${escapeXml(ver.specs)} • ${ver.trackCount} 首 ${ver.year ? '• ' + ver.year : ''}</div>
+        </div>
+      `;
+
+      card.onclick = () => {
+        if (!ver.isCurrent) {
+          openAlbumDetail(ver.album);
+          showToast(`💿 已切換至版本: ${ver.sourceName} (${ver.specs})`);
+        }
+      };
+
+      versionsGrid.appendChild(card);
+    });
+  }
 }
 
 function openAlbumDetail(album) {
@@ -3839,7 +4321,10 @@ function openAlbumDetail(album) {
   const sampleRateKhz = formatKhz(effectiveRate);
 
   if (detailFormatBadge) {
-    if (isDsd) {
+    if (album.isTidal) {
+      const isHiRes = album.audioQuality === 'HI_RES_LOSSLESS' || album.audioQuality === 'HIRES' || bitDepth >= 24;
+      detailFormatBadge.textContent = isHiRes ? `TIDAL MAX 24/${sampleRateKhz}` : `TIDAL FLAC 16/${sampleRateKhz}`;
+    } else if (isDsd) {
       const dsdMhz = effectiveRate ? `${(effectiveRate / 1000000).toFixed(1)}M` : '2.8M';
       detailFormatBadge.textContent = `${fmt} 1b/${dsdMhz}`;
     } else {
@@ -3849,7 +4334,10 @@ function openAlbumDetail(album) {
 
   const detailFormatSpec = document.getElementById('detailFormatSpec');
   if (detailFormatSpec) {
-    if (isDsd) {
+    if (album.isTidal) {
+      const isHiRes = album.audioQuality === 'HI_RES_LOSSLESS' || album.audioQuality === 'HIRES' || bitDepth >= 24;
+      detailFormatSpec.textContent = isHiRes ? `TIDAL FLAC 24-bit / ${sampleRateKhz} Hi-Res MAX` : `TIDAL FLAC 16-bit / ${sampleRateKhz} Lossless`;
+    } else if (isDsd) {
       const dsdMhz = effectiveRate ? `${(effectiveRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
       detailFormatSpec.textContent = `DSD 1-bit / ${dsdMhz} Direct Stream Digital`;
     } else {
@@ -3864,9 +4352,33 @@ function openAlbumDetail(album) {
     detailChannelsSpec.textContent = channels === 1 ? '1 Channel (Mono)' : (channels === 2 ? '2 Channels (Stereo)' : `${channels} Channels (Surround)`);
   }
 
-  detailTrackCount.textContent = album.tracks.length;
+  detailTrackCount.textContent = (album.tracks && album.tracks.length) || album.numberOfTracks || 0;
 
-  renderDetailTracklist(album);
+  if (album.tracks && album.tracks.length) {
+    renderDetailTracklist(album);
+  } else if (album.isTidal && window.tidalService) {
+    const tbody = document.getElementById('detailTracklistTbody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:32px;color:#a1a1aa;"><span class="spinner"></span> 正在從 TIDAL 載入曲目清單與音訊規格...</td></tr>';
+    
+    window.tidalService.getAlbum(album.tidalId).then(data => {
+      if (data && data.tracks && state.activeAlbumDetail === album) {
+        album.tracks = data.tracks;
+        album.cover = album.cover || data.album?.cover;
+        album.year = album.year || data.album?.year;
+        album.sampleRate = data.tracks[0]?.sampleRate || 44100;
+        album.bitsPerSample = data.tracks[0]?.bitsPerSample || 16;
+        const countEl = document.getElementById('detailTrackCount');
+        if (countEl) countEl.textContent = album.tracks.length;
+        renderDetailTracklist(album);
+        renderAlbumMetadata(album);
+      }
+    }).catch(err => {
+      console.warn('Failed to fetch TIDAL album tracks:', err);
+      if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:24px;color:#ef4444;">無法載入曲目: ${escapeXml(err.message)}</td></tr>`;
+    });
+  } else {
+    renderDetailTracklist(album);
+  }
 
   // Favorite button in Album Detail Modal
   const btnFavAlbum = document.getElementById('btnFavAlbumDetail');
@@ -3898,6 +4410,12 @@ function openAlbumDetail(album) {
 
   // 4. Render Recommended Artists (Genre-based random sampling)
   renderAlbumArtistRecommendations(album);
+
+  // 5. Update TIDAL Library button state
+  updateAlbumDetailLibraryButton(album);
+
+  // 6. Roon-Style Album Versions Comparison & Resolution
+  renderAlbumVersions(album);
 
   navigateTo('albumDetail');
   const mainContentEl = document.getElementById('mainContent');
@@ -3958,7 +4476,19 @@ function getEnrichedTrack(track) {
   };
 }
 
-function playAlbum(album) {
+async function playAlbum(album) {
+  if (!album) return;
+  if (album.isTidal && (!album.tracks || !album.tracks.length) && window.tidalService) {
+    try {
+      showToast('⏳ 正在從 TIDAL 載入專輯音訊...');
+      const data = await window.tidalService.getAlbum(album.tidalId);
+      if (data && data.tracks && data.tracks.length > 0) {
+        album.tracks = data.tracks;
+      }
+    } catch (e) {
+      console.warn('Failed to load tracks for TIDAL album:', e);
+    }
+  }
   if (!album.tracks || !album.tracks.length) return;
   recordRecentlyPlayed(album);
   playTrackList(album.tracks, 0);
@@ -3974,7 +4504,7 @@ function playTrackList(tracks, startIndex = 0) {
   playCurrentTrack();
 }
 
-function playCurrentTrack() {
+async function playCurrentTrack() {
   if (state.currentTrackIndex < 0 || state.currentTrackIndex >= state.queue.length) return;
   const track = state.queue[state.currentTrackIndex];
 
@@ -4043,12 +4573,36 @@ function playCurrentTrack() {
     stopDemoSynth();
     nativeAudio.pause();
 
-    if (track.isDemo || (!track.filePath && !track.isKkbox)) {
-      showToast('⚠️ 示範音訊為合成示範曲，請選取本機音樂庫或 KKBOX 歌曲進行 DLNA 串流播放');
+    if (track.isDemo || (!track.filePath && !track.isKkbox && !track.isTidal)) {
+      showToast('⚠️ 示範音訊為合成示範曲，請選取本機音樂庫或線上串流歌曲進行 DLNA 串流播放');
       state.isPlaying = false;
       updatePlayPauseBtnUI();
       updateQueueActiveItem();
       return;
+    }
+
+    // Resolve TIDAL streamUrl and cache file for DLNA streaming
+    if (track.isTidal) {
+      if (!track.streamUrl && window.tidalService) {
+        try {
+          const sInfo = await window.tidalService.getTrackStreamUrl(track.tidalId);
+          if (sInfo && sInfo.url) {
+            track.streamUrl = sInfo.url;
+            if (sInfo.filePath) track.filePath = sInfo.filePath;
+            track.sampleRate = sInfo.sampleRate || 44100;
+            track.bitDepth = sInfo.bitDepth || 16;
+            track.formatName = 'FLAC';
+          }
+        } catch (e) {
+          console.warn('[DLNA] TIDAL stream resolve failed:', e);
+        }
+      }
+      if (track.streamUrl && !track.filePath && window.electronAPI && window.electronAPI.tidalCacheTrack) {
+        try {
+          const cached = await window.electronAPI.tidalCacheTrack(track.tidalId, track.streamUrl);
+          if (cached) track.filePath = cached;
+        } catch (_) {}
+      }
     }
 
     // Attempt to load duration if missing
@@ -4109,7 +4663,72 @@ function playCurrentTrack() {
   const ext = (track.formatName || '').toUpperCase();
   const isDsd = ext === 'DSF' || ext === 'DFF' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
 
-  if (track.isKkbox) {
+  if (track.isTidal) {
+    isCurrentDsd = false;
+    isCurrentSox = false;
+    currentDsdOffset = 0;
+    currentSoxOffset = 0;
+    stopVirtualProgress();
+    stopDemoSynth();
+
+    playerArtist.textContent = `⏳ 正在連接 TIDAL Hi-Res 官方音訊串流...`;
+
+    const getTidalStreamPromise = (track.streamUrl)
+      ? Promise.resolve({ url: track.streamUrl, filePath: track.filePath, sampleRate: track.sampleRate, bitDepth: track.bitDepth, audioQuality: track.audioQuality })
+      : ((window.tidalService)
+          ? window.tidalService.getTrackStreamUrl(track.tidalId, (state.dsp && state.dsp.enabled) ? 'HI_RES_LOSSLESS' : 'LOSSLESS')
+          : Promise.reject(new Error('TIDAL 服務模組未初始化'))
+        ).then(info => {
+          track.streamUrl = info.url;
+          if (info.filePath) track.filePath = info.filePath;
+          track.sampleRate = info.sampleRate || 44100;
+          track.bitDepth = info.bitDepth || 16;
+          track.audioQuality = info.audioQuality || 'LOSSLESS';
+          track.formatName = 'FLAC';
+          return info;
+        });
+
+    getTidalStreamPromise.then(async (info) => {
+      if (!info || !info.url) throw new Error('未取得有效音訊串流');
+
+      // If DSP Upsampling (SoX Hermite / DSD 1-bit modulator) is enabled:
+      if (state.dsp && state.dsp.enabled && window.electronAPI && window.electronAPI.getSoxStreamUrl) {
+        playerArtist.textContent = `⚡ 正在透過 DSP 升頻引擎調變 TIDAL 音訊...`;
+        let cached = track.filePath;
+        if (!cached || !cached.endsWith('.flac')) {
+          if (window.electronAPI.tidalCacheTrack) {
+            cached = await window.electronAPI.tidalCacheTrack(track.tidalId, track.streamUrl);
+          }
+        }
+        if (cached) {
+          track.filePath = cached;
+          await playSoxTrack(track, 0);
+          playerArtist.textContent = `${track.artist} — ${track.album}`;
+          if (track.duration) totalTimeLabel.textContent = formatDuration(track.duration);
+          return;
+        }
+      }
+
+      // Direct Bit-Perfect Local Playback via HTML5 Audio Engine
+      if (nativeAudio.src !== track.streamUrl) {
+        nativeAudio.src = track.streamUrl;
+      }
+      return nativeAudio.play().then(() => {
+        state.isPlaying = true;
+        updatePlayPauseBtnUI();
+        playerArtist.textContent = `${track.artist} — ${track.album}`;
+        if (track.duration) totalTimeLabel.textContent = formatDuration(track.duration);
+        const qLabel = (track.bitDepth === 24 || (track.sampleRate && track.sampleRate > 48000)) ? '24-bit Hi-Res' : '16-bit Lossless';
+        showToast(`🎵 正在播放 TIDAL 原生串流: 《${track.title}》 [${qLabel}]`);
+      });
+    }).catch(err => {
+      console.error('TIDAL stream play error:', err);
+      playerArtist.textContent = `TIDAL 串流錯誤: ${err.message || '無法取得音訊'}`;
+      showToast(`❌ TIDAL 播放失敗: ${err.message}`);
+      state.isPlaying = false;
+      updatePlayPauseBtnUI();
+    });
+  } else if (track.isKkbox) {
     isCurrentDsd = false;
     isCurrentSox = false;
     currentDsdOffset = 0;
@@ -4458,7 +5077,18 @@ function updateSignalPathUI(track = null) {
     }
   }
 
-  const trkFmt = getAudioFormatFromPath(track.filePath || track.fileName, track.formatName || 'PCM').toUpperCase();
+  let trkFmt = getAudioFormatFromPath(track.filePath || track.fileName, track.formatName || 'PCM').toUpperCase();
+  if (track.isTidal) {
+    const isHiRes = (track.bitDepth === 24) || (track.sampleRate && track.sampleRate > 48000) || track.audioQuality === 'HI_RES_LOSSLESS';
+    trkFmt = isHiRes ? 'TIDAL HI-RES FLAC' : 'TIDAL LOSSLESS FLAC';
+  } else if (track.isKkbox) {
+    trkFmt = 'KKBOX AAC';
+  }
+
+  const customSourceDesc = track.isTidal 
+    ? 'TIDAL 官方母帶級高解析串流 (Bit-Perfect Lossless Stream)' 
+    : (track.isKkbox ? 'KKBOX 官方即時音訊串流' : '原始母帶音訊源 (Bit-Perfect Lossless Input)');
+
   const ext = trkFmt;
   const isNativeDsd = ext === 'DSF' || ext === 'DFF' || ext === 'DSD' || (track.fileName && /\.(dsf|dff)$/i.test(track.fileName)) || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
   const isDspActive = state.dsp && state.dsp.enabled;
@@ -4483,8 +5113,8 @@ function updateSignalPathUI(track = null) {
 
       if (signalPathBadge) signalPathBadge.textContent = `DSP (${modeUpper} / ${orderNum}階) | 1-bit / ${mhz} ⚡`;
       if (statusPill) statusPill.textContent = `DSP ENHANCED (PCM ➔ ${modeUpper} ${orderNum}階)`;
-      if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
-      if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless Input)';
+      if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${track.bitDepth || track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
+      if (sourceDesc) sourceDesc.textContent = customSourceDesc;
 
       if (signalSoxArrow) signalSoxArrow.style.display = 'block';
       if (signalSoxStage) signalSoxStage.style.display = 'flex';
@@ -4498,8 +5128,8 @@ function updateSignalPathUI(track = null) {
       const modeUpper = state.dsp.rateMode.toUpperCase();
       if (signalPathBadge) signalPathBadge.textContent = `DSP (${modeUpper}) | 24/${targetKhz} ⚡`;
       if (statusPill) statusPill.textContent = 'DSP ENHANCED (SOX RESAMPLER)';
-      if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
-      if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless Input)';
+      if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${track.bitDepth || track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
+      if (sourceDesc) sourceDesc.textContent = customSourceDesc;
 
       if (signalSoxArrow) signalSoxArrow.style.display = 'block';
       if (signalSoxStage) signalSoxStage.style.display = 'flex';
@@ -4540,13 +5170,13 @@ function updateSignalPathUI(track = null) {
     }
   } else {
     const sampleKhz = formatKhz(track.sampleRate || 44100);
-    const bitDepth = track.bitsPerSample || 16;
-    const isLossless = track.isLossless || ['WAV', 'FLAC', 'AIFF', 'ALAC', 'APE'].includes(trkFmt);
+    const bitDepth = track.bitDepth || track.bitsPerSample || 16;
+    const isLossless = track.isLossless || ['WAV', 'FLAC', 'AIFF', 'ALAC', 'APE'].includes(trkFmt) || track.isTidal;
 
     if (signalPathBadge) signalPathBadge.textContent = `${isLossless ? 'LOSSLESS' : 'ENHANCED'} | ${trkFmt} ${bitDepth}/${sampleKhz}`;
     if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${bitDepth}-bit / ${sampleKhz} (${track.title})`;
     if (statusPill) statusPill.textContent = isLossless ? 'LOSSLESS BIT-PERFECT' : 'ENHANCED';
-    if (sourceDesc) sourceDesc.textContent = '原始母帶音訊源 (Bit-Perfect Lossless)';
+    if (sourceDesc) sourceDesc.textContent = customSourceDesc;
 
     if (signalSoxArrow) signalSoxArrow.style.display = 'none';
     if (signalSoxStage) signalSoxStage.style.display = 'none';
@@ -5441,7 +6071,7 @@ function playPrevTrack() {
       playDsdTrack(track, 0);
     } else if (isCurrentSox) {
       playSoxTrack(track, 0);
-    } else if ((isLocalFile || track.isKkbox) && nativeAudio.src) {
+    } else if ((isLocalFile || track.isKkbox || track.isTidal) && nativeAudio.src) {
       nativeAudio.currentTime = 0;
     } else {
       virtualCurrentSec = 0;
@@ -5471,7 +6101,7 @@ function playPrevTrack() {
           playDsdTrack(track, 0);
         } else if (isCurrentSox) {
           playSoxTrack(track, 0);
-        } else if ((isLocalFile || track.isKkbox) && nativeAudio.src) {
+        } else if ((isLocalFile || track.isKkbox || track.isTidal) && nativeAudio.src) {
           nativeAudio.currentTime = 0;
         } else {
           virtualCurrentSec = 0;
@@ -5516,7 +6146,7 @@ function onTrackEnded() {
       playDsdTrack(track, 0);
     } else if (isCurrentSox && track) {
       playSoxTrack(track, 0);
-    } else if (track && (track.filePath || track.isKkbox) && nativeAudio.src) {
+    } else if (track && (track.filePath || track.isKkbox || track.isTidal) && nativeAudio.src) {
       nativeAudio.currentTime = 0;
       nativeAudio.play().catch(err => console.error('Repeat error:', err));
     } else {
@@ -5581,13 +6211,25 @@ nativeAudio.addEventListener('timeupdate', () => {
         currentTimeLabel.textContent = formatDuration(current);
         totalTimeLabel.textContent = formatDuration(total);
       } else {
-        if (!nativeAudio.duration) return;
         const current = nativeAudio.currentTime;
-        const total = nativeAudio.duration;
-        const percent = (current / total) * 100;
-        scrubberFill.style.width = `${percent}%`;
-        currentTimeLabel.textContent = formatDuration(current);
-        totalTimeLabel.textContent = formatDuration(total);
+        const total = (track.duration && track.duration > 0) ? track.duration : (nativeAudio.duration || 0);
+        if (total > 0 && total !== Infinity && !isNaN(total)) {
+          const percent = Math.min(100, (current / total) * 100);
+          scrubberFill.style.width = `${percent}%`;
+          currentTimeLabel.textContent = formatDuration(current);
+          totalTimeLabel.textContent = formatDuration(total);
+          if (current >= total) {
+            onTrackEnded();
+            return;
+          }
+        } else if (nativeAudio.duration && nativeAudio.duration !== Infinity && !isNaN(nativeAudio.duration)) {
+          const percent = (current / nativeAudio.duration) * 100;
+          scrubberFill.style.width = `${percent}%`;
+          currentTimeLabel.textContent = formatDuration(current);
+          totalTimeLabel.textContent = formatDuration(nativeAudio.duration);
+        } else {
+          currentTimeLabel.textContent = formatDuration(current);
+        }
       }
       updateNowPlayingPlaybackProgress();
     });
@@ -5662,8 +6304,11 @@ scrubberBar.addEventListener('click', (e) => {
     return;
   }
 
-  if (track.isKkbox) {
-    if (nativeAudio.duration) {
+  if (track.isKkbox || track.isTidal) {
+    const total = (track.duration && track.duration > 0) ? track.duration : (nativeAudio.duration || 0);
+    if (total > 0 && (!nativeAudio.duration || nativeAudio.duration === Infinity)) {
+      nativeAudio.currentTime = Math.floor(ratio * total);
+    } else if (nativeAudio.duration && nativeAudio.duration !== Infinity) {
       nativeAudio.currentTime = ratio * nativeAudio.duration;
     }
   } else if (track.isDemo || !track.filePath) {
@@ -6465,6 +7110,8 @@ function setupCoverSizeControls() {
   applyArtistSize(state.artistCardSize || 'medium');
 }
 
+let lastTidalSearchTracks = [];
+
 async function fetchOnlineStreamingAlbums(query) {
   const cleanQ = query.trim();
   if (!cleanQ) return [];
@@ -6480,41 +7127,59 @@ async function fetchOnlineStreamingAlbums(query) {
     .trim();
 
   let results = [];
-  try {
-    // 1. First attempt with Taiwan store (best for Chinese, Asian & Western popular albums)
-    const twUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQ)}&entity=album&country=TW&limit=24`;
-    let res = await fetch(twUrl);
-    let data = res.ok ? await res.json() : null;
 
-    // 2. If no results or failed, attempt global US catalog
-    if (!data || !data.results || data.results.length === 0) {
-      const globalUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQ)}&entity=album&limit=24`;
-      res = await fetch(globalUrl);
-      data = res.ok ? await res.json() : null;
+  // 1. If TIDAL is logged in, query TIDAL official catalog first!
+  if (window.tidalService && window.tidalService.isLoggedIn) {
+    try {
+      const tidalRes = await window.tidalService.search(cleanQ, 20);
+      if (tidalRes && tidalRes.albums && tidalRes.albums.length > 0) {
+        results = tidalRes.albums;
+      }
+      if (tidalRes && tidalRes.tracks) {
+        lastTidalSearchTracks = tidalRes.tracks;
+      }
+    } catch (tidalErr) {
+      console.warn('TIDAL global search error:', tidalErr);
     }
+  }
 
-    if (data && data.results && data.results.length > 0) {
-      const seen = new Set();
-      data.results.forEach(online => {
-        const normTitle = normalize(online.collectionName);
-        if (!normTitle || seen.has(normTitle)) return;
-        seen.add(normTitle);
+  // 2. Fallback to iTunes catalog if TIDAL returned nothing or is not logged in
+  if (results.length === 0) {
+    try {
+      const twUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQ)}&entity=album&country=TW&limit=24`;
+      let res = await fetch(twUrl);
+      let data = res.ok ? await res.json() : null;
 
-        const year = online.releaseDate ? new Date(online.releaseDate).getFullYear() : '';
-        const highResCover = online.artworkUrl100 ? online.artworkUrl100.replace('100x100bb', '600x600bb') : '';
-        results.push({
-          title: online.collectionName,
-          artist: online.artistName || 'Various Artists',
-          year: year,
-          trackCount: online.trackCount || 0,
-          cover: highResCover,
-          genre: online.primaryGenreName || 'Music',
-          appleUrl: online.collectionViewUrl || ''
+      // If no results or failed, attempt global US catalog
+      if (!data || !data.results || data.results.length === 0) {
+        const globalUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQ)}&entity=album&limit=24`;
+        res = await fetch(globalUrl);
+        data = res.ok ? await res.json() : null;
+      }
+
+      if (data && data.results && data.results.length > 0) {
+        const seen = new Set();
+        data.results.forEach(online => {
+          const normTitle = normalize(online.collectionName);
+          if (!normTitle || seen.has(normTitle)) return;
+          seen.add(normTitle);
+
+          const year = online.releaseDate ? new Date(online.releaseDate).getFullYear() : '';
+          const highResCover = online.artworkUrl100 ? online.artworkUrl100.replace('100x100bb', '600x600bb') : '';
+          results.push({
+            title: online.collectionName,
+            artist: online.artistName || 'Various Artists',
+            year: year,
+            trackCount: online.trackCount || 0,
+            cover: highResCover,
+            genre: online.primaryGenreName || 'Music',
+            appleUrl: online.collectionViewUrl || ''
+          });
         });
-      });
+      }
+    } catch (err) {
+      console.warn('Online streaming albums search error:', err);
     }
-  } catch (err) {
-    console.warn('Online streaming albums search error:', err);
   }
 
   streamingSearchCache.set(cacheKey, results);
@@ -6541,40 +7206,45 @@ function renderOnlineStreamingAlbums(albums, query) {
   }
 
   albums.forEach(alb => {
-    const card = document.createElement('div');
-    card.className = 'missing-album-card';
+    // If it's a native TIDAL album
+    if (alb.isTidal || alb.tidalId) {
+      container.appendChild(createTidalAlbumCard(alb));
+    } else {
+      const card = document.createElement('div');
+      card.className = 'missing-album-card';
 
-    const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
-    const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
-    const albumQuery = `${alb.title} ${alb.artist}`.trim();
+      const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
+      const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
+      const albumQuery = `${alb.title} ${alb.artist}`.trim();
 
-    card.innerHTML = `
-      <div class="album-art-wrap" style="position: relative;">
-        <img src="${coverSrc}" class="album-art-img" alt="${escapeXml(alb.title)}" loading="lazy">
-        <span class="missing-badge" style="background-color: rgba(139, 92, 246, 0.9); color: #fff;">線上串流</span>
-      </div>
-      <div class="album-meta">
-        <div class="album-title" title="${escapeXml(alb.title)}">${escapeXml(alb.title)}</div>
-        <div class="album-artist">${escapeXml(alb.artist)}</div>
-        <div class="album-year">${alb.year ? alb.year + ' • ' : ''}${alb.trackCount ? alb.trackCount + ' 首' : ''}</div>
-      </div>
-      <div class="missing-links-bar">
-        <button class="btn-stream-link kkbox" data-platform="kkbox" title="在 KKBOX 搜尋「${escapeXml(albumQuery)}」">KKBOX</button>
-        <button class="btn-stream-link tidal" data-platform="tidal" title="在 TIDAL 搜尋「${escapeXml(albumQuery)}」">TIDAL</button>
-        <button class="btn-stream-link qobuz" data-platform="qobuz" title="在 Qobuz Hi-Res 搜尋「${escapeXml(albumQuery)}」">QOBUZ</button>
-        <button class="btn-stream-link spotify" data-platform="spotify" title="在 Spotify 搜尋「${escapeXml(albumQuery)}」">SPOTIFY</button>
-      </div>
-    `;
+      card.innerHTML = `
+        <div class="album-art-wrap" style="position: relative;">
+          <img src="${coverSrc}" class="album-art-img" alt="${escapeXml(alb.title)}" loading="lazy">
+          <span class="missing-badge" style="background-color: rgba(139, 92, 246, 0.9); color: #fff;">線上串流</span>
+        </div>
+        <div class="album-meta">
+          <div class="album-title" title="${escapeXml(alb.title)}">${escapeXml(alb.title)}</div>
+          <div class="album-artist">${escapeXml(alb.artist)}</div>
+          <div class="album-year">${alb.year ? alb.year + ' • ' : ''}${alb.trackCount ? alb.trackCount + ' 首' : ''}</div>
+        </div>
+        <div class="missing-links-bar">
+          <button class="btn-stream-link kkbox" data-platform="kkbox" title="在 KKBOX 搜尋「${escapeXml(albumQuery)}」">KKBOX</button>
+          <button class="btn-stream-link tidal" data-platform="tidal" title="在 TIDAL 搜尋「${escapeXml(albumQuery)}」">TIDAL</button>
+          <button class="btn-stream-link qobuz" data-platform="qobuz" title="在 Qobuz Hi-Res 搜尋「${escapeXml(albumQuery)}」">QOBUZ</button>
+          <button class="btn-stream-link spotify" data-platform="spotify" title="在 Spotify 搜尋「${escapeXml(albumQuery)}」">SPOTIFY</button>
+        </div>
+      `;
 
-    card.querySelectorAll('.btn-stream-link').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const platform = btn.getAttribute('data-platform');
-        openStreamingPlatform(platform, albumQuery);
+      card.querySelectorAll('.btn-stream-link').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const platform = btn.getAttribute('data-platform');
+          openStreamingPlatform(platform, albumQuery);
+        });
       });
-    });
 
-    container.appendChild(card);
+      container.appendChild(card);
+    }
   });
 }
 
@@ -6608,6 +7278,10 @@ function handleSearch(query) {
     if (albumsFilterBar) albumsFilterBar.style.display = 'flex';
     if (albumsPageTitle) albumsPageTitle.textContent = '專輯庫 Albums';
     if (albumsHeaderCount) albumsHeaderCount.textContent = `共 ${state.albums.length} 張專輯`;
+
+    const streamingTracksBlock = document.getElementById('streamingTracksBlock');
+    if (streamingTracksBlock) streamingTracksBlock.style.display = 'none';
+    lastTidalSearchTracks = [];
 
     renderAlbums();
     renderTracks();
@@ -6673,6 +7347,25 @@ function handleSearch(query) {
     if (currentSearchQuery !== fetchedQuery) return;
 
     renderOnlineStreamingAlbums(onlineAlbums, fetchedQuery);
+
+    // 3. Render TIDAL matching tracks section
+    const streamingTracksBlock = document.getElementById('streamingTracksBlock');
+    const streamingTracksList = document.getElementById('streamingTracksList');
+    const streamingTracksCount = document.getElementById('streamingTracksCount');
+    if (streamingTracksBlock && streamingTracksList) {
+      if (window.tidalService && window.tidalService.isLoggedIn && lastTidalSearchTracks && lastTidalSearchTracks.length > 0) {
+        streamingTracksBlock.style.display = 'block';
+        if (streamingTracksCount) streamingTracksCount.textContent = `${lastTidalSearchTracks.length} 首`;
+        streamingTracksList.innerHTML = '';
+        lastTidalSearchTracks.slice(0, 15).forEach((t, idx) => {
+          streamingTracksList.appendChild(createTidalTrackRow(t, idx, lastTidalSearchTracks));
+        });
+      } else {
+        streamingTracksBlock.style.display = 'none';
+        streamingTracksList.innerHTML = '';
+      }
+    }
+
     if (searchStatText) {
       searchStatText.textContent = `(本機端 ${matchedAlbums.length} 張 • 線上串流發現 ${onlineAlbums.length} 張作品)`;
     }
@@ -8328,6 +9021,868 @@ function initKkboxStreaming() {
 
   // Load first tab (Charts) immediately on initialization
   loadKkboxCharts();
+}
+
+// ==========================================================
+// TIDAL Streaming & Account Subsystem UI Integration
+// ==========================================================
+let tidalService = null;
+
+async function initTidalStreaming() {
+  if (typeof TidalService !== 'undefined') {
+    tidalService = new TidalService();
+    window.tidalService = tidalService;
+    await tidalService.init();
+    updateTidalUIStatus();
+  }
+
+  const modal = document.getElementById('tidalLoginModal');
+  const btnClose = document.getElementById('btnCloseTidalLogin');
+  const btnCancel = document.getElementById('btnCancelTidalLogin');
+  const btnStartLogin = document.getElementById('btnTidalStartLogin');
+  const loadingIndicator = document.getElementById('tidalLoginLoading');
+  const btnSaveManual = document.getElementById('btnTidalSaveManualToken');
+  const inputManual = document.getElementById('tidalInputManualToken');
+  const inputUserId = document.getElementById('tidalInputUserId');
+  const btnRelogin = document.getElementById('btnTidalRelogin');
+  const btnLogout = document.getElementById('btnTidalLogout');
+
+  const navItemTidal = document.getElementById('navItemTidal');
+  if (navItemTidal) {
+    navItemTidal.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigateTo('tidal');
+    });
+  }
+
+  function openTidalLoginModal() {
+    if (!modal) return;
+    updateTidalUIStatus();
+    modal.style.display = 'flex';
+  }
+
+  function closeTidalLoginModal() {
+    if (!modal) return;
+    modal.style.display = 'none';
+  }
+
+  if (btnClose) btnClose.addEventListener('click', closeTidalLoginModal);
+  if (btnCancel) btnCancel.addEventListener('click', closeTidalLoginModal);
+
+  // Close on modal backdrop click
+  if (modal) {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeTidalLoginModal();
+    });
+  }
+
+  // Start window login
+  if (btnStartLogin) {
+    btnStartLogin.addEventListener('click', async () => {
+      if (!tidalService) return;
+      if (loadingIndicator) loadingIndicator.style.display = 'block';
+      btnStartLogin.disabled = true;
+
+      try {
+        const res = await tidalService.loginWithWindow();
+        if (res && res.success) {
+          showToast('🎉 TIDAL 官方帳號已成功登入！');
+          updateTidalUIStatus();
+          if (state.currentView === 'tidal') onOpenTidalView();
+        }
+      } catch (err) {
+        console.warn('[TIDAL] Login cancelled or failed:', err);
+        showToast(`ℹ️ TIDAL 登入狀態: ${err.message || '已取消'}`);
+      } finally {
+        if (loadingIndicator) loadingIndicator.style.display = 'none';
+        btnStartLogin.disabled = false;
+      }
+    });
+  }
+
+  // Immediate probe button if window is already on home page
+  const btnProbeNow = document.getElementById('btnTidalProbeNow');
+  if (btnProbeNow) {
+    btnProbeNow.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (window.electronAPI && window.electronAPI.tidalProbeAuth) {
+        showToast('⏳ 正在從登入視窗擷取授權...');
+        btnProbeNow.disabled = true;
+        try {
+          const probeRes = await window.electronAPI.tidalProbeAuth();
+          if (probeRes && probeRes.success) {
+            showToast('🎉 TIDAL 授權擷取成功！');
+            await tidalService.verifySession();
+            updateTidalUIStatus();
+            if (state.currentView === 'tidal') onOpenTidalView();
+          } else {
+            showToast('⚠️ 尚未檢測到有效授權，請確認視窗已登入並進入 TIDAL 首頁');
+          }
+        } catch (err) {
+          showToast(`❌ 擷取失敗: ${err.message}`);
+        } finally {
+          btnProbeNow.disabled = false;
+        }
+      }
+    });
+  }
+
+  // Manual token save
+  if (btnSaveManual) {
+    btnSaveManual.addEventListener('click', async () => {
+      if (!tidalService || !inputManual) return;
+      const token = inputManual.value.trim();
+      const uid = inputUserId ? inputUserId.value.trim() : '';
+      if (!token) {
+        showToast('⚠️ 請輸入有效的 Token');
+        return;
+      }
+      try {
+        await tidalService.saveManualToken(token, uid);
+        showToast('✅ TIDAL Token 儲存成功！');
+        updateTidalUIStatus();
+        if (state.currentView === 'tidal') onOpenTidalView();
+      } catch (err) {
+        showToast(`❌ 驗證失敗: ${err.message}`);
+      }
+    });
+  }
+
+  // Relogin
+  if (btnRelogin) {
+    btnRelogin.addEventListener('click', async () => {
+      if (btnStartLogin) btnStartLogin.click();
+    });
+  }
+
+  // Logout
+  if (btnLogout) {
+    btnLogout.addEventListener('click', async () => {
+      if (!tidalService) return;
+      await tidalService.logout();
+      showToast('🔒 已中斷 TIDAL 帳號連線');
+      updateTidalUIStatus();
+      if (state.currentView === 'tidal') onOpenTidalView();
+    });
+  }
+
+  // Wire up TIDAL Explorer UI controls
+  setupTidalExplorerUI();
+}
+
+// -------------------------------------------------------------
+// TIDAL Explorer UI Controller & State
+// -------------------------------------------------------------
+let currentTidalTab = 'featured';
+let currentTidalCuratedChip = 'audiophile';
+let tidalCachedFavorites = null;
+let currentTidalPlaylistDetail = null;
+
+function setupTidalExplorerUI() {
+  const tabFeatured = document.getElementById('btnTidalTabFeatured');
+  const tabNewReleases = document.getElementById('btnTidalTabNewReleases');
+  const tabCollection = document.getElementById('btnTidalTabCollection');
+
+  const btnSearch = document.getElementById('btnTidalSearch');
+  const searchInput = document.getElementById('tidalSearchInput');
+  const btnBackFromSearch = document.getElementById('btnTidalBackFromSearch');
+
+  const btnAccount = document.getElementById('btnOpenTidalAccount');
+  const btnConnectNow = document.getElementById('btnTidalConnectNow');
+  const btnCloseBanner = document.getElementById('btnCloseTidalBanner');
+  const infoBanner = document.getElementById('tidalInfoBanner');
+
+  const btnRefreshFeatured = document.getElementById('btnRefreshTidalFeatured');
+  const btnRefreshNewReleases = document.getElementById('btnRefreshTidalNewReleases');
+  const btnRefreshCollection = document.getElementById('btnRefreshTidalCollection');
+
+  const btnSubFavAlbums = document.getElementById('btnTidalSubFavAlbums');
+  const btnSubFavTracks = document.getElementById('btnTidalSubFavTracks');
+  const btnSubPlaylists = document.getElementById('btnTidalSubPlaylists');
+
+  const btnPlayAllFavTracks = document.getElementById('btnPlayAllTidalFavTracks');
+  const btnImportFavTracks = document.getElementById('btnImportTidalFavTracksToQueue');
+
+  const btnPlaylistBack = document.getElementById('btnTidalPlaylistBackToList');
+
+  // Tab Switching
+  if (tabFeatured) tabFeatured.addEventListener('click', () => switchTidalTab('featured'));
+  if (tabNewReleases) tabNewReleases.addEventListener('click', () => switchTidalTab('newReleases'));
+  if (tabCollection) tabCollection.addEventListener('click', () => switchTidalTab('collection'));
+
+  // Search
+  function doTidalSearch() {
+    const q = (searchInput ? searchInput.value : '').trim();
+    if (!q) {
+      showToast('請輸入欲搜尋的 TIDAL 歌曲、演出者或專輯關鍵字');
+      return;
+    }
+    switchTidalTab('search');
+    loadTidalSearch(q);
+  }
+  if (btnSearch) btnSearch.addEventListener('click', doTidalSearch);
+  if (searchInput) {
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doTidalSearch();
+    });
+  }
+  if (btnBackFromSearch) btnBackFromSearch.addEventListener('click', () => switchTidalTab('featured'));
+
+  // Account / Login triggers
+  if (btnAccount) btnAccount.addEventListener('click', openTidalLoginModal);
+  if (btnConnectNow) btnConnectNow.addEventListener('click', openTidalLoginModal);
+
+  // Close Banner
+  if (btnCloseBanner && infoBanner) {
+    btnCloseBanner.addEventListener('click', () => {
+      infoBanner.style.display = 'none';
+    });
+  }
+
+  // Curated Filter Chips
+  const chipContainer = document.getElementById('tidalFeaturedFilterChips');
+  if (chipContainer) {
+    chipContainer.addEventListener('click', (e) => {
+      const chip = e.target.closest('.tidal-chip-btn');
+      if (!chip) return;
+      chipContainer.querySelectorAll('.tidal-chip-btn').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      const tag = chip.getAttribute('data-curated') || 'audiophile';
+      loadTidalFeatured(tag, true);
+    });
+  }
+
+  // Refresh buttons
+  if (btnRefreshFeatured) btnRefreshFeatured.addEventListener('click', () => loadTidalFeatured(currentTidalCuratedChip, true));
+  if (btnRefreshNewReleases) btnRefreshNewReleases.addEventListener('click', () => loadTidalNewReleases(true));
+  if (btnRefreshCollection) btnRefreshCollection.addEventListener('click', () => loadTidalCollection(true));
+
+  // Collection Sub-Tabs
+  function switchCollectionSubTab(sub) {
+    const viewAlbums = document.getElementById('tidalSubViewFavAlbums');
+    const viewTracks = document.getElementById('tidalSubViewFavTracks');
+    const viewPlaylists = document.getElementById('tidalSubViewPlaylists');
+
+    [btnSubFavAlbums, btnSubFavTracks, btnSubPlaylists].forEach(b => b && b.classList.remove('active'));
+    if (viewAlbums) viewAlbums.style.display = 'none';
+    if (viewTracks) viewTracks.style.display = 'none';
+    if (viewPlaylists) viewPlaylists.style.display = 'none';
+
+    if (sub === 'albums') {
+      if (btnSubFavAlbums) btnSubFavAlbums.classList.add('active');
+      if (viewAlbums) viewAlbums.style.display = 'block';
+    } else if (sub === 'tracks') {
+      if (btnSubFavTracks) btnSubFavTracks.classList.add('active');
+      if (viewTracks) viewTracks.style.display = 'block';
+    } else if (sub === 'playlists') {
+      if (btnSubPlaylists) btnSubPlaylists.classList.add('active');
+      if (viewPlaylists) viewPlaylists.style.display = 'block';
+    }
+  }
+
+  if (btnSubFavAlbums) btnSubFavAlbums.addEventListener('click', () => switchCollectionSubTab('albums'));
+  if (btnSubFavTracks) btnSubFavTracks.addEventListener('click', () => switchCollectionSubTab('tracks'));
+  if (btnSubPlaylists) btnSubPlaylists.addEventListener('click', () => switchCollectionSubTab('playlists'));
+
+  // Fav Tracks toolbar actions
+  if (btnPlayAllFavTracks) {
+    btnPlayAllFavTracks.addEventListener('click', () => {
+      if (tidalCachedFavorites && tidalCachedFavorites.tracks && tidalCachedFavorites.tracks.length > 0) {
+        playTrackList(tidalCachedFavorites.tracks, 0);
+        showToast(`▶ 開始播放 TIDAL 最愛歌曲 (${tidalCachedFavorites.tracks.length} 首)`);
+      } else {
+        showToast('尚未載入或無最愛歌曲');
+      }
+    });
+  }
+
+  if (btnImportFavTracks) {
+    btnImportFavTracks.addEventListener('click', () => {
+      if (tidalCachedFavorites && tidalCachedFavorites.tracks && tidalCachedFavorites.tracks.length > 0) {
+        tidalCachedFavorites.tracks.forEach(t => addToQueue(t));
+        showToast(`已將 ${tidalCachedFavorites.tracks.length} 首 TIDAL 最愛歌曲加入播放佇列`);
+      } else {
+        showToast('尚未載入或無最愛歌曲');
+      }
+    });
+  }
+
+  // Playlist detail back button
+  if (btnPlaylistBack) {
+    btnPlaylistBack.addEventListener('click', () => {
+      const detailView = document.getElementById('tidalPlaylistDetailView');
+      const explorerContainer = document.getElementById('tidalExplorerContainer');
+      if (detailView) detailView.style.display = 'none';
+      if (explorerContainer) explorerContainer.style.display = 'block';
+    });
+  }
+}
+
+function onOpenTidalView() {
+  const notConnectedBanner = document.getElementById('tidalNotConnectedBanner');
+  const explorerContainer = document.getElementById('tidalExplorerContainer');
+  const isLoggedIn = window.tidalService && window.tidalService.isLoggedIn;
+
+  if (!isLoggedIn) {
+    if (notConnectedBanner) notConnectedBanner.style.display = 'flex';
+    if (explorerContainer) explorerContainer.style.display = 'none';
+    return;
+  }
+
+  if (notConnectedBanner) notConnectedBanner.style.display = 'none';
+  if (explorerContainer) explorerContainer.style.display = 'block';
+
+  // Load active tab content if empty
+  if (currentTidalTab === 'featured') {
+    const grid = document.getElementById('tidalFeaturedGrid');
+    if (grid && (grid.querySelector('.tidal-loading-indicator') || grid.children.length === 0)) {
+      loadTidalFeatured(currentTidalCuratedChip);
+    }
+  } else if (currentTidalTab === 'newReleases') {
+    const grid = document.getElementById('tidalNewReleasesGrid');
+    if (grid && (grid.querySelector('.tidal-loading-indicator') || grid.children.length === 0)) {
+      loadTidalNewReleases();
+    }
+  } else if (currentTidalTab === 'collection') {
+    loadTidalCollection();
+  }
+}
+
+function switchTidalTab(tabName) {
+  currentTidalTab = tabName;
+  const tabFeatured = document.getElementById('btnTidalTabFeatured');
+  const tabNewReleases = document.getElementById('btnTidalTabNewReleases');
+  const tabCollection = document.getElementById('btnTidalTabCollection');
+
+  const paneFeatured = document.getElementById('tidalPaneFeatured');
+  const paneNewReleases = document.getElementById('tidalPaneNewReleases');
+  const paneCollection = document.getElementById('tidalPaneCollection');
+  const paneSearch = document.getElementById('tidalPaneSearch');
+  const detailView = document.getElementById('tidalPlaylistDetailView');
+  const explorerContainer = document.getElementById('tidalExplorerContainer');
+
+  if (detailView) detailView.style.display = 'none';
+  if (explorerContainer) explorerContainer.style.display = 'block';
+
+  [tabFeatured, tabNewReleases, tabCollection].forEach(t => t && t.classList.remove('active'));
+  [paneFeatured, paneNewReleases, paneCollection, paneSearch].forEach(p => {
+    if (p) {
+      p.classList.remove('active');
+      p.style.display = 'none';
+    }
+  });
+
+  if (tabName === 'featured') {
+    if (tabFeatured) tabFeatured.classList.add('active');
+    if (paneFeatured) {
+      paneFeatured.classList.add('active');
+      paneFeatured.style.display = 'block';
+    }
+    loadTidalFeatured(currentTidalCuratedChip);
+  } else if (tabName === 'newReleases') {
+    if (tabNewReleases) tabNewReleases.classList.add('active');
+    if (paneNewReleases) {
+      paneNewReleases.classList.add('active');
+      paneNewReleases.style.display = 'block';
+    }
+    loadTidalNewReleases();
+  } else if (tabName === 'collection') {
+    if (tabCollection) tabCollection.classList.add('active');
+    if (paneCollection) {
+      paneCollection.classList.add('active');
+      paneCollection.style.display = 'block';
+    }
+    loadTidalCollection();
+  } else if (tabName === 'search') {
+    if (paneSearch) {
+      paneSearch.classList.add('active');
+      paneSearch.style.display = 'block';
+    }
+  }
+}
+
+function createTidalAlbumCard(alb) {
+  const card = document.createElement('div');
+  card.className = 'album-card tidal-discography-card';
+  card.dataset.tidalId = String(alb.tidalId);
+
+  const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
+  const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
+  const inLib = isTidalAlbumInLibrary(alb.tidalId);
+
+  const isHiRes = alb.audioQuality === 'HI_RES_LOSSLESS' || alb.audioQuality === 'HIRES' || (alb.mediaMetadata?.tags?.includes('HIRES_LOSSLESS'));
+  const qualityBadgeHtml = isHiRes
+    ? `<span class="album-quality-tag tag-tidal-hires">TIDAL MAX</span>`
+    : `<span class="album-quality-tag tag-tidal">TIDAL FLAC</span>`;
+
+  card.innerHTML = `
+    <div class="album-art-wrap">
+      <img src="${coverSrc}" class="album-art-img" alt="${escapeXml(alb.title)}" loading="lazy">
+      ${qualityBadgeHtml}
+      <button class="card-play-btn" title="播放整張 TIDAL 專輯">▶</button>
+    </div>
+    <div class="album-meta">
+      <div class="album-title" title="${escapeXml(alb.title)}">${escapeXml(alb.title)}</div>
+      <div class="album-artist">${escapeXml(alb.artist)}</div>
+      <div class="album-year">${alb.year ? alb.year + ' • ' : ''}${alb.numberOfTracks ? alb.numberOfTracks + ' 首 • ' : ''}${inLib ? '<span style="color:#00e5ff;font-weight:700;">✓ 已在曲庫</span>' : ''}</div>
+    </div>
+    <div class="tidal-card-actions">
+      <button class="btn-tidal-lib-action ${inLib ? 'in-library' : ''}" data-tidal-id="${alb.tidalId}">${inLib ? '✓ 已在曲庫' : '➕ 加入曲庫'}</button>
+    </div>
+  `;
+
+  // Click play
+  const playBtn = card.querySelector('.card-play-btn');
+  if (playBtn) {
+    playBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      playTidalAlbum(alb.tidalId);
+    });
+  }
+
+  // Click add to library
+  const libBtn = card.querySelector('.btn-tidal-lib-action');
+  if (libBtn) {
+    libBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (isTidalAlbumInLibrary(alb.tidalId)) {
+        if (confirm(`確定要將《${alb.title}》從曲庫移除嗎？`)) {
+          await removeTidalAlbumFromLibrary(alb.tidalId);
+          libBtn.textContent = '➕ 加入曲庫';
+          libBtn.classList.remove('in-library');
+        }
+      } else {
+        await addTidalAlbumToLibrary(alb.tidalId, alb);
+        libBtn.textContent = '✓ 已在曲庫';
+        libBtn.classList.add('in-library');
+      }
+    });
+  }
+
+  // Explicit click on album artwork cover opens full album details & tracklist
+  const artWrap = card.querySelector('.album-art-wrap');
+  if (artWrap) {
+    artWrap.style.cursor = 'pointer';
+    artWrap.addEventListener('click', (e) => {
+      if (e.target.closest('.card-play-btn')) return;
+      e.stopPropagation();
+      openAlbumDetail(alb);
+    });
+  }
+
+  // Click card body to open full album details!
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('.card-play-btn') || e.target.closest('.btn-tidal-lib-action')) return;
+    openAlbumDetail(alb);
+  });
+
+  return card;
+}
+
+function createTidalPlaylistCard(playlist) {
+  const card = document.createElement('div');
+  card.className = 'album-card';
+  const coverUrl = playlist.image ? tidalService.getCoverUrl(playlist.image, 640) : (playlist.squareImage ? tidalService.getCoverUrl(playlist.squareImage, 640) : '');
+  const coverSrc = coverUrl || createSvgCover(playlist.title, 'TIDAL Playlist', '#1e293b', '#0f172a');
+
+  card.innerHTML = `
+    <div class="album-art-wrap">
+      <img src="${coverSrc}" class="album-art-img" alt="${escapeXml(playlist.title)}" loading="lazy">
+      <span class="album-quality-tag" style="background: rgba(0, 229, 255, 0.2); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.4);">PLAYLIST</span>
+      <button class="card-play-btn" title="播放歌單">▶</button>
+    </div>
+    <div class="album-meta">
+      <div class="album-title" title="${escapeXml(playlist.title)}">${escapeXml(playlist.title)}</div>
+      <div class="album-artist">${escapeXml(playlist.creator?.name || 'TIDAL')}</div>
+      <div class="album-year">${playlist.numberOfTracks || 0} 首歌曲</div>
+    </div>
+  `;
+
+  // Play button
+  const playBtn = card.querySelector('.card-play-btn');
+  if (playBtn) {
+    playBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      showToast(`正在載入歌單《${playlist.title}》...`);
+      try {
+        const tracks = await tidalService.getPlaylistTracks(playlist.uuid);
+        if (tracks.length > 0) {
+          playTrackList(tracks, 0);
+          showToast(`▶ 開始播放歌單《${playlist.title}》(${tracks.length} 首)`);
+        }
+      } catch (err) {
+        showToast(`❌ 播放歌單失敗: ${err.message}`);
+      }
+    });
+  }
+
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('.card-play-btn')) return;
+    openTidalPlaylistDetail(playlist);
+  });
+
+  return card;
+}
+
+function createTidalTrackRow(track, idx, parentList = []) {
+  const row = document.createElement('div');
+  row.className = 'tidal-track-row';
+  const isHiRes = (track.sampleRate > 48000 || track.bitsPerSample >= 24 || track.audioQuality === 'HI_RES_LOSSLESS');
+  const specLabel = isHiRes ? 'Hi-Res 24-bit' : 'FLAC 16-bit';
+
+  row.innerHTML = `
+    <div class="tidal-track-row-left">
+      <span class="tidal-track-rank">${idx + 1}</span>
+      <img class="tidal-track-thumb" src="${track.cover || 'default_cover.png'}" alt="Cover" onerror="this.src='default_cover.png'">
+      <div class="tidal-track-meta">
+        <span class="tidal-track-title">${escapeXml(track.title)}</span>
+        <span class="tidal-track-artist">${escapeXml(track.artist)} • ${escapeXml(track.album)}</span>
+      </div>
+    </div>
+    <div class="tidal-track-row-right">
+      <span class="album-quality-tag ${isHiRes ? 'tag-tidal-hires' : 'tag-tidal'}" style="margin: 0; font-size: 10px;">${specLabel}</span>
+      <span class="tidal-track-duration">${formatDuration(track.duration)}</span>
+      <button class="btn-tidal-track-play" title="立即播放">▶</button>
+      <button class="btn-tidal-track-queue" title="加入播放佇列">📥</button>
+    </div>
+  `;
+
+  row.querySelector('.btn-tidal-track-play').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const listToPlay = parentList.length > 0 ? parentList : [track];
+    playTrackList(listToPlay, parentList.indexOf(track) >= 0 ? parentList.indexOf(track) : 0);
+    showToast(`▶ 正在播放：${track.title}`);
+  });
+
+  row.querySelector('.btn-tidal-track-queue').addEventListener('click', (e) => {
+    e.stopPropagation();
+    addToQueue(track);
+    showToast(`已將「${track.title}」加入播放佇列`);
+  });
+
+  row.addEventListener('click', (e) => {
+    if (e.target.closest('.btn-tidal-track-play') || e.target.closest('.btn-tidal-track-queue')) return;
+    const listToPlay = parentList.length > 0 ? parentList : [track];
+    playTrackList(listToPlay, parentList.indexOf(track) >= 0 ? parentList.indexOf(track) : 0);
+  });
+
+  return row;
+}
+
+async function loadTidalFeatured(curatedTag = 'audiophile', force = false) {
+  currentTidalCuratedChip = curatedTag;
+  const grid = document.getElementById('tidalFeaturedGrid');
+  if (!grid) return;
+  if (!force && grid.children.length > 1 && !grid.querySelector('.tidal-loading-indicator')) return;
+
+  grid.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在載入 TIDAL 發燒推薦專輯...</div>';
+
+  try {
+    const albums = await window.tidalService.getHiResPicks(curatedTag, 30);
+    grid.innerHTML = '';
+    if (!albums || albums.length === 0) {
+      grid.innerHTML = '<div class="empty-hint" style="grid-column: 1/-1;">暫無此分類推薦專輯</div>';
+      return;
+    }
+    albums.forEach(alb => {
+      grid.appendChild(createTidalAlbumCard(alb));
+    });
+  } catch (err) {
+    console.error('Failed to load TIDAL featured:', err);
+    grid.innerHTML = `<div class="empty-hint" style="grid-column: 1/-1; color: #ef4444;">載入發燒推薦失敗: ${escapeXml(err.message)}</div>`;
+  }
+}
+
+async function loadTidalNewReleases(force = false) {
+  const grid = document.getElementById('tidalNewReleasesGrid');
+  if (!grid) return;
+  if (!force && grid.children.length > 1 && !grid.querySelector('.tidal-loading-indicator')) return;
+
+  grid.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在載入 TIDAL 最新發行專輯...</div>';
+
+  try {
+    const albums = await window.tidalService.getNewReleases(30);
+    grid.innerHTML = '';
+    if (!albums || albums.length === 0) {
+      grid.innerHTML = '<div class="empty-hint" style="grid-column: 1/-1;">暫無最新發行專輯</div>';
+      return;
+    }
+    albums.forEach(alb => {
+      grid.appendChild(createTidalAlbumCard(alb));
+    });
+  } catch (err) {
+    console.error('Failed to load TIDAL new releases:', err);
+    grid.innerHTML = `<div class="empty-hint" style="grid-column: 1/-1; color: #ef4444;">載入最新發行失敗: ${escapeXml(err.message)}</div>`;
+  }
+}
+
+async function loadTidalCollection(force = false) {
+  const albumsBadge = document.getElementById('tidalFavAlbumsCountBadge');
+  const tracksBadge = document.getElementById('tidalFavTracksCountBadge');
+  const playlistsBadge = document.getElementById('tidalPlaylistsCountBadge');
+  const albumsGrid = document.getElementById('tidalFavAlbumsGrid');
+  const tracksTbody = document.getElementById('tidalFavTracksTbody');
+  const playlistsGrid = document.getElementById('tidalPlaylistsGrid');
+
+  if (!window.tidalService || !window.tidalService.isLoggedIn) return;
+
+  try {
+    // 1. Fetch Favorite Albums
+    if (force || !tidalCachedFavorites || !tidalCachedFavorites.albums) {
+      if (albumsGrid) albumsGrid.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在載入您的 TIDAL 最愛專輯...</div>';
+      const favAlbums = await window.tidalService.getFavoriteAlbums(100);
+      if (!tidalCachedFavorites) tidalCachedFavorites = {};
+      tidalCachedFavorites.albums = favAlbums;
+      if (albumsBadge) albumsBadge.textContent = favAlbums.length;
+
+      if (albumsGrid) {
+        albumsGrid.innerHTML = '';
+        if (favAlbums.length === 0) {
+          albumsGrid.innerHTML = '<div class="empty-hint" style="grid-column: 1/-1;">您的 TIDAL 帳號中尚未加入最愛專輯</div>';
+        } else {
+          favAlbums.forEach(alb => albumsGrid.appendChild(createTidalAlbumCard(alb)));
+        }
+      }
+    }
+
+    // 2. Fetch Favorite Tracks
+    if (force || !tidalCachedFavorites || !tidalCachedFavorites.tracks) {
+      const favTracks = await window.tidalService.getFavoriteTracks(100);
+      if (!tidalCachedFavorites) tidalCachedFavorites = {};
+      tidalCachedFavorites.tracks = favTracks;
+      if (tracksBadge) tracksBadge.textContent = favTracks.length;
+
+      if (tracksTbody) {
+        tracksTbody.innerHTML = '';
+        if (favTracks.length === 0) {
+          tracksTbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 24px; color: var(--text-muted);">尚未收藏任何最愛歌曲</td></tr>';
+        } else {
+          favTracks.forEach((t, idx) => {
+            const tr = document.createElement('tr');
+            const isHiRes = (t.sampleRate > 48000 || t.bitsPerSample >= 24 || t.audioQuality === 'HI_RES_LOSSLESS');
+            const specLabel = isHiRes ? 'Hi-Res 24-bit' : 'FLAC 16-bit';
+            const isFav = isTrackFavorite(t);
+
+            tr.innerHTML = `
+              <td>${idx + 1}</td>
+              <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '已在最愛歌曲' : '加入本機最愛歌曲'}">${getHeartSvg(isFav, 14)}</button></td>
+              <td class="track-title-cell">
+                <div class="track-title-text">
+                  <span class="track-name-span">${escapeXml(t.title)}</span>
+                </div>
+              </td>
+              <td>${escapeXml(t.artist)}</td>
+              <td>${escapeXml(t.album)}</td>
+              <td><span class="format-chip ${isHiRes ? 'hires' : ''}">${specLabel}</span></td>
+              <td style="text-align: right;">${formatDuration(t.duration)}</td>
+            `;
+
+            tr.addEventListener('click', (e) => {
+              if (e.target.closest('.btn-track-fav')) {
+                e.stopPropagation();
+                toggleTrackFavorite(t);
+                const btnFav = tr.querySelector('.btn-track-fav');
+                const nowFav = isTrackFavorite(t);
+                if (btnFav) {
+                  btnFav.classList.toggle('active', nowFav);
+                  btnFav.innerHTML = getHeartSvg(nowFav, 14);
+                }
+                return;
+              }
+              playTrackList(favTracks, idx);
+            });
+
+            tracksTbody.appendChild(tr);
+          });
+        }
+      }
+    }
+
+    // 3. Fetch Playlists
+    if (force || !tidalCachedFavorites || !tidalCachedFavorites.playlists) {
+      const userPlaylists = await window.tidalService.getUserPlaylists();
+      if (!tidalCachedFavorites) tidalCachedFavorites = {};
+      tidalCachedFavorites.playlists = userPlaylists;
+      if (playlistsBadge) playlistsBadge.textContent = userPlaylists.length;
+
+      if (playlistsGrid) {
+        playlistsGrid.innerHTML = '';
+        if (userPlaylists.length === 0) {
+          playlistsGrid.innerHTML = '<div class="empty-hint" style="grid-column: 1/-1;">您的 TIDAL 帳號中尚未建立個人歌單</div>';
+        } else {
+          userPlaylists.forEach(pl => playlistsGrid.appendChild(createTidalPlaylistCard(pl)));
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load TIDAL collection:', err);
+    showToast(`❌ 載入 TIDAL 收藏失敗: ${err.message}`);
+  }
+}
+
+async function loadTidalSearch(query) {
+  const summary = document.getElementById('tidalSearchSummary');
+  const albumsGrid = document.getElementById('tidalSearchAlbumsGrid');
+  const tracksList = document.getElementById('tidalSearchTracksList');
+
+  if (summary) summary.textContent = `關鍵字「${query}」正在檢索中...`;
+  if (albumsGrid) albumsGrid.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在搜尋專輯...</div>';
+  if (tracksList) tracksList.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在搜尋曲目...</div>';
+
+  try {
+    const res = await window.tidalService.search(query, 24);
+    const albums = res.albums || [];
+    const tracks = res.tracks || [];
+
+    if (summary) summary.textContent = `關鍵字「${query}」：共找到 ${albums.length} 張專輯 • ${tracks.length} 首歌曲`;
+
+    if (albumsGrid) {
+      albumsGrid.innerHTML = '';
+      if (albums.length === 0) {
+        albumsGrid.innerHTML = '<div class="empty-hint" style="grid-column: 1/-1;">未找到相符專輯</div>';
+      } else {
+        albums.forEach(alb => albumsGrid.appendChild(createTidalAlbumCard(alb)));
+      }
+    }
+
+    if (tracksList) {
+      tracksList.innerHTML = '';
+      if (tracks.length === 0) {
+        tracksList.innerHTML = '<div class="empty-hint">未找到相符歌曲</div>';
+      } else {
+        tracks.forEach((t, idx) => {
+          tracksList.appendChild(createTidalTrackRow(t, idx, tracks));
+        });
+      }
+    }
+  } catch (err) {
+    console.error('TIDAL Search error:', err);
+    if (summary) summary.textContent = `搜尋發生錯誤: ${err.message}`;
+  }
+}
+
+async function openTidalPlaylistDetail(playlist) {
+  currentTidalPlaylistDetail = playlist;
+  const explorerContainer = document.getElementById('tidalExplorerContainer');
+  const detailView = document.getElementById('tidalPlaylistDetailView');
+  const coverImg = document.getElementById('tidalPlaylistDetailCover');
+  const titleEl = document.getElementById('tidalPlaylistDetailTitle');
+  const descEl = document.getElementById('tidalPlaylistDetailDesc');
+  const metaEl = document.getElementById('tidalPlaylistDetailMeta');
+  const tracksContainer = document.getElementById('tidalPlaylistTracksList');
+
+  if (explorerContainer) explorerContainer.style.display = 'none';
+  if (detailView) detailView.style.display = 'block';
+
+  if (titleEl) titleEl.textContent = playlist.title || '歌單';
+  if (descEl) descEl.textContent = playlist.description || 'TIDAL 精選歌單';
+  if (metaEl) metaEl.textContent = `共 ${playlist.numberOfTracks || 0} 首歌曲 • 由 ${playlist.creator?.name || 'TIDAL'} 建立`;
+
+  const coverUrl = playlist.image ? tidalService.getCoverUrl(playlist.image, 640) : (playlist.squareImage ? tidalService.getCoverUrl(playlist.squareImage, 640) : '');
+  if (coverImg) coverImg.src = coverUrl || 'default_cover.png';
+
+  if (tracksContainer) tracksContainer.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在載入歌單曲目...</div>';
+
+  try {
+    const tracks = await window.tidalService.getPlaylistTracks(playlist.uuid);
+    if (tracksContainer) {
+      tracksContainer.innerHTML = '';
+      if (tracks.length === 0) {
+        tracksContainer.innerHTML = '<div class="empty-hint">歌單內尚無曲目</div>';
+      } else {
+        tracks.forEach((t, idx) => {
+          tracksContainer.appendChild(createTidalTrackRow(t, idx, tracks));
+        });
+      }
+    }
+
+    // Play all button
+    const btnPlayAll = document.getElementById('btnTidalPlayPlaylistAll');
+    if (btnPlayAll) {
+      btnPlayAll.onclick = () => {
+        if (tracks.length > 0) {
+          playTrackList(tracks, 0);
+          showToast(`▶ 播放歌單《${playlist.title}》`);
+        }
+      };
+    }
+
+    // Import to queue
+    const btnImport = document.getElementById('btnTidalImportPlaylistToQueue');
+    if (btnImport) {
+      btnImport.onclick = () => {
+        tracks.forEach(t => addToQueue(t));
+        showToast(`已將《${playlist.title}》${tracks.length} 首歌曲加入播放佇列`);
+      };
+    }
+
+    // Shuffle
+    const btnShuffle = document.getElementById('btnTidalShufflePlaylist');
+    if (btnShuffle) {
+      btnShuffle.onclick = () => {
+        if (tracks.length > 0) {
+          setShuffleState(true);
+          const randIdx = Math.floor(Math.random() * tracks.length);
+          playTrackList(tracks, randIdx);
+          showToast(`🔀 隨機播放歌單《${playlist.title}》`);
+        }
+      };
+    }
+  } catch (err) {
+    console.error('Failed to load playlist tracks:', err);
+    if (tracksContainer) {
+      tracksContainer.innerHTML = `<div class="empty-hint" style="color:#ef4444;">載入歌單失敗: ${escapeXml(err.message)}</div>`;
+    }
+  }
+}
+
+function updateTidalUIStatus() {
+  const badge = document.getElementById('tidalStatusBadge');
+  const loggedOutView = document.getElementById('tidalLoggedOutView');
+  const loggedInView = document.getElementById('tidalLoggedInView');
+  const profileName = document.getElementById('tidalProfileName');
+  const profileTier = document.getElementById('tidalProfileTier');
+  const profileInfo = document.getElementById('tidalProfileInfo');
+
+  const isLoggedIn = tidalService && tidalService.isLoggedIn;
+
+  if (badge) {
+    if (isLoggedIn) {
+      badge.textContent = '已連線';
+      badge.style.background = 'rgba(0, 229, 255, 0.2)';
+      badge.style.color = '#00e5ff';
+      badge.style.borderColor = 'rgba(0, 229, 255, 0.5)';
+    } else {
+      badge.textContent = '未登入';
+      badge.style.background = 'rgba(255, 255, 255, 0.08)';
+      badge.style.color = 'var(--text-muted)';
+      badge.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+    }
+  }
+
+  if (loggedOutView && loggedInView) {
+    if (isLoggedIn) {
+      loggedOutView.style.display = 'none';
+      loggedInView.style.display = 'block';
+
+      if (profileName) {
+        profileName.textContent = (tidalService.user && tidalService.user.userName)
+          ? `TIDAL: ${tidalService.user.userName}` 
+          : 'TIDAL 官方已連線';
+      }
+      if (profileTier) {
+        profileTier.textContent = 'Hi-Res MAX';
+      }
+      if (profileInfo) {
+        const country = tidalService.countryCode || 'TW';
+        const uid = (tidalService.user && tidalService.user.userId) || (tidalService.auth && tidalService.auth.userId) || '已授權';
+        profileInfo.textContent = `地區: ${country} | 會員規格: 24-bit/192kHz Hi-Res FLAC | 帳號: ${uid}`;
+      }
+    } else {
+      loggedOutView.style.display = 'block';
+      loggedInView.style.display = 'none';
+    }
+  }
 }
 
 // Start application
