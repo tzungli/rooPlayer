@@ -1278,18 +1278,90 @@ function rebuildLibraryCollections() {
   setTimeout(() => autoResolveUnknownAlbumArtists(), 1000);
 }
 
-// ----------------- UI Rendering -----------------
-function renderAll() {
+// ----------------- UI Rendering & On-Demand (Lazy) Architecture -----------------
+const viewDirtyState = {
+  overview: true,
+  albums: true,
+  artists: true,
+  tracks: true,
+  genres: true,
+  storage: true,
+  favAlbums: true,
+  favTracks: true,
+  favArtists: true,
+  history: true,
+  kkbox: true
+};
+
+function markAllViewsDirty() {
+  for (const k of Object.keys(viewDirtyState)) {
+    viewDirtyState[k] = true;
+  }
+}
+
+function renderViewIfNeeded(viewId) {
+  if (!viewId) viewId = 'overview';
+  // If not dirty and not kkbox, preserve already-built DOM and avoid reflow
+  if (!viewDirtyState[viewId] && viewId !== 'kkbox') return;
+
+  switch (viewId) {
+    case 'overview':
+      renderOverview();
+      break;
+    case 'albums':
+      renderAlbums();
+      break;
+    case 'artists':
+      renderArtists();
+      break;
+    case 'tracks':
+      renderTracks();
+      break;
+    case 'genres':
+      renderGenres();
+      break;
+    case 'storage':
+      renderFolders();
+      break;
+    case 'favAlbums':
+      renderFavAlbums();
+      break;
+    case 'favTracks':
+      renderFavTracks();
+      break;
+    case 'favArtists':
+      renderFavArtists();
+      break;
+    case 'history':
+      renderPlaybackHistory();
+      break;
+    case 'kkbox':
+      onOpenKkboxView();
+      break;
+    default:
+      break;
+  }
+  viewDirtyState[viewId] = false;
+}
+
+function renderAll(forceAll = false) {
+  markAllViewsDirty();
   updateBadgesAndStats();
-  renderOverview();
-  renderAlbums();
-  renderArtists();
-  renderTracks();
-  renderGenres();
-  renderFolders();
-  renderFavAlbums();
-  renderFavTracks();
-  renderFavArtists();
+  if (forceAll) {
+    renderOverview();
+    renderAlbums();
+    renderArtists();
+    renderTracks();
+    renderGenres();
+    renderFolders();
+    renderFavAlbums();
+    renderFavTracks();
+    renderFavArtists();
+  } else {
+    // Lazy on-demand: instantly render current visible view only
+    const active = state.currentView || 'overview';
+    renderViewIfNeeded(active);
+  }
 }
 
 function updateBadgesAndStats() {
@@ -1875,9 +1947,11 @@ function renderAlbums() {
     return;
   }
 
+  const frag = document.createDocumentFragment();
   filtered.forEach(alb => {
-    allAlbumsGrid.appendChild(createAlbumCard(alb));
+    frag.appendChild(createAlbumCard(alb));
   });
+  allAlbumsGrid.appendChild(frag);
 }
 
 function createAlbumCard(album) {
@@ -1913,7 +1987,7 @@ function createAlbumCard(album) {
 
   card.innerHTML = `
     <div class="album-art-wrap">
-      <img src="${coverSrc}" class="album-art-img" alt="${escapeXml(album.title)}" loading="lazy" onerror="this.onerror=null;this.src='${defaultCover}';">
+      <img src="${coverSrc}" class="album-art-img" alt="${escapeXml(album.title)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='${defaultCover}';">
       ${qualityTagHtml}
       <button class="card-play-btn" title="播放專輯">▶</button>
       <button class="card-fav-btn ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛專輯' : '加入最愛專輯'}">${isFav ? '♥' : '♡'}</button>
@@ -1976,9 +2050,11 @@ function renderArtists() {
   const curSize = state.artistCardSize || 'medium';
   artistsGrid.classList.remove('artist-size-small', 'artist-size-medium', 'artist-size-large');
   artistsGrid.classList.add(`artist-size-${curSize}`);
+  const frag = document.createDocumentFragment();
   state.artists.forEach(art => {
-    artistsGrid.appendChild(createArtistCard(art));
+    frag.appendChild(createArtistCard(art));
   });
+  artistsGrid.appendChild(frag);
 }
 
 // ----------------- Artist Detail View (Roon Inspired) -----------------
@@ -2472,8 +2548,18 @@ function handleTrackExternalLinkClick(extLink) {
   showToast(`已在瀏覽器開啟 ${platform} 搜尋`);
 }
 
-// Render Tracks Tab
+// Render Tracks Tab (Chunked Progressive Loading for Instant Responsiveness)
+const TRACKS_CHUNK_SIZE = 120;
+let tracksRenderOffset = 0;
+let currentDisplayTracks = [];
+let tracksScrollListenerAttached = false;
+let tracksIdleLoadTimer = null;
+
 function renderTracks() {
+  if (tracksIdleLoadTimer) {
+    clearTimeout(tracksIdleLoadTimer);
+    tracksIdleLoadTimer = null;
+  }
   allTracksTbody.innerHTML = '';
   let displayTracks = [...state.tracks];
   if (state.trackSortBy === 'playCount') {
@@ -2491,7 +2577,25 @@ function renderTracks() {
     displayTracks.sort((a, b) => (b.duration || 0) - (a.duration || 0));
   }
 
-  displayTracks.forEach((track, idx) => {
+  currentDisplayTracks = displayTracks;
+  tracksRenderOffset = 0;
+
+  renderNextTracksChunk();
+  setupTracksScrollListener();
+  scheduleNextTracksIdleChunk();
+}
+
+function renderNextTracksChunk() {
+  if (tracksRenderOffset >= currentDisplayTracks.length) {
+    removeTracksSentinel();
+    return;
+  }
+
+  const chunk = currentDisplayTracks.slice(tracksRenderOffset, tracksRenderOffset + TRACKS_CHUNK_SIZE);
+  const frag = document.createDocumentFragment();
+
+  chunk.forEach((track, localIdx) => {
+    const idx = tracksRenderOffset + localIdx;
     const tr = document.createElement('tr');
     const isHires = (track.bitsPerSample >= 24) || (track.sampleRate > 48000);
     const specLabel = `${track.formatName || 'PCM'} ${track.bitsPerSample ? track.bitsPerSample + 'b/' : ''}${Math.round((track.sampleRate || 44100)/1000)}k`;
@@ -2526,10 +2630,73 @@ function renderTracks() {
         toggleTrackFavorite(track);
         return;
       }
-      playTrackList(displayTracks, idx);
+      playTrackList(currentDisplayTracks, idx);
     });
-    allTracksTbody.appendChild(tr);
+    frag.appendChild(tr);
   });
+
+  const sentinel = document.getElementById('tracksSentinelRow');
+  if (sentinel) {
+    allTracksTbody.insertBefore(frag, sentinel);
+  } else {
+    allTracksTbody.appendChild(frag);
+  }
+
+  tracksRenderOffset += chunk.length;
+
+  if (tracksRenderOffset < currentDisplayTracks.length) {
+    ensureTracksSentinel();
+  } else {
+    removeTracksSentinel();
+  }
+}
+
+function ensureTracksSentinel() {
+  let sentinel = document.getElementById('tracksSentinelRow');
+  if (!sentinel) {
+    sentinel = document.createElement('tr');
+    sentinel.id = 'tracksSentinelRow';
+    allTracksTbody.appendChild(sentinel);
+  }
+  sentinel.innerHTML = `
+    <td colspan="7" style="text-align: center; padding: 12px; color: var(--text-muted); font-size: 12px; border: none; background: transparent;">
+      <span class="spinner" style="display:inline-block; width:12px; height:12px; margin-right:6px; vertical-align:middle;"></span>
+      已載入 ${tracksRenderOffset} / ${currentDisplayTracks.length} 首曲目 (向下滾動持續載入)...
+    </td>
+  `;
+}
+
+function removeTracksSentinel() {
+  const sentinel = document.getElementById('tracksSentinelRow');
+  if (sentinel) sentinel.remove();
+}
+
+function setupTracksScrollListener() {
+  if (tracksScrollListenerAttached) return;
+  const mainContent = document.getElementById('mainContent');
+  if (!mainContent) return;
+  tracksScrollListenerAttached = true;
+
+  mainContent.addEventListener('scroll', () => {
+    if (state.currentView !== 'tracks') return;
+    if (tracksRenderOffset >= currentDisplayTracks.length) return;
+    const scrollRemaining = mainContent.scrollHeight - (mainContent.scrollTop + mainContent.clientHeight);
+    if (scrollRemaining < 800) {
+      renderNextTracksChunk();
+      scheduleNextTracksIdleChunk();
+    }
+  }, { passive: true });
+}
+
+function scheduleNextTracksIdleChunk() {
+  if (tracksRenderOffset >= currentDisplayTracks.length) return;
+  if (tracksIdleLoadTimer) clearTimeout(tracksIdleLoadTimer);
+  tracksIdleLoadTimer = setTimeout(() => {
+    if (state.currentView === 'tracks' && tracksRenderOffset < currentDisplayTracks.length) {
+      renderNextTracksChunk();
+      scheduleNextTracksIdleChunk();
+    }
+  }, 120);
 }
 
 // Realistic Genre Illustration & Metadata Registry
@@ -2628,6 +2795,7 @@ function renderGenres() {
   const genreBadge = document.getElementById('genreCountBadge');
   if (genreBadge) genreBadge.textContent = genreList.length;
 
+  const frag = document.createDocumentFragment();
   genreList.forEach(genreName => {
     const card = document.createElement('div');
     card.className = 'album-card genre-album-card';
@@ -2642,7 +2810,7 @@ function renderGenres() {
 
     card.innerHTML = `
       <div class="album-art-wrap">
-        <img src="${info.imageSrc}" class="album-art-img" alt="${escapeXml(genreName)}" loading="lazy">
+        <img src="${info.imageSrc}" class="album-art-img" alt="${escapeXml(genreName)}" loading="lazy" decoding="async">
         <span class="album-quality-tag tag-genre">${info.badge}</span>
         <button class="card-play-btn" title="播放「${escapeXml(genreName)}」曲風電台">▶</button>
       </div>
@@ -2676,8 +2844,9 @@ function renderGenres() {
       showToast(`已篩選「${info.zhName || genreName}」風格專輯`);
     });
 
-    genresGrid.appendChild(card);
+    frag.appendChild(card);
   });
+  genresGrid.appendChild(frag);
 }
 
 // Render Scanned Folders
@@ -2690,7 +2859,12 @@ function renderFolders() {
   state.folders.forEach(f => {
     const item = document.createElement('div');
     item.className = 'folder-list-item';
-    const folderTracks = state.tracks.filter(t => t.filePath && t.filePath.startsWith(f));
+    const normF = (f || '').toLowerCase().replace(/\\/g, '/');
+    const folderTracks = state.tracks.filter(t => {
+      if (!t.filePath) return false;
+      const normTrackPath = t.filePath.toLowerCase().replace(/\\/g, '/');
+      return normTrackPath.startsWith(normF);
+    });
     item.innerHTML = `
       <div>
         <div style="font-weight: 600; font-size: 13px; color: var(--text-main);">${escapeXml(f)}</div>
@@ -5603,17 +5777,8 @@ function applyView(viewId, updateNav = true) {
   const targetView = document.getElementById(`view${capitalize(viewId)}`);
   if (targetView) targetView.classList.add('active');
 
-  if (viewId === 'favAlbums') {
-    renderFavAlbums();
-  } else if (viewId === 'favTracks') {
-    renderFavTracks();
-  } else if (viewId === 'favArtists') {
-    renderFavArtists();
-  } else if (viewId === 'history') {
-    renderPlaybackHistory();
-  } else if (viewId === 'kkbox') {
-    onOpenKkboxView();
-  }
+  // Trigger on-demand rendering for the selected view
+  renderViewIfNeeded(viewId);
 
   if (updateNav) {
     document.querySelectorAll('.nav-item').forEach(btn => {
@@ -6535,7 +6700,7 @@ function setupScannerEvents() {
     }
   });
 
-  // Export Library Database (includes folders, tracks, favorites, and playStats)
+  // Export Library Database (includes folders, tracks, favorites, playStats, and playback history)
   if (btnExportLibrary) {
     btnExportLibrary.addEventListener('click', async () => {
       if (!window.electronAPI || !window.electronAPI.exportLibrary) {
@@ -6543,13 +6708,17 @@ function setupScannerEvents() {
         return;
       }
 
-      // Collect current favorites and play counts
+      // Collect current favorites, play counts, and history
       const currentFavorites = state.favorites || { albums: [], tracks: [], artists: [] };
       const currentPlayStats = getPlayStats();
+      const currentPlaybackHistory = getPlaybackHistory();
+      const currentRecentAlbums = state.recentlyPlayedAlbums || [];
 
       const res = await window.electronAPI.exportLibrary(null, {
         favorites: currentFavorites,
-        playStats: currentPlayStats
+        playStats: currentPlayStats,
+        playbackHistory: currentPlaybackHistory,
+        recentlyPlayedAlbums: currentRecentAlbums
       });
       if (res && res.canceled) return;
 
@@ -6557,7 +6726,8 @@ function setupScannerEvents() {
         const favAlbs = (res.favoriteCounts && res.favoriteCounts.albums) || 0;
         const favTrks = (res.favoriteCounts && res.favoriteCounts.tracks) || 0;
         const favArts = (res.favoriteCounts && res.favoriteCounts.artists) || 0;
-        alert(`🎉 資料庫匯出成功！\n\n已儲存至：${res.filePath}\n• 收錄資料夾：${res.folderCount} 個\n• 音訊曲目：${res.trackCount} 首\n• 我的最愛：${favAlbs} 張專輯 / ${favTrks} 首歌曲 / ${favArts} 位演出者\n• 包含所有曲目與專輯播放統計次數`);
+        const histCount = res.historyCount || 0;
+        alert(`🎉 資料庫匯出成功！\n\n已儲存至：${res.filePath}\n• 收錄資料夾：${res.folderCount} 個\n• 音訊曲目：${res.trackCount} 首\n• 我的最愛：${favAlbs} 張專輯 / ${favTrks} 首歌曲 / ${favArts} 位演出者\n• 包含 ${histCount} 筆播放歷史紀錄與完整統計次數`);
       } else {
         alert(`❌ 資料庫匯出失敗：${(res && res.error) || '未知錯誤'}`);
       }
@@ -6644,6 +6814,37 @@ function setupScannerEvents() {
           savePlayStats(currentStats);
         }
 
+        // 3.5. Merge Playback History & Recent Albums
+        let historyMergedCount = 0;
+        if (res.importedPlaybackHistory && Array.isArray(res.importedPlaybackHistory)) {
+          const curHistory = getPlaybackHistory();
+          res.importedPlaybackHistory.forEach(hItem => {
+            if (hItem && !curHistory.some(existing => (existing.id && existing.id === hItem.id) || (existing.filePath && existing.filePath === hItem.filePath && existing.playedAt === hItem.playedAt))) {
+              curHistory.push(hItem);
+              historyMergedCount++;
+            }
+          });
+          curHistory.sort((a, b) => new Date(b.playedAt || 0) - new Date(a.playedAt || 0));
+          const trimmedHist = curHistory.slice(0, 200);
+          try {
+            localStorage.setItem('rooplayer_playback_history', JSON.stringify(trimmedHist));
+          } catch (_) {}
+          updateHistoryCountBadges();
+        }
+
+        if (res.importedRecentlyPlayedAlbums && Array.isArray(res.importedRecentlyPlayedAlbums)) {
+          const curRecentAlbums = Array.isArray(state.recentlyPlayedAlbums) ? state.recentlyPlayedAlbums : [];
+          res.importedRecentlyPlayedAlbums.forEach(albItem => {
+            if (albItem && !curRecentAlbums.some(existing => (existing.title === albItem.title && existing.artist === albItem.artist))) {
+              curRecentAlbums.push(albItem);
+            }
+          });
+          state.recentlyPlayedAlbums = curRecentAlbums.slice(0, 20);
+          try {
+            localStorage.setItem('roon_recent_albums', JSON.stringify(state.recentlyPlayedAlbums));
+          } catch (_) {}
+        }
+
         rebuildLibraryCollections();
         renderAll();
 
@@ -6651,7 +6852,8 @@ function setupScannerEvents() {
         const enrichedReport = {
           ...res.report,
           favAddedCount,
-          playStatsMergedCount
+          playStatsMergedCount,
+          historyMergedCount
         };
         showImportReportModal(enrichedReport);
       } else {
@@ -6699,6 +6901,7 @@ function showImportReportModal(report) {
   const trackSkipped = report.tracks.skippedCount;
   const favAdded = report.favAddedCount || 0;
   const playsMerged = report.playStatsMergedCount || 0;
+  const historyMerged = report.historyMergedCount || 0;
 
   if (importReportStats) {
     importReportStats.innerHTML = `
@@ -6718,9 +6921,9 @@ function showImportReportModal(report) {
         <div style="font-size: 11px; color: var(--text-muted);">重複收藏自動略過</div>
       </div>
       <div class="import-report-stat-box" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; text-align: center;">
-        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">播放次數統計</div>
+        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">播放次數與歷史</div>
         <div style="font-size: 18px; font-weight: 700; color: #8b5cf6; margin: 3px 0;">${playsMerged} <span style="font-size: 12px; font-weight: 400; color: var(--text-secondary);">首同步</span></div>
-        <div style="font-size: 11px; color: var(--text-muted);">保留最高播放數</div>
+        <div style="font-size: 11px; color: #38bdf8;">歷史紀錄：+${historyMerged} 筆</div>
       </div>
     `;
   }

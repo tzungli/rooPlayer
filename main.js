@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, session } = r
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { pathToFileURL } = require('url');
+const { pathToFileURL, fileURLToPath } = require('url');
 const http = require('http');
 const { spawn } = require('child_process');
 
@@ -853,11 +853,19 @@ function loadLibraryData() {
     }
 
     const mergedTracks = Array.from(trackPathMap.values());
+    const dirCoverCache = new Map();
 
     // Auto-enrich any track missing cover or smart title/artist
     for (const t of mergedTracks) {
       if (!t.cover && t.filePath) {
-        const foundCover = findFolderCover(t.filePath);
+        const dir = path.dirname(t.filePath);
+        let foundCover;
+        if (dirCoverCache.has(dir)) {
+          foundCover = dirCoverCache.get(dir);
+        } else {
+          foundCover = findFolderCover(t.filePath);
+          dirCoverCache.set(dir, foundCover);
+        }
         if (foundCover) {
           t.cover = foundCover;
           modified = true;
@@ -976,7 +984,9 @@ ipcMain.handle('library:export', async (event, defaultFilename, extraData) => {
       folders: existing.folders || [],
       tracks: existing.tracks || [],
       favorites: (extraData && extraData.favorites) ? extraData.favorites : { albums: [], tracks: [], artists: [] },
-      playStats: (extraData && extraData.playStats) ? extraData.playStats : { albums: {}, tracks: {} }
+      playStats: (extraData && extraData.playStats) ? extraData.playStats : { albums: {}, tracks: {} },
+      playbackHistory: (extraData && extraData.playbackHistory) ? extraData.playbackHistory : [],
+      recentlyPlayedAlbums: (extraData && extraData.recentlyPlayedAlbums) ? extraData.recentlyPlayedAlbums : []
     };
 
     fs.writeFileSync(result.filePath, JSON.stringify(exportPayload, null, 2), 'utf-8');
@@ -990,7 +1000,9 @@ ipcMain.handle('library:export', async (event, defaultFilename, extraData) => {
         albums: (exportPayload.favorites.albums || []).length,
         tracks: (exportPayload.favorites.tracks || []).length,
         artists: (exportPayload.favorites.artists || []).length
-      }
+      },
+      historyCount: (exportPayload.playbackHistory || []).length,
+      recentAlbumCount: (exportPayload.recentlyPlayedAlbums || []).length
     };
   } catch (err) {
     console.error('Failed to export library:', err);
@@ -1033,13 +1045,14 @@ ipcMain.handle('library:import', async () => {
     // Folder deduplication map (normalized path)
     const folderNormMap = new Map();
     currentFolders.forEach(f => {
-      if (typeof f === 'string' && f.trim()) {
-        const norm = path.normalize(f.trim()).toLowerCase();
-        folderNormMap.set(norm, f);
+      const folderPathStr = typeof f === 'string' ? f : (f && (f.path || f.folderPath) ? (f.path || f.folderPath) : '');
+      if (typeof folderPathStr === 'string' && folderPathStr.trim()) {
+        const norm = path.normalize(folderPathStr.trim()).toLowerCase();
+        folderNormMap.set(norm, folderPathStr.trim());
       }
     });
 
-    // Track deduplication maps (by filePath and by artist + title)
+    // Track deduplication maps (by filePath and by artist + album + trackNumber + title)
     const trackFilePathMap = new Map();
     const trackMetaSet = new Set();
 
@@ -1050,9 +1063,11 @@ ipcMain.handle('library:import', async () => {
           trackFilePathMap.set(normP, t);
         }
         const art = (t.artist || '').trim().toLowerCase();
+        const alb = (t.album || '').trim().toLowerCase();
         const tit = (t.title || '').trim().toLowerCase();
+        const trkNum = t.trackNumber != null ? String(t.trackNumber).trim() : '';
         if (art && tit) {
-          trackMetaSet.add(`${art}:::${tit}`);
+          trackMetaSet.add(`${art}:::${alb}:::${trkNum}:::${tit}`);
         }
       }
     });
@@ -1076,13 +1091,15 @@ ipcMain.handle('library:import', async () => {
     const mergedFolders = [...currentFolders];
     const mergedTracks = [...currentTracks];
 
-    // 1. Process imported folders
+    // 1. Process imported folders (compatible with strings and objects)
     const importFolders = Array.isArray(importedData.folders) ? importedData.folders : [];
     report.folders.totalInImport = importFolders.length;
 
     for (const rawF of importFolders) {
-      if (!rawF || typeof rawF !== 'string' || !rawF.trim()) continue;
-      const trimmedF = rawF.trim();
+      if (!rawF) continue;
+      const folderPathStr = typeof rawF === 'string' ? rawF : (rawF.path || rawF.folderPath || '');
+      if (!folderPathStr || typeof folderPathStr !== 'string' || !folderPathStr.trim()) continue;
+      const trimmedF = folderPathStr.trim();
       const normF = path.normalize(trimmedF).toLowerCase();
 
       if (folderNormMap.has(normF)) {
@@ -1097,16 +1114,19 @@ ipcMain.handle('library:import', async () => {
       }
     }
 
-    // 2. Process imported tracks
+    // 2. Process imported tracks with album-aware deduplication
     const importTracks = Array.isArray(importedData.tracks) ? importedData.tracks : [];
     report.tracks.totalInImport = importTracks.length;
+    const dirCoverCache = new Map();
 
     for (const t of importTracks) {
       if (!t) continue;
       const tPath = t.filePath ? path.normalize(t.filePath).toLowerCase() : '';
       const tArt = (t.artist || '').trim().toLowerCase();
+      const tAlb = (t.album || '').trim().toLowerCase();
       const tTit = (t.title || '').trim().toLowerCase();
-      const metaKey = (tArt && tTit) ? `${tArt}:::${tTit}` : '';
+      const tTrkNum = t.trackNumber != null ? String(t.trackNumber).trim() : '';
+      const metaKey = (tArt && tTit) ? `${tArt}:::${tAlb}:::${tTrkNum}:::${tTit}` : '';
 
       let isDuplicate = false;
       let skipReason = '';
@@ -1116,7 +1136,7 @@ ipcMain.handle('library:import', async () => {
         skipReason = `檔案路徑已存在 (${t.filePath})`;
       } else if (metaKey && trackMetaSet.has(metaKey)) {
         isDuplicate = true;
-        skipReason = `演出者與曲名重複 (${t.artist || '未知'} - ${t.title || '未知'})`;
+        skipReason = `專輯與曲目重複 (${t.artist || '未知'} - [${t.album || '未知'}] ${t.title || '未知'})`;
       }
 
       if (isDuplicate) {
@@ -1131,7 +1151,31 @@ ipcMain.handle('library:import', async () => {
       } else {
         if (tPath) trackFilePathMap.set(tPath, t);
         if (metaKey) trackMetaSet.add(metaKey);
-        if (t.cover) t.cover = sanitizeTrackCover(t.cover);
+
+        // Sanitize / recover cover
+        if (t.cover) {
+          t.cover = sanitizeTrackCover(t.cover);
+          if (typeof t.cover === 'string' && t.cover.startsWith('file://')) {
+            try {
+              const localCoverPath = fileURLToPath(t.cover);
+              if (!fs.existsSync(localCoverPath) && t.filePath) {
+                t.cover = null;
+              }
+            } catch (_) {}
+          }
+        }
+        if (!t.cover && t.filePath) {
+          const dir = path.dirname(t.filePath);
+          let foundCover;
+          if (dirCoverCache.has(dir)) {
+            foundCover = dirCoverCache.get(dir);
+          } else {
+            foundCover = findFolderCover(t.filePath);
+            dirCoverCache.set(dir, foundCover);
+          }
+          if (foundCover) t.cover = foundCover;
+        }
+
         mergedTracks.push(t);
         report.tracks.addedCount++;
       }
@@ -1150,6 +1194,8 @@ ipcMain.handle('library:import', async () => {
       data: finalLib,
       importedFavorites: importedData.favorites || null,
       importedPlayStats: importedData.playStats || null,
+      importedPlaybackHistory: Array.isArray(importedData.playbackHistory) ? importedData.playbackHistory : null,
+      importedRecentlyPlayedAlbums: Array.isArray(importedData.recentlyPlayedAlbums) ? importedData.recentlyPlayedAlbums : null,
       report
     };
   } catch (err) {
