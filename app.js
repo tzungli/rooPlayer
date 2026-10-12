@@ -41,6 +41,7 @@ const state = {
   albumCoverSize: localStorage.getItem('rooplayer_album_cover_size') || 'medium',
   detailCoverSize: localStorage.getItem('rooplayer_detail_cover_size') || 'medium',
   artistCardSize: localStorage.getItem('rooplayer_artist_card_size') || 'medium',
+  tidalCoverSize: localStorage.getItem('rooplayer_tidal_cover_size') || 'medium',
   dsp: (() => {
     try {
       const saved = JSON.parse(localStorage.getItem('rooplayer_dsp_settings') || '{}');
@@ -320,6 +321,9 @@ const genresGrid = document.getElementById('genresGrid');
 
 // Player DOM
 const playerCoverImg = document.getElementById('playerCoverImg');
+if (playerCoverImg && (!playerCoverImg.getAttribute('src') || playerCoverImg.getAttribute('src') === '')) {
+  playerCoverImg.src = 'icon.png';
+}
 const playerTitle = document.getElementById('playerTitle');
 const playerArtist = document.getElementById('playerArtist');
 const signalPathBadge = document.getElementById('signalPathBadge');
@@ -7327,6 +7331,30 @@ function applyArtistSize(size) {
   });
 }
 
+function applyTidalCoverSize(size) {
+  state.tidalCoverSize = size;
+  try {
+    localStorage.setItem('rooplayer_tidal_cover_size', size);
+  } catch (e) {}
+
+  document.querySelectorAll('#tidalCoverSizePills .size-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-tidal-cover-size') === size);
+  });
+
+  const grids = [
+    document.getElementById('tidalFeaturedGrid'),
+    document.getElementById('tidalNewReleasesGrid'),
+    document.getElementById('tidalOfficialPlaylistsGrid'),
+    document.getElementById('tidalFavAlbumsGrid')
+  ];
+
+  grids.forEach(grid => {
+    if (!grid) return;
+    grid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
+    grid.classList.add(`cover-size-${size}`);
+  });
+}
+
 function setupCoverSizeControls() {
   // 1. Album Library Grid Size Controls
   const gridPills = document.querySelectorAll('#albumCoverSizePills .size-pill');
@@ -7358,10 +7386,21 @@ function setupCoverSizeControls() {
     });
   });
 
+  // 4. TIDAL Explorer Cover Size Controls
+  const tidalPills = document.querySelectorAll('#tidalCoverSizePills .size-pill');
+  tidalPills.forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const size = pill.getAttribute('data-tidal-cover-size');
+      applyTidalCoverSize(size);
+    });
+  });
+
   // Apply initial saved sizes
   applyAlbumCoverSize(state.albumCoverSize || 'medium');
   applyDetailCoverSize(state.detailCoverSize || 'medium');
   applyArtistSize(state.artistCardSize || 'medium');
+  applyTidalCoverSize(state.tidalCoverSize || 'medium');
 }
 
 let lastTidalSearchTracks = [];
@@ -8171,6 +8210,7 @@ function setupPlayerControls() {
     updatePlayPauseBtnUI();
     playerTitle.textContent = '未播放曲目';
     playerArtist.textContent = '點選任意曲目開始聆聽';
+    if (playerCoverImg) playerCoverImg.src = 'icon.png';
     renderQueue();
   });
 
@@ -9863,6 +9903,8 @@ async function loadTidalFeatured(curatedTag = 'audiophile', force = false) {
   currentTidalCuratedChip = curatedTag;
   const grid = document.getElementById('tidalFeaturedGrid');
   if (!grid) return;
+  grid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
+  grid.classList.add(`cover-size-${state.tidalCoverSize || 'medium'}`);
   if (!force && grid.children.length > 1 && !grid.querySelector('.tidal-loading-indicator')) return;
 
   grid.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在載入 TIDAL 發燒推薦專輯...</div>';
@@ -9886,6 +9928,8 @@ async function loadTidalFeatured(curatedTag = 'audiophile', force = false) {
 async function loadTidalNewReleases(force = false) {
   const grid = document.getElementById('tidalNewReleasesGrid');
   if (!grid) return;
+  grid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
+  grid.classList.add(`cover-size-${state.tidalCoverSize || 'medium'}`);
   if (!force && grid.children.length > 1 && !grid.querySelector('.tidal-loading-indicator')) return;
 
   grid.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在載入 TIDAL 最新發行專輯...</div>';
@@ -9910,6 +9954,8 @@ async function loadTidalOfficialPlaylists(category = 'audiophile', force = false
   currentTidalOfficialPlaylistChip = category;
   const grid = document.getElementById('tidalOfficialPlaylistsGrid');
   if (!grid) return;
+  grid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
+  grid.classList.add(`cover-size-${state.tidalCoverSize || 'medium'}`);
   if (!force && grid.children.length > 1 && !grid.querySelector('.tidal-loading-indicator')) return;
 
   grid.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在載入 TIDAL 官方精選歌單...</div>';
@@ -9950,6 +9996,8 @@ async function loadTidalCollection(force = false) {
       if (albumsBadge) albumsBadge.textContent = favAlbums.length;
 
       if (albumsGrid) {
+        albumsGrid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
+        albumsGrid.classList.add(`cover-size-${state.tidalCoverSize || 'medium'}`);
         albumsGrid.innerHTML = '';
         if (favAlbums.length === 0) {
           albumsGrid.innerHTML = '<div class="empty-hint" style="grid-column: 1/-1;">您的 TIDAL 帳號中尚未加入最愛專輯</div>';

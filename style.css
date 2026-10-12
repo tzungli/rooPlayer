@@ -6483,12 +6483,30 @@ body.table-col-resizing * {
 .tidal-subnav-bar {
   flex-shrink: 0;
   display: flex;
+  justify-content: space-between;
   align-items: center;
   padding: 6px 20px 0 20px;
   background: rgba(15, 17, 23, 0.7);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(12px);
   z-index: 9;
+}
+
+.tidal-cover-size-control {
+  margin-bottom: 4px;
+}
+
+#tidalCoverSizePills .size-pill.active {
+  background-color: #00e5ff;
+  border-color: #00e5ff;
+  color: #0b0d13;
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
+}
+
+[data-theme="light"] #tidalCoverSizePills .size-pill.active {
+  background-color: #0097a7;
+  border-color: #0097a7;
+  color: #ffffff;
 }
 
 .tidal-subnav-tabs {

@@ -109,11 +109,6 @@
 
       <div class="nav-group">
         <div class="nav-title">線上串流 STREAMING</div>
-        <button class="nav-item" data-view="kkbox">
-          <span class="nav-icon" style="color: #25d5ff;">🎧</span>
-          <span class="nav-label">KKBOX</span>
-          <span class="badge" id="kkboxStatusBadge" style="background: rgba(37, 213, 255, 0.15); color: #25d5ff; border: 1px solid rgba(37, 213, 255, 0.35);">在線</span>
-        </button>
         <button class="nav-item" data-view="tidal" id="navItemTidal">
           <span class="nav-icon" style="color: #00e5ff; display: inline-flex; align-items: center; justify-content: center;">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
@@ -122,6 +117,11 @@
           </span>
           <span class="nav-label">TIDAL</span>
           <span class="badge" id="tidalStatusBadge" style="background: rgba(0, 229, 255, 0.12); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.3);">未登入</span>
+        </button>
+        <button class="nav-item" data-view="kkbox">
+          <span class="nav-icon" style="color: #25d5ff;">🎧</span>
+          <span class="nav-label">KKBOX</span>
+          <span class="badge" id="kkboxStatusBadge" style="background: rgba(37, 213, 255, 0.15); color: #25d5ff; border: 1px solid rgba(37, 213, 255, 0.35);">在線</span>
         </button>
       </div>
 
@@ -1050,6 +1050,14 @@
                 ❤️ 我的收藏
               </button>
             </div>
+            <div class="cover-size-control tidal-cover-size-control" id="tidalCoverSizeControl">
+              <span class="size-control-label">封面尺寸：</span>
+              <div class="pill-group size-pill-group" id="tidalCoverSizePills">
+                <button class="pill size-pill" data-tidal-cover-size="small" title="小尺寸封面">小</button>
+                <button class="pill size-pill active" data-tidal-cover-size="medium" title="中尺寸封面 (預設)">中</button>
+                <button class="pill size-pill" data-tidal-cover-size="large" title="大尺寸封面">大</button>
+              </div>
+            </div>
           </div>
 
           <!-- TIDAL Status Banner -->
@@ -1315,11 +1323,12 @@
                   <h4>首頁總覽 (Overview)</h4>
                 </div>
                 <div class="manual-item-body">
-                  <p>音樂殿堂的儀表板。集中呈現目前音樂庫的<strong>專輯總數、曲目數量與 Hi-Res 高解析無損音樂統計</strong>。</p>
+                  <p>音樂殿堂的儀表板。集中呈現目前音樂庫的<strong>專輯總數、曲目數量與 Hi-Res 高解析無損音樂統計</strong>，深度整合本機與線上串流：</p>
                   <ul>
-                    <li><strong>快速掃描</strong>：點擊「新增本機音樂目錄」即可快速匯入音樂檔案夾。</li>
-                    <li><strong>隨機播放精選</strong>：一鍵隨機自音樂庫中抽取高品質曲目展開連續播放。</li>
-                    <li><strong>最近播放與特色推薦</strong>：直覺展示近期聆聽紀錄與發燒代表作品。</li>
+                    <li><strong>🌟 每日推薦 (Daily Picks)</strong>：依聆聽紀錄自動精選 5 張發燒代表作，每日自動更新。</li>
+                    <li><strong>📖 藝人生活誌 (Artist Spotlight)</strong>：隨機探索音樂大師生平歷程、代表作與關聯發燒名盤。</li>
+                    <li><strong>精選與最近新增</strong>：自動同步本機最新匯入與已加入曲庫之 TIDAL 線上專輯。</li>
+                    <li><strong>快速掃描與隨機播放</strong>：一鍵快速匯入音樂資料夾或由曲庫隨機抽樣連續播放。</li>
                   </ul>
                 </div>
               </div>
@@ -1331,11 +1340,12 @@
                   <h4>專輯、演出者與曲目清單 (Albums / Artists / Tracks)</h4>
                 </div>
                 <div class="manual-item-body">
-                  <p>提供多維度的音樂分類瀏覽視圖：</p>
+                  <p>提供多維度的音樂分類瀏覽與高度自訂視覺配置：</p>
                   <ul>
-                    <li><strong>專輯檢視</strong>：依歌手、發行年份、曲風或播放次數排序。點擊專輯封面即可展開 Roon 風格之<strong>全曲目清單、高解析音訊標籤與演出者詳細介紹</strong>。</li>
-                    <li><strong>演出者檢視</strong>：聚合單一演出者的所有錄音室作品、合輯與年代脈絡。</li>
-                    <li><strong>曲目清單</strong>：全景列表檢視所有單曲，清楚標示 FLAC / WAV / AIFF / DSD 等格式、取樣率、聲道與時長。</li>
+                    <li><strong>依新增順序排列 (預設)</strong>：專輯庫預設以最新新增時間排序，亦支援依專輯名稱 A-Z、演出者 A-Z、發行年份、曲目數與播放次數排列。</li>
+                    <li><strong>封面尺寸切換 (小 / 中 / 大)</strong>：自由切換密集緊湊或大器發燒卡片檢視，系統自動記憶個人偏好。</li>
+                    <li><strong>極簡沉浸式元資料</strong>：專輯詳情頁於封面右側俐落標示演出者、發行廠牌、發行年份、曲目總數與總時長，免除雜亂底色與框線干擾。</li>
+                    <li><strong>AI/關聯推薦擴展</strong>：同曲風推薦專輯與關聯演出者自動擴展涵蓋 TIDAL 線上發燒名盤（登入時）。</li>
                   </ul>
                 </div>
               </div>
@@ -1351,28 +1361,48 @@
                   <ul>
                     <li>在任何專輯卡片、曲目列或演出者頁面點擊<strong>愛心圖示 (♡)</strong> 即可加入我的最愛。</li>
                     <li>在最愛頁面中支援「播放全部最愛」與「隨機播放最愛」快捷控制。</li>
-                    <li>最愛清單支援隨時備份匯出與無損合併匯入。</li>
+                    <li>最愛清單支援隨時備份匯出與智慧無損去重合併匯入。</li>
                   </ul>
                 </div>
               </div>
 
-              <!-- Module 4: KKBOX 線上串流 -->
+              <!-- Module 4: TIDAL Hi-Res 串流探索中心 -->
               <div class="manual-item">
                 <div class="manual-item-header">
-                  <span class="item-badge">線上串流</span>
+                  <span class="item-badge" style="background: rgba(0, 229, 255, 0.15); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.3);">Hi-Res 串流</span>
+                  <h4>TIDAL 串流探索中心 (TIDAL Hi-Res Explorer)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>原生整合 TIDAL 百萬母帶級 Hi-Res MAX 無損串流曲庫：</p>
+                  <ul>
+                    <li><strong>💎 發燒推薦 (Hi-Res Masters)</strong>：分類晶片一鍵篩選發燒名盤、發燒女聲、古典交響、經典爵士與西洋潮流。</li>
+                    <li><strong>🆕 最新發行</strong>：全球同步即時首發高動態無損母帶專輯。</li>
+                    <li><strong>📑 官方主題歌單</strong>：精選發燒音響評測、高動態測試與情境放鬆主題合輯。</li>
+                    <li><strong>❤️ 我的雲端收藏</strong>：無縫連線個人 TIDAL 帳號，同步最愛專輯、歌曲與雲端自建歌單。</li>
+                    <li><strong>🖼️ 專屬封面尺寸 (小 / 中 / 大)</strong>：次級導航列內建封面縮放切換按鈕，隨心調整檢視網格。</li>
+                    <li><strong>一鍵整張點播與加入曲庫</strong>：支援整張專輯一鍵播放、匯入佇列，並可無縫將 TIDAL 專輯加入本機曲庫共同管理。</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Module 5: KKBOX 線上串流 -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge" style="background: rgba(37, 213, 255, 0.15); color: #25d5ff; border: 1px solid rgba(37, 213, 255, 0.3);">線上串流</span>
                   <h4>KKBOX 串流中心 (KKBOX Streaming)</h4>
                 </div>
                 <div class="manual-item-body">
-                  <p>透過官方 KKBOX Open API 接軌百萬串流曲庫：</p>
+                  <p>比照發燒架構全新重構之 KKBOX 串流介面，接軌華語及全球流行曲庫：</p>
                   <ul>
-                    <li><strong>官方排行榜</strong>：即時探索綜合新歌榜、華語、西洋、日韓、嘻哈、搖滾等各語系榜單。</li>
-                    <li><strong>精選與新歌速爆</strong>：瀏覽官方策劃合輯與即時潮流發行。</li>
-                    <li><strong>搜尋與試聽</strong>：支援關鍵字即時檢索歌曲與歌單，整合原生播放器隨選即播。</li>
+                    <li><strong>🏆 官方即時排行榜</strong>：獨立次級分頁導覽，即時探索華語、西洋、日韓、嘻哈、搖滾、爵士與古典等多語系榜單。</li>
+                    <li><strong>✨ 精選推薦與 🆕 新歌速爆</strong>：掌握官方主題選品、情境音樂合輯與即時潮流新發行。</li>
+                    <li><strong>整榜播放與匯入佇列</strong>：支援動態封面資訊橫幅、整榜一鍵播放與匯入 rooPlayer 播放隊列。</li>
+                    <li><strong>線上即時檢索</strong>：支援在 KKBOX 百萬曲庫中即時搜尋歌曲、演出者與專輯。</li>
                   </ul>
                 </div>
               </div>
 
-              <!-- Module 5: 本機資料夾管理與資料庫匯入匯出 -->
+              <!-- Module 6: 本機資料夾管理與資料庫匯入匯出 -->
               <div class="manual-item">
                 <div class="manual-item-header">
                   <span class="item-badge">儲存與維護</span>
@@ -1388,7 +1418,7 @@
                 </div>
               </div>
 
-              <!-- Module 6: 訊號路徑與 DSP 升頻引擎 -->
+              <!-- Module 7: 訊號路徑與 DSP 升頻引擎 -->
               <div class="manual-item">
                 <div class="manual-item-header">
                   <span class="item-badge">核心發燒功能</span>
@@ -1407,7 +1437,7 @@
                 </div>
               </div>
 
-              <!-- Module 7: DLNA / UPnP 區域網路串流 -->
+              <!-- Module 8: DLNA / UPnP 區域網路串流 -->
               <div class="manual-item">
                 <div class="manual-item-header">
                   <span class="item-badge">串流端點</span>
@@ -1419,6 +1449,38 @@
                     <li>點擊播放控制器右側的<strong>「輸出裝置按鈕 (🔊/📡)」</strong>，系統將透過 SSDP 自動搜尋區網內的 UPnP/DLNA 渲染器（如 Eversolo、WiIM、Linn 等）。</li>
                     <li>支援<strong>直接輸入 IP 探測</strong>，若路由器封鎖 UDP 廣播亦可快速手動連線。</li>
                     <li>支援原生 DSF 直通與 PCM 升頻 DSD 比特流即時推送，DAC 自動鎖定 DSD 時脈。</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Module 9: 全域即時搜尋 -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge">智慧檢索</span>
+                  <h4>全域即時搜尋 (Global Audiophile Search)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>頂部搜尋列支援毫秒級跨庫全域檢索：</p>
+                  <ul>
+                    <li><strong>跨庫聯合檢索</strong>：同時搜尋本機資料庫與線上串流（TIDAL Hi-Res / KKBOX）百萬曲庫。</li>
+                    <li><strong>分類分頁篩選</strong>：支援切換「全部結果」、「本機端專輯」與「線上串流」標籤快速聚焦。</li>
+                    <li><strong>智能高亮提示</strong>：關鍵字即時比對演出者、專輯標題、作曲家與發燒格式。</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Module 10: 底欄播放控制與動態全螢幕 -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge">播放體驗</span>
+                  <h4>發燒底欄控制器與動態全螢幕 (Player Controls & Modal)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>專業級 Roon 風格底部播放控制列：</p>
+                  <ul>
+                    <li><strong>原生圖示安全預設</strong>：底欄專輯封面未播放時預設呈現 rooPlayer 標誌，徹底避免破圖與檔案遺失現象。</li>
+                    <li><strong>全螢幕詳情與動態歌詞</strong>：點擊底欄左側專輯封面即可喚起全螢幕視窗，支援大尺寸封面、即時動態滾動歌詞與右側播放清單互動。</li>
+                    <li><strong>精確控制與循環模式</strong>：支援隨機播放、單曲循環、全曲循環與關閉，並即時回饋高解析音訊規格徽章（如 LOSSLESS 24/96 FLAC）。</li>
                   </ul>
                 </div>
               </div>
@@ -1968,7 +2030,7 @@
     <!-- Left: Track info -->
     <div class="player-left">
       <div class="player-cover-box" id="playerCoverBox" title="點擊展開專輯封面、播放列表與動態歌詞">
-        <img id="playerCoverImg" src="" alt="Cover" class="player-cover">
+        <img id="playerCoverImg" src="icon.png" alt="rooPlayer" class="player-cover" onerror="this.onerror=null;this.src='icon.png';">
         <div class="player-cover-expand-hint" title="展開播放詳情與歌詞">⛶</div>
       </div>
       <div class="player-track-info">
