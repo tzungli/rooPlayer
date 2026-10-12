@@ -345,7 +345,9 @@ const btnCloseAlbumDetail = document.getElementById('btnCloseAlbumDetail');
 const detailCoverImg = document.getElementById('detailCoverImg');
 const detailTitle = document.getElementById('detailTitle');
 const detailArtist = document.getElementById('detailArtist');
+const detailCompany = document.getElementById('detailCompany');
 const detailYear = document.getElementById('detailYear');
+const detailTracksDuration = document.getElementById('detailTracksDuration');
 const detailGenre = document.getElementById('detailGenre');
 const detailFormatBadge = document.getElementById('detailFormatBadge');
 const detailTrackCount = document.getElementById('detailTrackCount');
@@ -3591,9 +3593,9 @@ function getAudioFormatFromPath(filePath, fallback = 'PCM') {
 }
 
 function renderAlbumMetadata(album) {
-  const metaGrid = document.getElementById('albumMetaGrid');
-  const sourceBadge = document.getElementById('albumMetaSourceBadge');
-  if (!metaGrid) return;
+  const companyEl = document.getElementById('detailCompany');
+  const yearEl = document.getElementById('detailYear');
+  const durationEl = document.getElementById('detailTracksDuration');
 
   // Extract initial values from album and track objects
   let year = '未載明';
@@ -3628,52 +3630,24 @@ function renderAlbumMetadata(album) {
     ? `${album.tracks.length} 首歌曲 • ${formatTotalAlbumDuration(album.tracks)}`
     : `${trackCount} 首歌曲`;
 
-  function buildGridHtml(curLabel, curYear, curTracksDur, hasOnlineData) {
-    if (sourceBadge) {
-      sourceBadge.textContent = hasOnlineData ? '線上資料庫已同步' : '音訊元資料';
-      sourceBadge.style.background = hasOnlineData ? 'rgba(16, 185, 129, 0.15)' : 'rgba(59, 130, 246, 0.15)';
-      sourceBadge.style.color = hasOnlineData ? '#34d399' : '#60a5fa';
-      sourceBadge.style.borderColor = hasOnlineData ? 'rgba(16, 185, 129, 0.3)' : 'rgba(59, 130, 246, 0.3)';
-    }
-
-    return `
-      <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">🏢</span> 發行公司</div>
-        <div class="meta-value" id="metaLabelVal">${escapeXml(curLabel || '獨立發行 / 未標記廠牌')}</div>
-      </div>
-      <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">📅</span> 發行年份</div>
-        <div class="meta-value" id="metaDateVal">${escapeXml(curYear)}</div>
-      </div>
-      <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">⏱️</span> 總曲目與總時長</div>
-        <div class="meta-value">${escapeXml(curTracksDur)}</div>
-      </div>
-    `;
-  }
-
-  // Render initially with local metadata
-  metaGrid.innerHTML = buildGridHtml(label, year, tracksDurationText, false);
+  if (companyEl) companyEl.textContent = label || '獨立發行 / 未標記廠牌';
+  if (yearEl) yearEl.textContent = year;
+  if (durationEl) durationEl.textContent = tracksDurationText;
 
   // Background fetch online enrichment if label or year is missing
   if (!label || year === '未載明') {
     fetchOnlineAlbumCredits(album).then(onlineCredits => {
       if (state.activeAlbumDetail && state.activeAlbumDetail.title === album.title && state.activeAlbumDetail.artist === album.artist) {
-        let hasUpdated = false;
         if (!label && onlineCredits.label) {
           label = onlineCredits.label;
-          hasUpdated = true;
+          if (companyEl) companyEl.textContent = label;
         }
         if ((!year || year === '未載明') && onlineCredits.releaseDate) {
           const parsedYear = String(onlineCredits.releaseDate).slice(0, 4);
           if (parsedYear && !isNaN(parsedYear)) {
             year = `${parsedYear} 年`;
-            hasUpdated = true;
+            if (yearEl) yearEl.textContent = year;
           }
-        }
-
-        if (hasUpdated) {
-          metaGrid.innerHTML = buildGridHtml(label, year, tracksDurationText, true);
         }
       }
     }).catch(() => {});
@@ -4334,7 +4308,7 @@ function openAlbumDetail(album) {
     };
   }
   if (detailTitle) detailTitle.textContent = album.title || '未知專輯';
-  if (detailYear) detailYear.textContent = '';
+  try { renderAlbumMetadata(album); } catch (e) {}
   if (detailGenre) detailGenre.textContent = album.genre || 'Various';
 
   if (detailArtist) {

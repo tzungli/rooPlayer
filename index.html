@@ -427,7 +427,26 @@
             <div class="album-detail-meta">
               <div class="detail-tag">ALBUM</div>
               <h1 class="detail-title" id="detailTitle">Album Title</h1>
-              <div class="detail-artist" id="detailArtist">Artist Name</div>
+              <div class="detail-artist-line">
+                <span class="detail-artist-label">歌手：</span>
+                <span class="detail-artist" id="detailArtist">Artist Name</span>
+              </div>
+              <div class="detail-meta-line" id="detailMetaLine">
+                <span class="detail-meta-item" id="detailCompanyWrap">
+                  <span class="detail-meta-label">發行公司：</span>
+                  <span class="detail-meta-value" id="detailCompany">獨立發行 / 未標記廠牌</span>
+                </span>
+                <span class="detail-meta-sep">•</span>
+                <span class="detail-meta-item" id="detailYearWrap">
+                  <span class="detail-meta-label">年份：</span>
+                  <span class="detail-meta-value" id="detailYear">未載明</span>
+                </span>
+                <span class="detail-meta-sep">•</span>
+                <span class="detail-meta-item" id="detailDurationWrap">
+                  <span class="detail-meta-label">總曲目總時長：</span>
+                  <span class="detail-meta-value" id="detailTracksDuration">0 首歌曲</span>
+                </span>
+              </div>
 
               <div class="detail-actions" style="margin-bottom: 14px;">
                 <button class="btn btn-primary" id="btnPlayAlbumNow">▶ 播放專輯</button>
@@ -436,17 +455,6 @@
                 <button class="btn btn-secondary" id="btnTidalLibraryToggle" style="display: none;">
                   <span id="btnTidalLibraryToggleIcon">➕</span> <span id="btnTidalLibraryToggleText">加入曲庫</span>
                 </button>
-              </div>
-
-              <!-- 專輯製作資訊與母帶元資料 (整合至封面右側) -->
-              <div class="album-header-credits-wrap" id="albumHeaderCreditsWrap">
-                <div class="album-header-credits-header">
-                  <span class="credits-header-title">📀 專輯元資料 Album Metadata</span>
-                  <span class="metadata-source-badge" id="albumMetaSourceBadge">Audio Metadata</span>
-                </div>
-                <div class="album-meta-grid" id="albumMetaGrid">
-                  <!-- Injected via JS -->
-                </div>
               </div>
             </div>
           </div>
