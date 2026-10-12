@@ -86,17 +86,23 @@
       <div class="nav-group">
         <div class="nav-title">我的最愛 FAVORITES</div>
         <button class="nav-item" data-view="favAlbums">
-          <span class="nav-icon">❤️</span>
+          <span class="nav-icon nav-fav-icon" style="color: #f43f5e;">
+            <svg class="fav-svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+          </span>
           <span class="nav-label">最愛專輯</span>
           <span class="badge" id="favAlbumsCountBadge">0</span>
         </button>
         <button class="nav-item" data-view="favTracks">
-          <span class="nav-icon">💖</span>
+          <span class="nav-icon nav-fav-icon" style="color: #f43f5e;">
+            <svg class="fav-svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+          </span>
           <span class="nav-label">最愛歌曲</span>
           <span class="badge" id="favTracksCountBadge">0</span>
         </button>
         <button class="nav-item" data-view="favArtists">
-          <span class="nav-icon">⭐</span>
+          <span class="nav-icon nav-fav-icon" style="color: #f59e0b;">
+            <svg class="fav-svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          </span>
           <span class="nav-label">最愛演出者</span>
           <span class="badge" id="favArtistsCountBadge">0</span>
         </button>
@@ -407,7 +413,7 @@
               <div class="detail-actions">
                 <button class="btn btn-primary" id="btnPlayAlbumNow">▶ 播放專輯</button>
                 <button class="btn btn-secondary" id="btnShuffleAlbum">🔀 隨機播放</button>
-                <button class="btn btn-secondary" id="btnFavAlbumDetail">♡ 加入最愛</button>
+                <button class="btn btn-secondary" id="btnFavAlbumDetail"><svg class="fav-svg-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> <span>加入最愛專輯</span></button>
               </div>
             </div>
           </div>
@@ -547,7 +553,7 @@
               <div class="artist-detail-actions">
                 <button class="btn btn-primary" id="btnPlayAllArtistTracks">▶ 播放該歌手所有歌曲</button>
                 <button class="btn btn-secondary" id="btnShuffleArtistTracks">🔀 隨機播放</button>
-                <button class="btn btn-secondary" id="btnFavArtistDetail">⭐ 加入最愛</button>
+                <button class="btn btn-secondary" id="btnFavArtistDetail"><svg class="fav-svg-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> <span>加入最愛演出者</span></button>
                 <button class="btn btn-secondary" id="btnOpenWikipedia" title="在瀏覽器開啟 Wikipedia 完整條目">🌐 Wikipedia 維基百科</button>
               </div>
             </div>
@@ -647,11 +653,11 @@
               <tr>
                 <th style="width: 45px;">#</th>
                 <th style="width: 38px;"></th>
-                <th>曲目名稱</th>
-                <th>演出者</th>
-                <th>專輯</th>
-                <th style="width: 140px;">格式規格</th>
-                <th style="width: 80px; text-align: right;">時長</th>
+                <th class="col-track-title" style="width: 46%;">曲目名稱</th>
+                <th class="col-track-artist" style="width: 16%;">演出者</th>
+                <th class="col-track-album" style="width: 20%;">專輯</th>
+                <th style="width: 120px;">格式規格</th>
+                <th style="width: 75px; text-align: right;">時長</th>
               </tr>
             </thead>
             <tbody id="allTracksTbody">
@@ -759,11 +765,11 @@
               <tr>
                 <th style="width: 45px;">#</th>
                 <th style="width: 38px;"></th>
-                <th>曲目名稱</th>
-                <th>演出者</th>
-                <th>專輯</th>
-                <th style="width: 140px;">格式規格</th>
-                <th style="width: 80px; text-align: right;">時長</th>
+                <th class="col-track-title" style="width: 46%;">曲目名稱</th>
+                <th class="col-track-artist" style="width: 16%;">演出者</th>
+                <th class="col-track-album" style="width: 20%;">專輯</th>
+                <th style="width: 120px;">格式規格</th>
+                <th style="width: 75px; text-align: right;">時長</th>
               </tr>
             </thead>
             <tbody id="favTracksTbody">
@@ -1580,7 +1586,7 @@
         <div class="player-title" id="playerTitle">未播放曲目</div>
         <div class="player-artist" id="playerArtist">點選任意曲目開始聆聽</div>
       </div>
-      <button class="btn-heart" id="btnPlayerHeart" title="加入最愛">♡</button>
+      <button class="btn-heart" id="btnPlayerHeart" title="加入最愛"><svg class="fav-svg-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>
     </div>
 
     <!-- Center: Signal path badge & controls -->

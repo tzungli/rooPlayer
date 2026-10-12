@@ -853,6 +853,21 @@ async function autoResolveUnknownAlbumArtists() {
   }
 }
 
+// ----------------- Flat SVG Favorites Icons -----------------
+function getHeartSvg(isActive = false, size = 16) {
+  if (isActive) {
+    return `<svg class="fav-svg-icon active" viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+  }
+  return `<svg class="fav-svg-icon" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+}
+
+function getStarSvg(isActive = false, size = 16) {
+  if (isActive) {
+    return `<svg class="fav-svg-icon active" viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+  }
+  return `<svg class="fav-svg-icon" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+}
+
 // ----------------- Favorites State Management -----------------
 function initFavorites() {
   try {
@@ -973,7 +988,7 @@ function syncAllFavoriteUIs() {
     const playerHeartBtn = document.getElementById('btnPlayerHeart');
     if (playerHeartBtn) {
       playerHeartBtn.classList.toggle('active', isFav);
-      playerHeartBtn.textContent = isFav ? '♥' : '♡';
+      playerHeartBtn.innerHTML = getHeartSvg(isFav, 16);
       playerHeartBtn.title = isFav ? '從最愛歌曲移除' : '加入最愛歌曲';
     }
   }
@@ -984,7 +999,7 @@ function syncAllFavoriteUIs() {
     if (btnFavAlbum) {
       const isFav = isAlbumFavorite(state.activeAlbumDetail);
       btnFavAlbum.classList.toggle('active', isFav);
-      btnFavAlbum.textContent = isFav ? '♥ 已在最愛專輯' : '♡ 加入最愛專輯';
+      btnFavAlbum.innerHTML = `${getHeartSvg(isFav, 15)} <span>${isFav ? '已在最愛專輯' : '加入最愛專輯'}</span>`;
     }
   }
 
@@ -994,7 +1009,7 @@ function syncAllFavoriteUIs() {
     if (btnFavArtist) {
       const isFav = isArtistFavorite(state.currentArtistDetail);
       btnFavArtist.classList.toggle('active', isFav);
-      btnFavArtist.textContent = isFav ? '⭐ 已在最愛演出者' : '☆ 加入最愛演出者';
+      btnFavArtist.innerHTML = `${getStarSvg(isFav, 15)} <span>${isFav ? '已在最愛演出者' : '加入最愛演出者'}</span>`;
     }
   }
 
@@ -1014,7 +1029,7 @@ function syncAllFavoriteUIs() {
       const favBtn = card.querySelector('.card-fav-btn');
       if (favBtn) {
         favBtn.classList.toggle('active', isFav);
-        favBtn.textContent = isFav ? '♥' : '♡';
+        favBtn.innerHTML = getHeartSvg(isFav, 15);
         favBtn.title = isFav ? '取消最愛專輯' : '加入最愛專輯';
       }
     }
@@ -1029,6 +1044,7 @@ function syncAllFavoriteUIs() {
       const favBtn = card.querySelector('.artist-fav-btn');
       if (favBtn) {
         favBtn.classList.toggle('active', isFav);
+        favBtn.innerHTML = getStarSvg(isFav, 14);
         favBtn.title = isFav ? '取消最愛演出者' : '加入最愛演出者';
       }
     }
@@ -1038,14 +1054,15 @@ function syncAllFavoriteUIs() {
   document.querySelectorAll('tr').forEach(tr => {
     const favBtn = tr.querySelector('.btn-track-fav');
     if (favBtn) {
-      const titleCell = tr.querySelector('.track-title-cell');
+      const titleSpan = tr.querySelector('.track-name-span');
+      const titleCell = titleSpan || tr.querySelector('.track-title-cell');
       if (titleCell) {
-        const title = titleCell.textContent;
+        const title = titleCell.textContent.trim();
         const matchingTrack = state.tracks.find(t => t.title === title);
         if (matchingTrack) {
           const isFav = isTrackFavorite(matchingTrack);
           favBtn.classList.toggle('active', isFav);
-          favBtn.textContent = isFav ? '♥' : '♡';
+          favBtn.innerHTML = getHeartSvg(isFav, 14);
           favBtn.title = isFav ? '取消最愛歌曲' : '加入最愛歌曲';
         }
       }
@@ -1871,6 +1888,9 @@ function renderOverview() {
   // 5. Featured Artists in Overview
   if (overviewArtistsGrid) {
     overviewArtistsGrid.innerHTML = '';
+    const curArtistSize = state.artistCardSize || 'medium';
+    overviewArtistsGrid.classList.remove('artist-size-small', 'artist-size-medium', 'artist-size-large');
+    overviewArtistsGrid.classList.add(`artist-size-${curArtistSize}`);
     const featuredArtists = state.artists.slice(0, 6);
     featuredArtists.forEach(art => {
       overviewArtistsGrid.appendChild(createArtistCard(art));
@@ -1990,7 +2010,7 @@ function createAlbumCard(album) {
       <img src="${coverSrc}" class="album-art-img" alt="${escapeXml(album.title)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='${defaultCover}';">
       ${qualityTagHtml}
       <button class="card-play-btn" title="播放專輯">▶</button>
-      <button class="card-fav-btn ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛專輯' : '加入最愛專輯'}">${isFav ? '♥' : '♡'}</button>
+      <button class="card-fav-btn ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛專輯' : '加入最愛專輯'}">${getHeartSvg(isFav, 15)}</button>
     </div>
     <div class="album-meta">
       <div class="album-title" title="${escapeXml(album.title)}">${escapeXml(album.title)}</div>
@@ -2028,7 +2048,7 @@ function createArtistCard(art) {
   card.innerHTML = `
     <div class="artist-avatar-wrap">
       <div class="artist-avatar">${initial}</div>
-      <button class="artist-fav-btn ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛演出者' : '加入最愛演出者'}">⭐</button>
+      <button class="artist-fav-btn ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛演出者' : '加入最愛演出者'}">${getStarSvg(isFav, 14)}</button>
     </div>
     <div class="artist-name">${escapeXml(art.name)}</div>
     <div class="artist-sub">${art.albums.size} 張專輯 • ${art.tracks.length} 首曲目</div>
@@ -2117,7 +2137,7 @@ async function openArtistDetail(artistName) {
   if (btnFavArtist) {
     const isFav = isArtistFavorite(artistName);
     btnFavArtist.classList.toggle('active', isFav);
-    btnFavArtist.textContent = isFav ? '⭐ 已在最愛演出者' : '☆ 加入最愛演出者';
+    btnFavArtist.innerHTML = `${getStarSvg(isFav, 15)} <span>${isFav ? '已在最愛演出者' : '加入最愛演出者'}</span>`;
     btnFavArtist.onclick = (e) => {
       e.stopPropagation();
       toggleArtistFavorite(artistName);
@@ -2602,11 +2622,11 @@ function renderNextTracksChunk() {
     const isFav = isTrackFavorite(track);
     const onlineLinksHtml = generateTrackOnlineLinks(track);
     const playCount = getTrackPlayCount(track);
-    const playBadge = playCount > 0 ? `<span style="display:inline-block; margin-left:6px; font-size:11px; padding:1px 6px; border-radius:10px; background:rgba(217,70,239,0.15); color:var(--accent-purple);">播放 ${playCount} 次</span>` : '';
+    const playBadge = playCount > 0 ? `<span class="track-play-badge" title="播放次數：${playCount} 次">${playCount}</span>` : '';
 
     tr.innerHTML = `
       <td>${idx + 1}</td>
-      <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button></td>
+      <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${getHeartSvg(isFav, 14)}</button></td>
       <td class="track-title-cell">
         <div class="track-title-text">
           <span class="track-name-span">${escapeXml(track.title)}</span>${onlineLinksHtml}${playBadge}
@@ -3706,7 +3726,7 @@ function renderDetailTracklist(album) {
 
     tr.innerHTML = `
       <td>${t.trackNumber || (idx + 1)}</td>
-      <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button></td>
+      <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${getHeartSvg(isFav, 14)}</button></td>
       <td class="track-title-cell">
         <div class="track-title-text">
           <span class="track-name-span">${escapeXml(t.title)}</span>${onlineLinksHtml}
@@ -3813,7 +3833,7 @@ function openAlbumDetail(album) {
   if (btnFavAlbum) {
     const isFav = isAlbumFavorite(album);
     btnFavAlbum.classList.toggle('active', isFav);
-    btnFavAlbum.textContent = isFav ? '♥ 已在最愛專輯' : '♡ 加入最愛專輯';
+    btnFavAlbum.innerHTML = `${getHeartSvg(isFav, 15)} <span>${isFav ? '已在最愛專輯' : '加入最愛專輯'}</span>`;
     btnFavAlbum.onclick = (e) => {
       e.stopPropagation();
       toggleAlbumFavorite(album);
@@ -3955,7 +3975,7 @@ function playCurrentTrack() {
   if (playerHeartBtn) {
     const isFav = isTrackFavorite(track);
     playerHeartBtn.classList.toggle('active', isFav);
-    playerHeartBtn.textContent = isFav ? '♥' : '♡';
+    playerHeartBtn.innerHTML = getHeartSvg(isFav, 16);
     playerHeartBtn.title = isFav ? '從最愛歌曲移除' : '加入最愛歌曲';
   }
 
@@ -5824,7 +5844,7 @@ function renderPlaybackHistory() {
       tr.innerHTML = `
         <td>${idx + 1}</td>
         <td style="text-align: center;"><button class="btn-history-play" title="播放此曲目">▶</button></td>
-        <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button></td>
+        <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${getHeartSvg(isFav, 14)}</button></td>
         <td class="track-title-cell">
           <div class="track-title-text">
             <span class="track-name-span">${escapeXml(track.title)}</span>${onlineLinksHtml}
@@ -5852,7 +5872,7 @@ function renderPlaybackHistory() {
           if (favBtn) {
             const nowFav = isTrackFavorite(track);
             favBtn.classList.toggle('active', nowFav);
-            favBtn.textContent = nowFav ? '♥' : '♡';
+            favBtn.innerHTML = getHeartSvg(nowFav, 14);
           }
           return;
         }
@@ -5946,13 +5966,15 @@ function renderFavTracks() {
       const isHires = (track.bitsPerSample >= 24) || (track.sampleRate > 48000);
       const specLabel = `${track.formatName || 'PCM'} ${track.bitsPerSample ? track.bitsPerSample + 'b/' : ''}${Math.round((track.sampleRate || 44100)/1000)}k`;
       const onlineLinksHtml = generateTrackOnlineLinks(track);
+      const playCount = getTrackPlayCount(track);
+      const playBadge = playCount > 0 ? `<span class="track-play-badge" title="播放次數：${playCount} 次">${playCount}</span>` : '';
 
       tr.innerHTML = `
         <td>${idx + 1}</td>
-        <td style="text-align: center;"><button class="btn-track-fav active" title="取消最愛歌曲">♥</button></td>
+        <td style="text-align: center;"><button class="btn-track-fav active" title="取消最愛歌曲">${getHeartSvg(true, 14)}</button></td>
         <td class="track-title-cell">
           <div class="track-title-text">
-            <span class="track-name-span">${escapeXml(track.title)}</span>${onlineLinksHtml}
+            <span class="track-name-span">${escapeXml(track.title)}</span>${onlineLinksHtml}${playBadge}
           </div>
         </td>
         <td>${escapeXml(track.artist)}</td>
@@ -6354,7 +6376,8 @@ function applyArtistSize(size) {
 
   const artistGrids = [
     document.getElementById('artistsGrid'),
-    document.getElementById('favArtistsGrid')
+    document.getElementById('favArtistsGrid'),
+    document.getElementById('overviewArtistsGrid')
   ];
 
   artistGrids.forEach(grid => {
@@ -8209,7 +8232,7 @@ function initKkboxStreaming() {
         </div>
         <div class="kkbox-track-row-right">
           <span class="kkbox-track-duration">${formatDuration(track.duration)}</span>
-          <button class="btn-track-fav ${isFav ? 'active' : ''}" style="margin-right: 6px;" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${isFav ? '♥' : '♡'}</button>
+          <button class="btn-track-fav ${isFav ? 'active' : ''}" style="margin-right: 6px;" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${getHeartSvg(isFav, 14)}</button>
           <button class="kkbox-btn-play-now" title="由 rooPlayer 原生控制器立即播放此曲">
             ▶ 播放
           </button>
@@ -8247,8 +8270,9 @@ function initKkboxStreaming() {
         btnFav.addEventListener('click', (e) => {
           e.stopPropagation();
           toggleTrackFavorite(track);
-          btnFav.classList.toggle('active', isTrackFavorite(track));
-          btnFav.textContent = isTrackFavorite(track) ? '♥' : '♡';
+          const nowFav = isTrackFavorite(track);
+          btnFav.classList.toggle('active', nowFav);
+          btnFav.innerHTML = getHeartSvg(nowFav, 14);
         });
       }
 

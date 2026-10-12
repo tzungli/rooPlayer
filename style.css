@@ -1059,6 +1059,7 @@ body {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  table-layout: fixed;
 }
 
 .tracklist-table th {
@@ -1069,12 +1070,28 @@ body {
   font-weight: 600;
   letter-spacing: 0.5px;
   border-bottom: 1px solid var(--border-color);
+  box-sizing: border-box;
 }
 
 .tracklist-table td {
   padding: 12px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   color: var(--text-sub);
+  box-sizing: border-box;
+}
+
+#allTracksTable td:nth-child(4),
+#favTracksTable td:nth-child(4) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#allTracksTable td:nth-child(5),
+#favTracksTable td:nth-child(5) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tracklist-table tr {
@@ -1089,6 +1106,7 @@ body {
 
 .track-title-cell {
   color: var(--text-main);
+  overflow: hidden;
 }
 
 .track-title-text {
@@ -1100,6 +1118,25 @@ body {
   gap: 8px;
   flex-wrap: wrap;
   word-break: break-word;
+}
+
+.track-play-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  border-radius: 9px;
+  background: rgba(217, 70, 239, 0.14);
+  color: var(--accent-purple);
+  border: 1px solid rgba(217, 70, 239, 0.28);
+  vertical-align: middle;
+  font-feature-settings: "tnum";
 }
 
 .track-name-span {
@@ -2257,20 +2294,16 @@ body {
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 18px;
   line-height: 1;
   transition: all 0.2s;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  padding: 4px;
 }
 
 .btn-heart:hover, .btn-heart.active {
-  color: #ef4444;
-}
-
-.btn-heart.active {
-  text-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+  color: #f43f5e;
 }
 
 /* Center Controls */
@@ -3345,18 +3378,17 @@ body {
 }
 
 .card-fav-btn:hover {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.5);
-  background-color: rgba(18, 18, 24, 0.85);
-  transform: scale(1.1) !important;
+  color: #f43f5e;
+  border-color: rgba(244, 63, 94, 0.5);
+  background-color: rgba(18, 18, 24, 0.9);
+  transform: scale(1.08) !important;
 }
 
 .card-fav-btn.active {
   opacity: 1;
-  color: #ef4444;
-  background-color: rgba(24, 18, 24, 0.85);
-  border-color: rgba(239, 68, 68, 0.4);
-  text-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+  color: #f43f5e;
+  background-color: rgba(28, 20, 26, 0.9);
+  border-color: rgba(244, 63, 94, 0.5);
 }
 
 .artist-avatar-wrap {
@@ -3393,21 +3425,20 @@ body {
 }
 
 .artist-card:hover .artist-fav-btn {
-  color: #fbbf24;
+  color: #f59e0b;
 }
 
 .artist-fav-btn:hover {
-  color: #fbbf24;
-  transform: scale(1.12);
-  border-color: rgba(251, 191, 36, 0.6);
+  color: #f59e0b;
+  transform: scale(1.1);
+  border-color: rgba(245, 158, 11, 0.6);
   background-color: #1a1a24;
 }
 
 .artist-fav-btn.active {
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.6);
-  background-color: rgba(30, 26, 18, 0.9);
-  text-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.6);
+  background-color: rgba(32, 26, 18, 0.92);
 }
 
 .btn-track-fav {
@@ -3415,7 +3446,6 @@ body {
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 16px;
   line-height: 1;
   padding: 4px 6px;
   border-radius: 4px;
@@ -3426,13 +3456,20 @@ body {
 }
 
 .btn-track-fav:hover {
-  color: #ef4444;
-  transform: scale(1.2);
+  color: #f43f5e;
+  transform: scale(1.15);
 }
 
 .btn-track-fav.active {
-  color: #ef4444;
-  text-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+  color: #f43f5e;
+}
+
+.fav-svg-icon,
+.fav-svg {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+  pointer-events: none;
 }
 
 /* Playback History Table Interactive Elements */
@@ -3477,16 +3514,23 @@ body {
   text-decoration: underline;
 }
 
+#btnFavAlbumDetail,
+#btnFavArtistDetail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 #btnFavAlbumDetail.active {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.12);
+  color: #f43f5e;
+  border-color: rgba(244, 63, 94, 0.4);
+  background: rgba(244, 63, 94, 0.12);
 }
 
 #btnFavArtistDetail.active {
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.5);
-  background: rgba(251, 191, 36, 0.12);
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.12);
 }
 
 .genre-filter-banner {
