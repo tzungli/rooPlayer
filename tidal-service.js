@@ -296,7 +296,11 @@ class TidalService {
               codecs: 'flac',
               bitDepth: info.bitDepth || 16,
               sampleRate: info.sampleRate || 44100,
-              audioQuality: info.audioQuality || preferredQuality
+              audioQuality: info.audioQuality || preferredQuality,
+              // Pass the raw manifest through so callers can hand it directly to
+              // tidal:cacheTrack instead of relying on the main-process manifest map.
+              manifest: info.manifest,
+              manifestMimeType: info.manifestMimeType
             };
           }
         }

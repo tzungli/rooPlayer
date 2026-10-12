@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateAlbumArtist: (albumTitle, artistName) => ipcRenderer.invoke('library:updateAlbumArtist', albumTitle, artistName),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   getDsdStreamUrl: (filePath, startSec = 0) => ipcRenderer.invoke('audio:getDsdStreamUrl', filePath, startSec),
-  getSoxStreamUrl: (filePath, startSec = 0, sampleRate = 192000, precision = 28, dsdMode = '', dsdOrder = 5, filterPhase = 'linear') => ipcRenderer.invoke('audio:getSoxStreamUrl', filePath, startSec, sampleRate, precision, dsdMode, dsdOrder, filterPhase),
+  getSoxStreamUrl: (filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear') => ipcRenderer.invoke('audio:getSoxStreamUrl', filePath, startSec, sampleRate, dsdMode, dsdOrder, filterPhase),
   getAudioDuration: (filePath) => ipcRenderer.invoke('audio:getAudioDuration', filePath),
   translateToZhTw: (text) => ipcRenderer.invoke('util:translateToZhTw', text),
 

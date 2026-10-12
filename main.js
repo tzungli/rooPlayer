@@ -4,7 +4,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { pathToFileURL, fileURLToPath } = require('url');
 const http = require('http');
-const { spawn } = require('child_process');
 
 // Increase V8 maximum heap limit to 4GB to handle large audiophile libraries smoothly
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
@@ -18,28 +17,20 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const nativeAudioEngine = require('./native-audio-engine');
+const nativeDspStreamer = require('./native-dsp-streamer');
 const mm = require('music-metadata');
-const ffmpegPath = require('ffmpeg-static');
 
-async function getDurationWithFfmpeg(filePath) {
-  return new Promise((resolve) => {
-    if (!filePath || !fs.existsSync(filePath)) return resolve(0);
-    const ff = spawn(ffmpegPath, ['-i', filePath], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stderr = '';
-    ff.stderr.on('data', d => { stderr += d.toString(); });
-    ff.on('close', () => {
-      const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
-      if (match) {
-        const hours = parseFloat(match[1]);
-        const mins = parseFloat(match[2]);
-        const secs = parseFloat(match[3]);
-        resolve(Math.round(hours * 3600 + mins * 60 + secs));
-      } else {
-        resolve(0);
-      }
-    });
-    ff.on('error', () => resolve(0));
-  });
+// Native DSD duration fallback (pure JS DSF / DFF header parsing, no external processes)
+function getDurationWithNativeHeader(filePath) {
+  try {
+    const dsf = nativeAudioEngine.parseDsf(filePath);
+    if (dsf && dsf.dsdRate > 0) return Math.round(dsf.sampleCount / dsf.dsdRate);
+  } catch (e) {}
+  try {
+    const dff = nativeAudioEngine.parseDff(filePath);
+    if (dff && dff.dsdRate > 0) return Math.round(dff.sampleCount / dff.dsdRate);
+  } catch (e) {}
+  return 0;
 }
 
 const DlnaManager = require('./dlna-manager');
@@ -195,7 +186,7 @@ app.whenReady().then(() => {
   startDsdStreamingServer();
 
   // Initialize DLNA / UPnP Subsystem (Pure Native Audio Engine)
-  dlnaManager = new DlnaManager({ nativeAudioEngine });
+  dlnaManager = new DlnaManager();
   dlnaManager.startStreamingServer();
   dlnaManager.startSsdpDiscovery();
 
@@ -225,16 +216,17 @@ app.whenReady().then(() => {
 let isAppQuitting = false;
 
 async function cleanupAllAudioStreams() {
-  if (currentMainStreamProc) {
-    try { currentMainStreamProc.kill(); } catch (e) {}
-    currentMainStreamProc = null;
+  for (const [, entryPromise] of localDspSessions) {
+    Promise.resolve(entryPromise).then(e => { try { e.session.cancel(); } catch (err) {} }).catch(() => {});
   }
+  localDspSessions.clear();
   if (dsdStreamServer) {
     try { dsdStreamServer.close(); } catch (e) {}
   }
   if (dlnaManager) {
     try { await dlnaManager.destroy(); } catch (e) {}
   }
+  try { nativeDspStreamer.destroy(); } catch (e) {}
 }
 
 app.on('before-quit', async (event) => {
@@ -269,20 +261,69 @@ function getDsdStreamPort() {
   });
 }
 
-let currentMainStreamProc = null;
+// ==========================================================
+// Local DSP Playback Sessions
+// Local /sox-stream playback shares the exact same progressive
+// streaming engine (native-dsp-streamer) as the DLNA output path:
+// blocks are generated in the background and served as they are ready,
+// so the main process never computes a whole track synchronously.
+// ==========================================================
+const localDspSessions = new Map(); // sessionKey -> Promise<{ token, session }>
+
+function serveProgressiveSession(req, res, session) {
+  const totalSize = session.totalFileBytes;
+  const ext = path.extname(session.filePath).toLowerCase();
+  const contentType = ext === '.dsf' ? 'audio/x-dsf' : 'audio/wav';
+  const headers = {
+    'Content-Type': contentType,
+    'Accept-Ranges': 'bytes',
+    'Access-Control-Allow-Origin': '*'
+  };
+
+  if (req.method === 'HEAD') {
+    res.writeHead(200, { ...headers, 'Content-Length': totalSize });
+    res.end();
+    return;
+  }
+
+  const ProgressiveFileStream = nativeDspStreamer.ProgressiveFileStream;
+  const range = req.headers.range;
+  let stream;
+
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+    const chunkSize = Math.max(0, (end - start) + 1);
+    res.writeHead(206, {
+      ...headers,
+      'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+      'Content-Length': chunkSize
+    });
+    stream = (session.isCompleted || !ProgressiveFileStream)
+      ? fs.createReadStream(session.filePath, { start, end })
+      : new ProgressiveFileStream(session.filePath, start, end, session);
+  } else {
+    res.writeHead(200, { ...headers, 'Content-Length': totalSize });
+    stream = (session.isCompleted || !ProgressiveFileStream)
+      ? fs.createReadStream(session.filePath)
+      : new ProgressiveFileStream(session.filePath, 0, totalSize - 1, session);
+  }
+
+  stream.pipe(res);
+  req.on('close', () => { try { stream.destroy(); } catch (e) {} });
+}
 
 function startDsdStreamingServer() {
-  dsdStreamServer = http.createServer((req, res) => {
+  dsdStreamServer = http.createServer(async (req, res) => {
     try {
       const reqUrl = new URL(req.url, 'http://127.0.0.1');
 
-      // Native DSP PCM Upsampling Stream
+      // Native DSP PCM Upsampling Stream (Progressive session, same engine as the DLNA path)
       if (reqUrl.pathname === '/sox-stream') {
         const filePath = reqUrl.searchParams.get('file');
         const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
         const sampleRate = parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
-        const dsdMode = reqUrl.searchParams.get('dsd') || '';
-        const dsdOrder = parseInt(reqUrl.searchParams.get('order') || '5', 10);
         const filterPhase = reqUrl.searchParams.get('phase') || 'linear';
 
         if (!filePath || !fs.existsSync(filePath)) {
@@ -291,54 +332,40 @@ function startDsdStreamingServer() {
           return;
         }
 
-        if (req.method === 'HEAD') {
-          res.writeHead(200, {
-            'Content-Type': 'audio/wav',
-            'Access-Control-Allow-Origin': '*',
-            'Transfer-Encoding': 'chunked'
-          });
-          res.end();
-          return;
-        }
+        // Local Chromium playback always receives progressive 24-bit PCM WAV
+        // (DSD rate modes are mapped to intermediate PCM rates by the renderer;
+        //  dsd/order URL params are accepted for compatibility and ignored here)
+        const sessionKey = crypto.createHash('md5').update(`${filePath}|${startSec}|${sampleRate}|${filterPhase}`).digest('hex');
 
-        // Read raw PCM samples from disk without any external process (async with WASM FLAC / WAV / AIFF)
-        nativeAudioEngine.readPcmSamples(filePath, startSec).then(pcm => {
-          if (!pcm) {
-            res.writeHead(500);
-            res.end('Native PCM read failed');
-            return;
+        try {
+          let entryPromise = localDspSessions.get(sessionKey);
+          if (!entryPromise) {
+            // A new DSP playback request supersedes and cancels any previous local session
+            for (const [k, oldPromise] of localDspSessions) {
+              if (k !== sessionKey) {
+                Promise.resolve(oldPromise).then(old => { try { old.session.cancel(); } catch (e) {} }).catch(() => {});
+                localDspSessions.delete(k);
+              }
+            }
+            entryPromise = (async () => {
+              const token = `local_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+              const session = await nativeDspStreamer.createPcmSession(token, filePath, startSec, sampleRate, null, filterPhase);
+              return { token, session };
+            })();
+            localDspSessions.set(sessionKey, entryPromise);
+            entryPromise.catch(() => { localDspSessions.delete(sessionKey); });
           }
-
-          let outBuf = null;
-          const isLocal = reqUrl.searchParams.get('local') === '1';
-
-          if (dsdMode && !isLocal) {
-            // Native DSD Modulation: Noise-Shaped Delta-Sigma Modulator (for DLNA / DSD DACs)
-            outBuf = nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode, 300, dsdOrder, filterPhase);
-            res.writeHead(200, {
-              'Content-Type': 'audio/x-dsf',
-              'Content-Length': outBuf.length,
-              'Access-Control-Allow-Origin': '*'
-            });
-          } else {
-            // Native High-Precision Upsampling with selected filter phase (WAV format fully supported by Chromium and DACs)
-            const up = nativeAudioEngine.upsampleHermite(pcm.left, pcm.right, pcm.sampleRate, sampleRate, filterPhase);
-            outBuf = nativeAudioEngine.encodeWav24(up.outL, up.outR, sampleRate);
-            res.writeHead(200, {
-              'Content-Type': 'audio/wav',
-              'Content-Length': outBuf.length,
-              'Access-Control-Allow-Origin': '*'
-            });
-          }
-
-          res.end(outBuf);
-        }).catch(err => {
-          console.error('[StreamServer] readPcmSamples error:', err);
+          const entry = await entryPromise;
+          serveProgressiveSession(req, res, entry.session);
+        } catch (err) {
+          console.error('[StreamServer] Local DSP session error:', err);
           if (!res.headersSent) {
             res.writeHead(500);
-            res.end('Native audio stream error');
+            res.end('Local DSP stream error');
+          } else {
+            res.end();
           }
-        });
+        }
         return;
       }
 
@@ -440,11 +467,18 @@ function startDsdStreamingServer() {
           }
         }
 
-        // 2. Not cached: stream on-the-fly via FFmpeg and write cache simultaneously
+        // 2. Not cached: assemble FLAC on-the-fly from manifest segments (Pure Node, no external processes)
         const info = tidalManifestMap.get(safeId);
         if (!info || !info.manifestXml) {
           res.writeHead(404);
           res.end('TIDAL stream manifest not found');
+          return;
+        }
+
+        const resolved = parseTidalManifestSegments(info.manifestXml);
+        if (!resolved || !resolved.segmentUrls.length) {
+          res.writeHead(404);
+          res.end('TIDAL stream manifest could not be resolved');
           return;
         }
 
@@ -464,67 +498,38 @@ function startDsdStreamingServer() {
           'Transfer-Encoding': 'chunked'
         });
 
-        const tempMpd = path.join(TIDAL_CACHE_DIR, `temp_${safeId}_${Date.now()}.mpd`);
         const tempFlac = path.join(TIDAL_CACHE_DIR, `temp_${safeId}_${Date.now()}.flac`);
+        let aborted = false;
+        req.on('close', () => { aborted = true; });
+
         try {
-          fs.writeFileSync(tempMpd, info.manifestXml, 'utf-8');
-        } catch (e) {
-          console.error('[StreamServer] Failed to write temp MPD:', e);
+          const segmentUrls = resolved.initUrl ? [resolved.initUrl, ...resolved.segmentUrls] : resolved.segmentUrls;
+          const completed = await fetchTidalSegmentsInOrder(segmentUrls, (buf) => {
+            res.write(buf);
+            fs.appendFileSync(tempFlac, buf);
+          }, { concurrency: 8, shouldAbort: () => aborted });
           res.end();
-          return;
-        }
 
-        const ff = spawn(ffmpegPath, [
-          '-loglevel', 'error',
-          '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,data',
-          '-i', tempMpd,
-          '-c', 'copy',
-          '-f', 'flac',
-          'pipe:1',
-          '-c', 'copy',
-          tempFlac
-        ]);
-
-        ff.stdout.pipe(res);
-
-        req.on('close', () => {
-          try { ff.stdout.unpipe(res); } catch (_) {}
-        });
-
-        ff.on('close', (code) => {
-          setTimeout(() => {
-            try { if (fs.existsSync(tempMpd)) fs.unlinkSync(tempMpd); } catch (_) {}
-          }, 1000);
-
-          if (code === 0 && fs.existsSync(tempFlac)) {
-            try {
-              const stat = fs.statSync(tempFlac);
-              if (stat.size > 64 * 1024) {
-                if (fs.existsSync(targetFile)) fs.unlinkSync(targetFile);
-                fs.renameSync(tempFlac, targetFile);
-                console.log(`[TIDAL] Successfully cached track ${safeId} to disk (${stat.size} bytes)`);
-              } else {
-                try { fs.unlinkSync(tempFlac); } catch (_) {}
-              }
-            } catch (_) {}
-          } else {
-            try { if (fs.existsSync(tempFlac)) fs.unlinkSync(tempFlac); } catch (_) {}
-          }
-        });
-
-        ff.on('error', (err) => {
-          console.error('[StreamServer] FFmpeg stream error:', err);
-          setTimeout(() => {
-            try { if (fs.existsSync(tempMpd)) fs.unlinkSync(tempMpd); } catch (_) {}
-            try { if (fs.existsSync(tempFlac)) fs.unlinkSync(tempFlac); } catch (_) {}
-          }, 1000);
+          try {
+            const stat = fs.statSync(tempFlac);
+            if (completed && !aborted && stat.size > 64 * 1024) {
+              if (fs.existsSync(targetFile)) fs.unlinkSync(targetFile);
+              fs.renameSync(tempFlac, targetFile);
+              console.log(`[TIDAL] Successfully cached track ${safeId} to disk (${stat.size} bytes)`);
+            } else {
+              try { fs.unlinkSync(tempFlac); } catch (_) {}
+            }
+          } catch (_) {}
+        } catch (err) {
+          console.error('[StreamServer] TIDAL segment stream error:', err);
+          try { if (fs.existsSync(tempFlac)) fs.unlinkSync(tempFlac); } catch (_) {}
           if (!res.headersSent) {
             res.writeHead(500);
-            res.end('FFmpeg stream error');
+            res.end('TIDAL segment stream error');
           } else {
             res.end();
           }
-        });
+        }
 
         return;
       }
@@ -576,13 +581,12 @@ ipcMain.handle('audio:getDsdStreamUrl', (event, filePath, startSec = 0) => {
 });
 
 // SoX Resampler Stream URL helper IPC
-ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, precision = 28, dsdMode = '', dsdOrder = 5, filterPhase = 'linear') => {
+ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear') => {
   if (!dsdStreamPort) return '';
   const params = new URLSearchParams();
   params.set('file', filePath);
   if (startSec > 0) params.set('start', startSec.toString());
   params.set('rate', sampleRate.toString());
-  params.set('precision', precision.toString());
   if (dsdMode) params.set('dsd', dsdMode);
   params.set('order', (dsdOrder || 5).toString());
   params.set('phase', filterPhase || 'linear');
@@ -598,10 +602,14 @@ async function getAudioDurationNative(filePath) {
       return meta.format.duration;
     }
   } catch (e) {
-    // Fallback: check DSF header directly
+    // Fallback: check DSF / DFF headers directly
     const dsf = nativeAudioEngine.parseDsf(filePath);
     if (dsf && dsf.dsdRate > 0) {
       return dsf.sampleCount / dsf.dsdRate;
+    }
+    const dff = nativeAudioEngine.parseDff(filePath);
+    if (dff && dff.dsdRate > 0) {
+      return dff.sampleCount / dff.dsdRate;
     }
   }
   return 0;
@@ -698,6 +706,112 @@ if (!fs.existsSync(TIDAL_CACHE_DIR)) {
 }
 
 const tidalManifestMap = new Map();
+
+// ==========================================================
+// TIDAL Manifest Segment Resolver (Pure Node, no FFmpeg)
+// Supports DASH XML manifests (SegmentTemplate / SegmentTimeline)
+// and BTS-style JSON manifests (direct download urls).
+// ==========================================================
+function parseTidalManifestSegments(manifestSource) {
+  if (!manifestSource) return null;
+  const trimmed = String(manifestSource).trim();
+
+  // BTS-style manifest: JSON with direct download URLs
+  if (trimmed.startsWith('{')) {
+    try {
+      const bts = JSON.parse(trimmed);
+      const urls = Array.isArray(bts.urls) ? bts.urls.map(u => String(u).trim()).filter(u => /^https?:\/\//i.test(u)) : [];
+      if (urls.length > 0) return { initUrl: null, segmentUrls: urls };
+    } catch (_) {}
+    return null;
+  }
+
+  try {
+    // Base URLs used to resolve relative segment templates (TIDAL usually uses absolute URLs)
+    const baseUrls = [...trimmed.matchAll(/<BaseURL>([^<]+)<\/BaseURL>/g)].map(m => m[1].trim()).filter(Boolean);
+    const base = baseUrls.length > 0 ? baseUrls[baseUrls.length - 1] : '';
+
+    // Representation-level SegmentTemplate overrides AdaptationSet-level (last one in document order)
+    const allTemplates = [...trimmed.matchAll(/<SegmentTemplate[^>]*>/g)].map(m => m[0]);
+    if (!allTemplates.length) return null;
+    const template = allTemplates[allTemplates.length - 1];
+
+    const attr = (name) => {
+      const m = template.match(new RegExp(`[\\s"]${name}="([^"]*)"`));
+      return m ? m[1] : null;
+    };
+    const mediaTpl = attr('media');
+    if (!mediaTpl) return null;
+    const initTpl = attr('initialization');
+    const startNumber = parseInt(attr('startNumber') || '1', 10);
+    const timescale = parseInt(attr('timescale') || '1', 10);
+    const segDuration = parseInt(attr('duration') || '0', 10);
+
+    const repTag = (trimmed.match(/<Representation[^>]*>/) || [])[0] || '';
+    const repId = (repTag.match(/\bid="([^"]*)"/) || [])[1] || '';
+    const bandwidth = (repTag.match(/\bbandwidth="(\d+)"/) || [])[1] || '0';
+
+    const fillPlaceholders = (tpl, number, time) => {
+      return tpl
+        .replace(/\$RepresentationID\$/g, repId)
+        .replace(/\$Bandwidth\$/g, bandwidth)
+        .replace(/\$Number\$/g, String(number))
+        .replace(/\$Time\$/g, (time !== null && time !== undefined) ? String(time) : String(number));
+    };
+    const resolveUrl = (filled) => {
+      if (!filled) return null;
+      if (/^https?:\/\//i.test(filled)) return filled;
+      if (!base) return null;
+      try { return new URL(filled, base).toString(); } catch (_) { return null; }
+    };
+
+    // Build the segment list: SegmentTimeline entries first, then duration math, then single segment
+    const segments = [];
+    const timeline = [...trimmed.matchAll(/<S\b([^>]*)\/?>/g)];
+    if (timeline.length > 0) {
+      let curTime = null;
+      for (const s of timeline) {
+        const attrs = s[1];
+        const tM = attrs.match(/\bt="(\d+)"/);
+        const dM = attrs.match(/\bd="(\d+)"/);
+        const rM = attrs.match(/\br="(-?\d+)"/);
+        const d = dM ? parseInt(dM[1], 10) : 0;
+        const repeats = rM ? (parseInt(rM[1], 10) >= 0 ? parseInt(rM[1], 10) + 1 : 1) : 1;
+        if (tM) curTime = parseInt(tM[1], 10);
+        for (let i = 0; i < repeats; i++) {
+          segments.push({ number: startNumber + segments.length, time: curTime !== null ? curTime + i * d : null });
+        }
+        if (curTime !== null && d > 0) curTime += repeats * d;
+      }
+    } else if (segDuration > 0) {
+      const mPD = (trimmed.match(/mediaPresentationDuration="([^"]+)"/) || [])[1] || '';
+      const durM = mPD.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?$/);
+      let totalSec = 0;
+      if (durM) {
+        totalSec = (parseInt(durM[1] || '0', 10) * 3600) + (parseInt(durM[2] || '0', 10) * 60) + parseFloat(durM[3] || '0');
+      }
+      const count = totalSec > 0 ? Math.ceil((totalSec * timescale) / segDuration) : 1;
+      for (let i = 0; i < count; i++) {
+        segments.push({ number: startNumber + i, time: segDuration * i });
+      }
+    } else {
+      segments.push({ number: startNumber, time: 0 });
+    }
+
+    const segmentUrls = segments
+      .map(seg => resolveUrl(fillPlaceholders(mediaTpl, seg.number, seg.time)))
+      .filter(Boolean);
+    if (segmentUrls.length === 0) return null;
+
+    return {
+      initUrl: initTpl ? resolveUrl(fillPlaceholders(initTpl, startNumber, 0)) : null,
+      segmentUrls
+    };
+  } catch (err) {
+    console.warn('[TIDAL] Failed to parse manifest segments:', err);
+    return null;
+  }
+}
 const activeTidalCachePromises = new Map();
 
 ipcMain.handle('tidal:getStreamUrl', async (event, trackId, playbackInfo) => {
@@ -741,6 +855,48 @@ ipcMain.handle('tidal:getStreamUrl', async (event, trackId, playbackInfo) => {
   };
 });
 
+// Fetch TIDAL manifest segments with bounded parallelism, delivering buffers in order.
+// Dramatically reduces cache build time vs sequential per-segment round-trips.
+async function fetchTidalSegmentsInOrder(segmentUrls, onSegment, options = {}) {
+  const concurrency = Math.max(1, Math.min(options.concurrency || 8, 16));
+  const shouldAbort = options.shouldAbort || (() => false);
+  const total = segmentUrls.length;
+  const inflight = new Map();
+  let issueIndex = 0;
+
+  const issueNext = () => {
+    if (issueIndex >= total) return;
+    const i = issueIndex++;
+    const p = fetch(segmentUrls[i]).then(async (segRes) => {
+      if (!segRes.ok) throw new Error(`Segment HTTP ${segRes.status}`);
+      return Buffer.from(await segRes.arrayBuffer());
+    });
+    p.catch(() => {}); // suppress unhandled rejections for segments not awaited yet
+    inflight.set(i, p);
+  };
+
+  for (let k = 0; k < Math.min(concurrency, total); k++) issueNext();
+
+  try {
+    for (let i = 0; i < total; i++) {
+      const buf = await inflight.get(i); // ordered delivery guaranteed
+      inflight.delete(i);
+      if (shouldAbort()) {
+        await Promise.allSettled([...inflight.values()]);
+        inflight.clear();
+        return false; // aborted by caller
+      }
+      await onSegment(buf, i);
+      issueNext();
+    }
+    return true; // completed
+  } catch (err) {
+    await Promise.allSettled([...inflight.values()]);
+    inflight.clear();
+    throw err;
+  }
+}
+
 ipcMain.handle('tidal:cacheTrack', async (event, trackId, streamUrlOrInfo, optionalInfo) => {
   if (!trackId) return null;
   const safeId = String(trackId).replace(/[^a-zA-Z0-9_-]/g, '');
@@ -756,7 +912,10 @@ ipcMain.handle('tidal:cacheTrack', async (event, trackId, streamUrlOrInfo, optio
   }
 
   if (activeTidalCachePromises.has(safeId)) {
-    return await activeTidalCachePromises.get(safeId);
+    const existingResult = await activeTidalCachePromises.get(safeId);
+    if (existingResult) return existingResult;
+    // 前一次組裝失敗：若呼叫端提供了新的串流資訊 / manifest，繼續往下用新資訊重新組裝，
+    // 不再直接回傳舊失敗結果。
   }
 
   const cachePromise = (async () => {
@@ -777,42 +936,25 @@ ipcMain.handle('tidal:cacheTrack', async (event, trackId, streamUrlOrInfo, optio
       }
 
       if (manifestXml) {
-        const tempMpd = path.join(TIDAL_CACHE_DIR, `cache_temp_${safeId}_${Date.now()}.mpd`);
-        const tempFlac = path.join(TIDAL_CACHE_DIR, `cache_temp_${safeId}_${Date.now()}.flac`);
-        fs.writeFileSync(tempMpd, manifestXml, 'utf-8');
-
-        await new Promise((resolve, reject) => {
-          const ff = spawn(ffmpegPath, [
-            '-loglevel', 'error',
-            '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,data',
-            '-i', tempMpd,
-            '-c', 'copy',
-            tempFlac
-          ]);
-          ff.on('close', (code) => {
-            setTimeout(() => { try { if (fs.existsSync(tempMpd)) fs.unlinkSync(tempMpd); } catch (_) {} }, 500);
-            if (code === 0 && fs.existsSync(tempFlac)) {
-              resolve();
-            } else {
-              try { if (fs.existsSync(tempFlac)) fs.unlinkSync(tempFlac); } catch (_) {}
-              reject(new Error(`FFmpeg remux cache exited with code ${code}`));
-            }
-          });
-          ff.on('error', (err) => {
-            setTimeout(() => { try { if (fs.existsSync(tempMpd)) fs.unlinkSync(tempMpd); } catch (_) {} }, 500);
-            try { if (fs.existsSync(tempFlac)) fs.unlinkSync(tempFlac); } catch (_) {}
-            reject(err);
-          });
-        });
-
-        if (fs.existsSync(tempFlac)) {
+        const resolved = parseTidalManifestSegments(manifestXml);
+        if (resolved && resolved.segmentUrls.length) {
+          const tempFlac = path.join(TIDAL_CACHE_DIR, `cache_temp_${safeId}_${Date.now()}.flac`);
           try {
-            if (fs.existsSync(targetFile)) fs.unlinkSync(targetFile);
-            fs.renameSync(tempFlac, targetFile);
-            console.log(`[TIDAL] Cache finished for track ${safeId}`);
-            return targetFile;
-          } catch (e) {
-            console.warn('[TIDAL] Failed to rename cached FLAC:', e);
+            const segmentUrls = resolved.initUrl ? [resolved.initUrl, ...resolved.segmentUrls] : resolved.segmentUrls;
+            await fetchTidalSegmentsInOrder(segmentUrls, (buf) => {
+              fs.appendFileSync(tempFlac, buf);
+            }, { concurrency: 8 });
+            const stat = fs.statSync(tempFlac);
+            if (stat.size > 64 * 1024) {
+              if (fs.existsSync(targetFile)) fs.unlinkSync(targetFile);
+              fs.renameSync(tempFlac, targetFile);
+              console.log(`[TIDAL] Cache finished for track ${safeId}`);
+              return targetFile;
+            }
+            try { fs.unlinkSync(tempFlac); } catch (_) {}
+          } catch (err) {
+            console.warn('[TIDAL] Manifest segment assembly failed for', safeId, err);
+            try { if (fs.existsSync(tempFlac)) fs.unlinkSync(tempFlac); } catch (_) {}
           }
         }
       }
@@ -1492,7 +1634,7 @@ ipcMain.handle('library:scanFolder', async (event, folderPath) => {
         const ext = path.extname(filePath).replace('.', '').toUpperCase();
         let duration = format.duration || 0;
         if (!duration && (ext === 'DSF' || ext === 'DFF')) {
-          duration = await getDurationWithFfmpeg(filePath);
+          duration = getDurationWithNativeHeader(filePath);
         }
         const sampleRate = format.sampleRate || ((ext === 'DSF' || ext === 'DFF') ? 2822400 : 44100);
         const bitsPerSample = format.bitsPerSample || ((ext === 'DSF' || ext === 'DFF') ? 1 : (ext === 'FLAC' ? 24 : 16));
@@ -1535,7 +1677,7 @@ ipcMain.handle('library:scanFolder', async (event, folderPath) => {
         const ext = path.extname(filePath).replace('.', '').toUpperCase();
         let duration = 0;
         if (ext === 'DSF' || ext === 'DFF') {
-          duration = await getDurationWithFfmpeg(filePath);
+          duration = getDurationWithNativeHeader(filePath);
         }
         const rawBase = path.basename(filePath, path.extname(filePath));
         const fnMatch = rawBase.match(/^\d+[\.\-\s]+\s*(.+?)\s*[_—\-]\s*(.+)$/);

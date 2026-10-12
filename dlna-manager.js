@@ -8,7 +8,6 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { spawn } = require('child_process');
 const EventEmitter = require('events');
 const { fileURLToPath } = require('url');
 
@@ -45,7 +44,6 @@ function resolveLocalCoverPath(src) {
 class DlnaManager extends EventEmitter {
   constructor(options = {}) {
     super();
-    this.nativeAudioEngine = options.nativeAudioEngine || require('./native-audio-engine');
     this.devices = new Map(); // id -> device details
     this.activeDeviceId = 'local'; // 'local' or device.id
     this.currentTrack = null;
@@ -55,7 +53,6 @@ class DlnaManager extends EventEmitter {
     this.ssdpSocket = null;
     this.scanInterval = null;
     this.positionTimer = null;
-    this.currentDsdProcess = null;
     this.playbackState = 'STOPPED'; // STOPPED | PLAYING | PAUSED_PLAYBACK
     this.currentPositionSec = 0;
     this.currentDurationSec = 0;
@@ -124,9 +121,6 @@ class DlnaManager extends EventEmitter {
           const pathname = reqUrl.pathname;
 
           const streamMatch = pathname.match(/^\/stream\/([^\/]+)/);
-          const dsdModMatch = pathname.match(/^\/dsd-mod-stream\/([^\/]+)/);
-          const dsdMatch = pathname.match(/^\/dsd-stream\/([^\/]+)/);
-          const soxMatch = pathname.match(/^\/sox-stream\/([^\/]+)/);
           const coverMatch = pathname.match(/^\/cover\/([^\/]+)/);
 
           if (streamMatch || pathname === '/stream' || pathname === '/stream/') {
@@ -139,81 +133,6 @@ class DlnaManager extends EventEmitter {
               return;
             }
             this.handleLocalAudioStream(req, res, filePath, token);
-          } else if (dsdModMatch || pathname === '/dsd-mod-stream' || pathname === '/dsd-mod-stream/') {
-            const token = dsdModMatch ? dsdModMatch[1] : null;
-            const streamInfo = token ? this.activeStreams.get(token) : null;
-            if (streamInfo && streamInfo.filePath && fs.existsSync(streamInfo.filePath)) {
-              this.handleLocalAudioStream(req, res, streamInfo.filePath, token);
-              return;
-            }
-            const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
-            const startSec = (streamInfo && streamInfo.startSec) !== undefined
-              ? streamInfo.startSec
-              : parseFloat(reqUrl.searchParams.get('start') || '0');
-            const dsdMode = (streamInfo && streamInfo.dspOptions && streamInfo.dspOptions.dsdMode)
-              ? streamInfo.dspOptions.dsdMode
-              : (reqUrl.searchParams.get('dsd') || 'dsd64');
-            const precision = (streamInfo && streamInfo.dspOptions && streamInfo.dspOptions.precision)
-              ? streamInfo.dspOptions.precision
-              : parseInt(reqUrl.searchParams.get('precision') || '28', 10);
-            const track = streamInfo ? streamInfo.track : this.currentTrack;
-            if (!filePath || !fs.existsSync(filePath)) {
-              res.writeHead(404);
-              res.end('File not found');
-              return;
-            }
-            this.handleDsdModulationStream(req, res, filePath, startSec, dsdMode, precision, track).catch(e => {
-              console.error('handleDsdModulationStream error:', e);
-              if (!res.headersSent) { res.writeHead(500); res.end('DSD stream error'); }
-            });
-          } else if (dsdMatch || pathname === '/dsd-stream' || pathname === '/dsd-stream/') {
-            const token = dsdMatch ? dsdMatch[1] : null;
-            const streamInfo = token ? this.activeStreams.get(token) : null;
-            if (streamInfo && streamInfo.filePath && fs.existsSync(streamInfo.filePath)) {
-              this.handleLocalAudioStream(req, res, streamInfo.filePath, token);
-              return;
-            }
-            const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
-            const startSec = (streamInfo && streamInfo.startSec) !== undefined
-              ? streamInfo.startSec
-              : parseFloat(reqUrl.searchParams.get('start') || '0');
-            const track = streamInfo ? streamInfo.track : this.currentTrack;
-            if (!filePath || !fs.existsSync(filePath)) {
-              res.writeHead(404);
-              res.end('File not found');
-              return;
-            }
-            this.handleDsdTranscodeStream(req, res, filePath, startSec, track);
-          } else if (soxMatch || pathname === '/sox-stream' || pathname === '/sox-stream/') {
-            const token = soxMatch ? soxMatch[1] : null;
-            const streamInfo = token ? this.activeStreams.get(token) : null;
-            if (streamInfo && streamInfo.filePath && fs.existsSync(streamInfo.filePath)) {
-              this.handleLocalAudioStream(req, res, streamInfo.filePath, token);
-              return;
-            }
-            const filePath = (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
-            const startSec = (streamInfo && streamInfo.startSec) !== undefined
-              ? streamInfo.startSec
-              : parseFloat(reqUrl.searchParams.get('start') || '0');
-            const sampleRate = (streamInfo && streamInfo.dspOptions && streamInfo.dspOptions.sampleRate)
-              ? streamInfo.dspOptions.sampleRate
-              : parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
-            const precision = (streamInfo && streamInfo.dspOptions && streamInfo.dspOptions.precision)
-              ? streamInfo.dspOptions.precision
-              : parseInt(reqUrl.searchParams.get('precision') || '28', 10);
-            const dsdMode = (streamInfo && streamInfo.dspOptions && streamInfo.dspOptions.dsdMode)
-              ? streamInfo.dspOptions.dsdMode
-              : (reqUrl.searchParams.get('dsd') || '');
-            const track = streamInfo ? streamInfo.track : this.currentTrack;
-            if (!filePath || !fs.existsSync(filePath)) {
-              res.writeHead(404);
-              res.end('File not found');
-              return;
-            }
-            this.handleSoxTranscodeStream(req, res, filePath, startSec, sampleRate, precision, dsdMode, track).catch(e => {
-              console.error('handleSoxTranscodeStream error:', e);
-              if (!res.headersSent) { res.writeHead(500); res.end('Upsample stream error'); }
-            });
           } else if (
             coverMatch ||
             pathname === '/cover' ||
@@ -336,167 +255,6 @@ class DlnaManager extends EventEmitter {
         : fs.createReadStream(filePath);
       stream.pipe(res);
       req.on('close', () => stream.destroy());
-    }
-  }
-
-  // Handle PCM to 1-bit DSD on-the-fly Delta-Sigma Modulation into Sony DSF stream (Pure Native Engine)
-  async handleDsdModulationStream(req, res, filePath, startSec = 0, dsdMode = 'dsd64', precision = 24, track = null) {
-    try {
-      const pcm = await this.nativeAudioEngine.readPcmSamples(filePath, startSec);
-      if (!pcm) {
-        res.writeHead(500);
-        res.end('Native PCM read failed for DSD modulation');
-        return;
-      }
-
-      const dsfBuf = this.nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode, 300);
-
-      const totalSize = dsfBuf.length;
-      const range = req.headers.range;
-
-      const headers = {
-        'Content-Type': 'audio/x-dsf',
-        'Accept-Ranges': 'bytes',
-        'transferMode.dlna.org': 'Streaming',
-        'contentFeatures.dlna.org': 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000',
-        'Access-Control-Allow-Origin': '*'
-      };
-
-      if (req.method === 'HEAD') {
-        res.writeHead(200, { ...headers, 'Content-Length': totalSize });
-        res.end();
-        return;
-      }
-
-      if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
-        const chunkSize = (end - start) + 1;
-
-        res.writeHead(206, {
-          ...headers,
-          'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-          'Content-Length': chunkSize
-        });
-        res.end(dsfBuf.subarray(start, end + 1));
-      } else {
-        res.writeHead(200, { ...headers, 'Content-Length': totalSize });
-        res.end(dsfBuf);
-      }
-    } catch (err) {
-      console.error('[DLNA] handleDsdModulationStream error:', err);
-      if (!res.headersSent) {
-        res.writeHead(500);
-        res.end('DSD modulation error');
-      }
-    }
-  }
-
-  // Handle DSD (.dsf / .dff) on-the-fly decimation to 24-bit / 88.2 kHz WAV (Pure Native Engine)
-  handleDsdTranscodeStream(req, res, filePath, startSec = 0, track = null) {
-    const wavBuf = this.nativeAudioEngine.decimateDsfToWav(filePath, startSec);
-    if (!wavBuf) {
-      res.writeHead(500);
-      res.end('Native DSD decimation failed');
-      return;
-    }
-
-    const totalSize = wavBuf.length;
-    const range = req.headers.range;
-
-    const headers = {
-      'Content-Type': 'audio/wav',
-      'Accept-Ranges': 'bytes',
-      'Access-Control-Allow-Origin': '*',
-      'transferMode.dlna.org': 'Streaming',
-      'contentFeatures.dlna.org': 'DLNA.ORG_PN=WAV;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000'
-    };
-
-    if (req.method === 'HEAD') {
-      res.writeHead(200, { ...headers, 'Content-Length': totalSize });
-      res.end();
-      return;
-    }
-
-    if (range) {
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
-      const chunkSize = (end - start) + 1;
-
-      res.writeHead(206, {
-        ...headers,
-        'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-        'Content-Length': chunkSize
-      });
-      res.end(wavBuf.subarray(start, end + 1));
-    } else {
-      res.writeHead(200, { ...headers, 'Content-Length': totalSize });
-      res.end(wavBuf);
-    }
-  }
-
-  // Handle High-Res PCM Upsampling to 24-bit WAV (Pure Native Engine)
-  async handleSoxTranscodeStream(req, res, filePath, startSec = 0, sampleRate = 192000, precision = 24, dsdMode = '', track = null) {
-    try {
-      const pcm = await this.nativeAudioEngine.readPcmSamples(filePath, startSec);
-      if (!pcm) {
-        res.writeHead(500);
-        res.end('Native PCM read failed for upsampling');
-        return;
-      }
-
-      let outBuf = null;
-      let mime = 'audio/wav';
-
-      if (dsdMode) {
-        outBuf = this.nativeAudioEngine.encodeDsdDsf(pcm.left, pcm.right, pcm.sampleRate, dsdMode, 300);
-        mime = 'audio/x-dsf';
-      } else {
-        const up = this.nativeAudioEngine.upsampleHermite(pcm.left, pcm.right, pcm.sampleRate, sampleRate);
-        outBuf = this.nativeAudioEngine.encodeWav24(up.outL, up.outR, sampleRate);
-      }
-
-      const totalSize = outBuf.length;
-      const range = req.headers.range;
-
-      const headers = {
-        'Content-Type': mime,
-        'Accept-Ranges': 'bytes',
-        'Access-Control-Allow-Origin': '*',
-        'transferMode.dlna.org': 'Streaming',
-        'contentFeatures.dlna.org': 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000'
-      };
-
-      if (req.method === 'HEAD') {
-        res.writeHead(200, { ...headers, 'Content-Length': totalSize });
-        res.end();
-        return;
-      }
-
-      if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
-        const chunkSize = (end - start) + 1;
-
-        res.writeHead(206, {
-          ...headers,
-          'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-          'Content-Length': chunkSize
-        });
-        res.end(outBuf.subarray(start, end + 1));
-      } else {
-        res.writeHead(200, { ...headers, 'Content-Length': totalSize });
-        res.end(outBuf);
-      }
-    } catch (err) {
-      console.error('[DLNA] handleSoxTranscodeStream error:', err);
-      if (!res.headersSent) {
-        res.writeHead(500);
-        res.end('Upsample transcode error');
-      }
     }
   }
 
@@ -1091,12 +849,14 @@ class DlnaManager extends EventEmitter {
     const dev = this.devices.get(deviceId);
     if (!dev) return { success: false, error: 'DLNA Device not found' };
 
-    // 1. Immediately cancel any prior polling and kill any active transcode process
-    this.stopPositionPolling();
-    if (this.currentDsdProcess) {
-      try { this.currentDsdProcess.kill(); } catch (e) {}
-      this.currentDsdProcess = null;
+    // Every playback branch below needs a real local file to serve to the renderer.
+    // Fail cleanly instead of throwing a TypeError from path.extname(undefined).
+    if (!track.filePath || typeof track.filePath !== 'string') {
+      return { success: false, error: '音訊檔路徑未取得（來源尚未完成本機快取）' };
     }
+
+    // 1. Immediately cancel any prior polling state
+    this.stopPositionPolling();
 
     this.activeDeviceId = deviceId;
     this.currentTrack = track;
@@ -1173,7 +933,7 @@ class DlnaManager extends EventEmitter {
     } else if (isDsdUpsample) {
       if (isTv) {
         // Smart TV compatibility: TV cannot decode DSD bitstreams; provide High-Res 24-bit 96kHz WAV
-        const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, 96000, 24, track, dspOptions ? (dspOptions.filterPhase || 'linear') : 'linear');
+        const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, 96000, track, dspOptions ? (dspOptions.filterPhase || 'linear') : 'linear');
         this.currentStreamSession = session;
         activeFilePath = session.filePath;
         streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
@@ -1202,7 +962,7 @@ class DlnaManager extends EventEmitter {
       // PCM High-Res Progressive Upsampling to 24-bit WAV
       const targetRate = dspOptions.sampleRate || 192000;
       const filterPhase = dspOptions.filterPhase || 'linear';
-      const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, targetRate, dspOptions.precision || 24, track, filterPhase);
+      const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, targetRate, track, filterPhase);
       this.currentStreamSession = session;
       activeFilePath = session.filePath;
       streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
@@ -1392,7 +1152,7 @@ class DlnaManager extends EventEmitter {
       return { success: false, cancelled: true };
     }
 
-    // 5. If seeking needed on non-DSD/non-DSP file (since DSD & SoX stream handle -ss directly in FFmpeg)
+    // 5. If seeking needed on non-DSD/non-DSP file (since DSD & upsample streams bake the start offset directly in the native engine)
     if (startSec > 0 && !isNativeDsd && !isDsdUpsample && (!dspOptions || !dspOptions.enabled)) {
       await new Promise(r => setTimeout(r, 300));
       await this.seek(deviceId, startSec).catch(() => {});
@@ -1650,10 +1410,6 @@ class DlnaManager extends EventEmitter {
     }
     if (this.nativeDspStreamer) {
       try { this.nativeDspStreamer.destroy(); } catch (e) {}
-    }
-    if (this.currentDsdProcess) {
-      try { this.currentDsdProcess.kill(); } catch (e) {}
-      this.currentDsdProcess = null;
     }
 
     // Proactively send Stop command to active DLNA renderer so music does not keep playing on hardware device

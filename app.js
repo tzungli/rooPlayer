@@ -48,12 +48,11 @@ const state = {
       return {
         enabled: saved.enabled === true,
         rateMode: saved.rateMode || '4x',
-        precision: saved.precision || 24,
         dsdOrder: [2, 5, 7].includes(parseInt(saved.dsdOrder, 10)) ? parseInt(saved.dsdOrder, 10) : 5,
         filterPhase: ['linear', 'minimum', 'intermediate'].includes(saved.filterPhase) ? saved.filterPhase : 'linear'
       };
     } catch (e) {
-      return { enabled: false, rateMode: '4x', precision: 24, dsdOrder: 5, filterPhase: 'linear' };
+      return { enabled: false, rateMode: '4x', dsdOrder: 5, filterPhase: 'linear' };
     }
   })()
 };
@@ -4762,6 +4761,67 @@ function playTrackList(tracks, startIndex = 0) {
   playCurrentTrack();
 }
 
+// Background prefetch: proactively cache the next TIDAL tracks in the queue so that
+// track switching with DSP upsampling / DLNA starts from a warm cache instantly.
+let tidalPrefetchActive = false;
+function prefetchNextTidalTracks(count = 2) {
+  if (tidalPrefetchActive) return;
+  if (!window.electronAPI || !window.electronAPI.tidalCacheTrack) return;
+
+  const queue = state.queue || [];
+  const targets = [];
+  const pushTarget = (t) => {
+    if (t && t.isTidal && t.tidalId && !(t.filePath && String(t.filePath).endsWith('.flac')) && targets.length < count) {
+      targets.push(t);
+    }
+  };
+  if (state.isShuffle && state.shuffleOrder && state.shuffleOrder.length) {
+    for (let p = (state.shufflePointer || 0) + 1; p < state.shuffleOrder.length && targets.length < count; p++) {
+      pushTarget(queue[state.shuffleOrder[p]]);
+    }
+  } else {
+    for (let i = (state.currentTrackIndex || 0) + 1; i < queue.length && targets.length < count; i++) {
+      pushTarget(queue[i]);
+    }
+  }
+  if (!targets.length) return;
+
+  tidalPrefetchActive = true;
+  (async () => {
+    try {
+      for (const t of targets) {
+        try {
+          const cachedFast = await window.electronAPI.tidalCacheTrack(t.tidalId);
+          if (cachedFast) { t.filePath = cachedFast; continue; }
+          if (!t.streamUrl && window.tidalService) {
+            const quality = (state.dsp && state.dsp.enabled && state.activeAudioZone === 'local') ? 'HI_RES_LOSSLESS' : 'LOSSLESS';
+            const sInfo = await window.tidalService.getTrackStreamUrl(t.tidalId, quality);
+            if (sInfo && sInfo.url) {
+              t.streamUrl = sInfo.url;
+              if (sInfo.sampleRate) t.sampleRate = sInfo.sampleRate;
+              if (sInfo.bitDepth) t.bitDepth = sInfo.bitDepth;
+              t.formatName = 'FLAC';
+            }
+          }
+          if (t.streamUrl) {
+            const optionalInfo = (sInfo && sInfo.manifest) ? {
+              manifest: sInfo.manifest,
+              manifestMimeType: sInfo.manifestMimeType,
+              bitDepth: sInfo.bitDepth,
+              sampleRate: sInfo.sampleRate,
+              audioQuality: sInfo.audioQuality
+            } : undefined;
+            const cached = await window.electronAPI.tidalCacheTrack(t.tidalId, t.streamUrl, optionalInfo);
+            if (cached) t.filePath = cached;
+          }
+        } catch (_) {}
+      }
+    } finally {
+      tidalPrefetchActive = false;
+    }
+  })();
+}
+
 async function playCurrentTrack() {
   if (state.currentTrackIndex < 0 || state.currentTrackIndex >= state.queue.length) return;
   const track = state.queue[state.currentTrackIndex];
@@ -4841,25 +4901,66 @@ async function playCurrentTrack() {
 
     // Resolve TIDAL streamUrl and cache file for DLNA streaming
     if (track.isTidal) {
-      if (!track.streamUrl && window.tidalService) {
+      const tidalQuality = (state.dsp && state.dsp.enabled) ? 'HI_RES_LOSSLESS' : 'LOSSLESS';
+      let streamInfo = null;
+
+      // Fast path: file already cached on disk (or manifest already registered in the
+      // main process) — skip the TIDAL API + manifest round-trip entirely.
+      if (!track.filePath || !String(track.filePath).endsWith('.flac')) {
         try {
-          const sInfo = await window.tidalService.getTrackStreamUrl(track.tidalId);
-          if (sInfo && sInfo.url) {
-            track.streamUrl = sInfo.url;
-            if (sInfo.filePath) track.filePath = sInfo.filePath;
-            track.sampleRate = sInfo.sampleRate || 44100;
-            track.bitDepth = sInfo.bitDepth || 16;
+          const cachedFast = await window.electronAPI.tidalCacheTrack(track.tidalId);
+          if (cachedFast) track.filePath = cachedFast;
+        } catch (e) {
+          console.warn('[DLNA] TIDAL cache fast path failed:', e);
+        }
+      }
+
+      // Resolve a fresh stream info whenever the cache file is missing — even if a
+      // prefetch attempt already left a (possibly expired) streamUrl on this track.
+      if ((!track.streamUrl || !track.filePath || !String(track.filePath).endsWith('.flac')) && window.tidalService) {
+        playerArtist.textContent = `⏳ 正在取得 TIDAL 串流資訊...`;
+        try {
+          streamInfo = await window.tidalService.getTrackStreamUrl(track.tidalId, tidalQuality);
+          if (streamInfo && streamInfo.url) {
+            track.streamUrl = streamInfo.url;
+            if (streamInfo.filePath) track.filePath = streamInfo.filePath;
+            track.sampleRate = streamInfo.sampleRate || track.sampleRate || 44100;
+            track.bitDepth = streamInfo.bitDepth || track.bitDepth || 16;
             track.formatName = 'FLAC';
           }
         } catch (e) {
           console.warn('[DLNA] TIDAL stream resolve failed:', e);
         }
       }
-      if (track.streamUrl && !track.filePath && window.electronAPI && window.electronAPI.tidalCacheTrack) {
+
+      // Assemble the cache file, passing the freshly fetched manifest explicitly so the
+      // main process never depends on a previously registered (possibly stale) entry.
+      if (track.streamUrl && (!track.filePath || !String(track.filePath).endsWith('.flac'))) {
+        playerArtist.textContent = `⏳ 正在快取 TIDAL 曲目以供串流轉換...`;
+        const optionalInfo = (streamInfo && streamInfo.manifest) ? {
+          manifest: streamInfo.manifest,
+          manifestMimeType: streamInfo.manifestMimeType,
+          bitDepth: streamInfo.bitDepth,
+          sampleRate: streamInfo.sampleRate,
+          audioQuality: streamInfo.audioQuality
+        } : undefined;
         try {
-          const cached = await window.electronAPI.tidalCacheTrack(track.tidalId, track.streamUrl);
+          const cached = await window.electronAPI.tidalCacheTrack(track.tidalId, track.streamUrl, optionalInfo);
           if (cached) track.filePath = cached;
-        } catch (_) {}
+        } catch (e) {
+          console.warn('[DLNA] TIDAL cache assembly failed:', e);
+        }
+      }
+      playerArtist.textContent = `${track.artist} — ${track.album}`;
+
+      // No cached file = nothing the DLNA streaming server can serve; fail with a clear
+      // message instead of a cryptic "path argument must be of type string" TypeError.
+      if (!track.filePath || !String(track.filePath).endsWith('.flac')) {
+        showToast('❌ TIDAL 曲目快取失敗：無法取得音訊檔（請確認 TIDAL 登入狀態或稍後再試）');
+        state.isPlaying = false;
+        updatePlayPauseBtnUI();
+        updateQueueActiveItem();
+        return;
       }
     }
 
@@ -4878,7 +4979,6 @@ async function playCurrentTrack() {
       const dspOptions = state.dsp && state.dsp.enabled ? {
         enabled: true,
         sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-        precision: state.dsp.precision || 28,
         dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
         dsdOrder: state.dsp.dsdOrder || 5,
         filterPhase: state.dsp.filterPhase || 'linear'
@@ -4897,6 +4997,7 @@ async function playCurrentTrack() {
           } else {
             showToast(`📡 正在串流至 ${state.activeDlnaDevice.name}: ${track.title}`);
           }
+          prefetchNextTidalTracks();
         } else if (res && res.cancelled) {
           console.log('[DLNA] Play superseded by newer track selection');
         } else {
@@ -4929,6 +5030,25 @@ async function playCurrentTrack() {
     stopVirtualProgress();
     stopDemoSynth();
 
+    // Fast path for DSP upsampling: a cached local FLAC file needs no stream URL
+    // or TIDAL API round-trip — go straight into the progressive DSP session.
+    if (state.dsp && state.dsp.enabled && window.electronAPI && window.electronAPI.getSoxStreamUrl && window.electronAPI.tidalCacheTrack) {
+      if (!track.filePath || !String(track.filePath).endsWith('.flac')) {
+        try {
+          const cachedFast = await window.electronAPI.tidalCacheTrack(track.tidalId);
+          if (cachedFast) track.filePath = cachedFast;
+        } catch (_) {}
+      }
+      if (track.filePath && String(track.filePath).endsWith('.flac')) {
+        playerArtist.textContent = `⚡ 正在透過 DSP 升頻引擎調變 TIDAL 音訊...`;
+        await playSoxTrack(track, 0);
+        playerArtist.textContent = `${track.artist} — ${track.album}`;
+        if (track.duration) totalTimeLabel.textContent = formatDuration(track.duration);
+        prefetchNextTidalTracks();
+        return;
+      }
+    }
+
     playerArtist.textContent = `⏳ 正在連接 TIDAL Hi-Res 官方音訊串流...`;
 
     const getTidalStreamPromise = (track.streamUrl)
@@ -4953,9 +5073,28 @@ async function playCurrentTrack() {
       if (state.dsp && state.dsp.enabled && window.electronAPI && window.electronAPI.getSoxStreamUrl) {
         playerArtist.textContent = `⚡ 正在透過 DSP 升頻引擎調變 TIDAL 音訊...`;
         let cached = track.filePath;
+        const buildOptionalInfo = (srcInfo) => (srcInfo && srcInfo.manifest) ? {
+          manifest: srcInfo.manifest,
+          manifestMimeType: srcInfo.manifestMimeType,
+          bitDepth: srcInfo.bitDepth,
+          sampleRate: srcInfo.sampleRate,
+          audioQuality: srcInfo.audioQuality
+        } : undefined;
         if (!cached || !cached.endsWith('.flac')) {
           if (window.electronAPI.tidalCacheTrack) {
-            cached = await window.electronAPI.tidalCacheTrack(track.tidalId, track.streamUrl);
+            cached = await window.electronAPI.tidalCacheTrack(track.tidalId, track.streamUrl, buildOptionalInfo(info));
+          }
+          if (!cached && window.tidalService) {
+            // 舊 streamUrl 可能已過期：重新取得播放資訊並用新的 manifest 重組快取一次
+            try {
+              const freshInfo = await window.tidalService.getTrackStreamUrl(track.tidalId, 'HI_RES_LOSSLESS');
+              if (freshInfo && freshInfo.url) {
+                track.streamUrl = freshInfo.url;
+                cached = await window.electronAPI.tidalCacheTrack(track.tidalId, freshInfo.url, buildOptionalInfo(freshInfo));
+              }
+            } catch (e) {
+              console.warn('[TIDAL] Cache re-resolve failed:', e);
+            }
           }
         }
         if (cached) {
@@ -4963,6 +5102,7 @@ async function playCurrentTrack() {
           await playSoxTrack(track, 0);
           playerArtist.textContent = `${track.artist} — ${track.album}`;
           if (track.duration) totalTimeLabel.textContent = formatDuration(track.duration);
+          prefetchNextTidalTracks();
           return;
         }
       }
@@ -4978,6 +5118,7 @@ async function playCurrentTrack() {
         if (track.duration) totalTimeLabel.textContent = formatDuration(track.duration);
         const qLabel = (track.bitDepth === 24 || (track.sampleRate && track.sampleRate > 48000)) ? '24-bit Hi-Res' : '16-bit Lossless';
         showToast(`🎵 正在播放 TIDAL 原生串流: 《${track.title}》 [${qLabel}]`);
+        prefetchNextTidalTracks();
       });
     }).catch(err => {
       console.error('TIDAL stream play error:', err);
@@ -5184,13 +5325,12 @@ async function playSoxTrack(track, startSec = 0) {
     }
 
     const targetRate = calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode);
-    const precision = state.dsp.precision || 28;
     const isDsd = isDsdRateMode(state.dsp.rateMode);
     const dsdMode = isDsd ? state.dsp.rateMode : '';
     const dsdOrder = state.dsp.dsdOrder || 5;
     const filterPhase = state.dsp.filterPhase || 'linear';
 
-    const streamUrl = await window.electronAPI.getSoxStreamUrl(track.filePath, startSec, targetRate, precision, dsdMode, dsdOrder, filterPhase);
+    const streamUrl = await window.electronAPI.getSoxStreamUrl(track.filePath, startSec, targetRate, dsdMode, dsdOrder, filterPhase);
     if (!streamUrl) {
       playerArtist.textContent = '無法建立 SoX 升頻串流服務';
       return;
@@ -5265,13 +5405,11 @@ function updateSignalPathUI(track = null) {
   const dspSoxCard = document.querySelector('.dsp-sox-card');
   const dspActiveRateHint = document.getElementById('dspActiveRateHint');
   const dspActiveDsdHint = document.getElementById('dspActiveDsdHint');
-  const dspActivePrecisionHint = document.getElementById('dspActivePrecisionHint');
 
   if (toggleSoxDsp) toggleSoxDsp.checked = !!(state.dsp && state.dsp.enabled);
   if (dspSoxCard) dspSoxCard.classList.toggle('active', !!(state.dsp && state.dsp.enabled));
 
   const curRateMode = (state.dsp && state.dsp.rateMode) || '4x';
-  const curPrecision = (state.dsp && state.dsp.precision) || 24;
 
   // Clear pill active classes
   document.querySelectorAll('#dspRateSelector .dsp-pill, #dspDsdRateSelector .dsp-pill').forEach(p => p.classList.remove('active'));
@@ -5290,13 +5428,6 @@ function updateSignalPathUI(track = null) {
       if (dspActiveRateHint) dspActiveRateHint.textContent = ratePill.textContent;
       if (dspActiveDsdHint) dspActiveDsdHint.textContent = '可選 DSD 格式';
     }
-  }
-
-  const precPill = document.querySelector(`#dspPrecisionSelector .dsp-pill[data-precision="${curPrecision}"]`);
-  if (precPill) {
-    document.querySelectorAll('#dspPrecisionSelector .dsp-pill').forEach(p => p.classList.remove('active'));
-    precPill.classList.add('active');
-    if (dspActivePrecisionHint) dspActivePrecisionHint.textContent = `${curPrecision}-bit VHQ`;
   }
 
   const curOrder = state.dsp.dsdOrder || 5;
@@ -5392,7 +5523,7 @@ function updateSignalPathUI(track = null) {
       if (signalSoxArrow) signalSoxArrow.style.display = 'block';
       if (signalSoxStage) signalSoxStage.style.display = 'flex';
       if (signalSoxTitle) signalSoxTitle.textContent = `升頻引擎：SoX Resampler (${modeUpper})`;
-      if (signalSoxDesc) signalSoxDesc.textContent = `超取樣升頻規格：${srcKhz} ➔ 24-bit / ${targetKhz} (${state.dsp.precision}-bit VHQ • ${phaseDesc})`;
+      if (signalSoxDesc) signalSoxDesc.textContent = `超取樣升頻規格：${srcKhz} ➔ 24-bit / ${targetKhz} (${phaseDesc})`;
 
       if (engineTitle) engineTitle.textContent = 'rooPlayer Core Audio Engine';
       if (engineDesc) engineDesc.textContent = `64-bit 浮點即時超取樣升頻核心 (${phaseDesc}) ➔ 輸出至 24-bit ${targetKhz}`;
@@ -5452,12 +5583,10 @@ function initDspControls() {
   const dspDsdRateSelector = document.getElementById('dspDsdRateSelector');
   const dspOrderSelector = document.getElementById('dspOrderSelector');
   const dspPhaseSelector = document.getElementById('dspPhaseSelector');
-  const dspPrecisionSelector = document.getElementById('dspPrecisionSelector');
   const dspActiveRateHint = document.getElementById('dspActiveRateHint');
   const dspActiveDsdHint = document.getElementById('dspActiveDsdHint');
   const dspActiveOrderHint = document.getElementById('dspActiveOrderHint');
   const dspActivePhaseHint = document.getElementById('dspActivePhaseHint');
-  const dspActivePrecisionHint = document.getElementById('dspActivePrecisionHint');
 
   const triggerLiveDspUpdate = () => {
     updateSignalPathUI();
@@ -5469,7 +5598,6 @@ function initDspControls() {
           const dspOptions = {
             enabled: true,
             sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-            precision: state.dsp.precision,
             dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
             dsdOrder: state.dsp.dsdOrder || 5,
             filterPhase: state.dsp.filterPhase || 'linear'
@@ -5500,7 +5628,6 @@ function initDspControls() {
           const dspOptions = state.dsp.enabled ? {
             enabled: true,
             sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-            precision: state.dsp.precision,
             dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
             dsdOrder: state.dsp.dsdOrder || 5,
             filterPhase: state.dsp.filterPhase || 'linear'
@@ -5599,24 +5726,6 @@ function initDspControls() {
       state.dsp.filterPhase = phase;
       localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
       if (dspActivePhaseHint) dspActivePhaseHint.textContent = btn.textContent;
-      triggerLiveDspUpdate();
-    });
-  }
-
-  // Precision selection handler
-  if (dspPrecisionSelector) {
-    dspPrecisionSelector.addEventListener('click', (e) => {
-      const btn = e.target.closest('.dsp-pill');
-      if (!btn) return;
-      const prec = parseInt(btn.getAttribute('data-precision') || '28', 10);
-      if (!prec) return;
-
-      dspPrecisionSelector.querySelectorAll('.dsp-pill').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-
-      state.dsp.precision = prec;
-      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
-      if (dspActivePrecisionHint) dspActivePrecisionHint.textContent = `${prec}-bit VHQ`;
       triggerLiveDspUpdate();
     });
   }

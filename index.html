@@ -1289,7 +1289,7 @@
                 <p class="app-tagline">次世代發燒級數位音訊媒體庫與極致無損串流核心播放器</p>
                 <div class="app-meta-badges">
                   <span class="meta-badge">64-bit Floating Engine</span>
-                  <span class="meta-badge">SoX Resampler VHQ</span>
+                  <span class="meta-badge">SoX Resampler</span>
                   <span class="meta-badge">1-bit DSD SDM Modulator</span>
                   <span class="meta-badge">DLNA / UPnP Bit-Perfect</span>
                 </div>
@@ -1431,7 +1431,6 @@
                     <li><strong>右欄（升頻引擎設定）</strong>：
                       <br>• <strong>PCM 升頻</strong>：支援 2x、4x 整數倍頻（推薦相位最純淨）、固定 96k / 192k / 384k DXD 超取樣。
                       <br>• <strong>1-bit DSD 調變</strong>：內建 5 階高頻噪聲整形 Delta-Sigma 調變器，支援即時轉制為 DSD64 (2.8MHz)、DSD128 (5.6MHz)、DSD256 (11.2MHz) 或 DSD512 (22.5MHz)。
-                      <br>• <strong>濾波精度</strong>：支援 20-bit HQ、28-bit VHQ（極致發燒）至 33-bit Ultra 高精度計算。
                     </li>
                   </ul>
                 </div>
@@ -1835,10 +1834,10 @@
               <div class="stage-icon">🎛️</div>
               <div class="stage-info">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                  <div class="stage-title" id="signalSoxTitle">SoX Resampler (libsoxr VHQ)</div>
+                  <div class="stage-title" id="signalSoxTitle">SoX Resampler Engine</div>
                   <span class="stage-badge-dsp">DSP ACTIVE</span>
                 </div>
-                <div class="stage-desc" id="signalSoxDesc">28-bit VHQ 超高精度升頻：44.1 kHz ➔ 176.4 kHz (4x 整數倍頻)</div>
+                <div class="stage-desc" id="signalSoxDesc">高解析度即時升頻：44.1 kHz ➔ 176.4 kHz (4x 整數倍頻)</div>
               </div>
             </div>
 
@@ -1931,19 +1930,6 @@
                   <button class="dsp-pill active" data-phase="linear" title="線性相位 (Linear Phase)：零相位失真，對稱脈衝響應，定位精準">線性相位 (零相位失真)</button>
                   <button class="dsp-pill" data-phase="minimum" title="最小相位 (Minimum Phase)：零預響鈴 (No Pre-ringing)，打擊瞬態凌厲爆發">最小相位 (零預響鈴)</button>
                   <button class="dsp-pill" data-phase="intermediate" title="混和 / 緩衰減 (Intermediate Phase)：極低預響鈴與自然高頻緩衰，溫潤類比聽感">混和 / 緩衰減 (溫潤類比)</button>
-                </div>
-              </div>
-
-              <!-- Filter Precision Selection -->
-              <div class="dsp-option-group">
-                <div class="dsp-option-label">
-                  <span>濾波精度與噪聲整形 (Filter Precision / Noise Shaping)</span>
-                  <span class="dsp-hint-badge" id="dspActivePrecisionHint">28-bit VHQ</span>
-                </div>
-                <div class="dsp-pill-selector" id="dspPrecisionSelector">
-                  <button class="dsp-pill active" data-precision="28" title="SoX Very High Quality (28-bit，訊噪比高達 ~175 dB)">28-bit VHQ (極致發燒)</button>
-                  <button class="dsp-pill" data-precision="33" title="SoX Ultra Precision (33-bit 最高位元運算精度)">33-bit Ultra (最高位階)</button>
-                  <button class="dsp-pill" data-precision="20" title="SoX High Quality (20-bit 快速高解析)">20-bit HQ (標準高解析)</button>
                 </div>
               </div>
 

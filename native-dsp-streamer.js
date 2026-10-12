@@ -11,6 +11,7 @@ const stream = require('stream');
 const EventEmitter = require('events');
 const { Worker } = require('worker_threads');
 const nativeAudioEngine = require('./native-audio-engine');
+const { interpolateSample } = require('./dsp-kernel');
 
 // Progressive Streaming Reader with Backpressure Flow Control
 // Prevents downstream DLNA/UPnP renderers from reading unwritten / zero-padded blocks
@@ -99,35 +100,6 @@ class ProgressiveFileStream extends stream.Readable {
   }
 }
 
-// Filter Phase Interpolation Kernel (Linear, Minimum, Intermediate / Slow Roll-off)
-function interpolateSample(p0, p1, p2, p3, t, phase = 'linear') {
-  if (phase === 'minimum') {
-    const d0 = p1 - p0;
-    const d1 = p2 - p1;
-    const y = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
-    return Math.max(-1.0, Math.min(1.0, y));
-  }
-  const t2 = t * t;
-  const t3 = t2 * t;
-  const h00 = 2 * t3 - 3 * t2 + 1;
-  const h10 = t3 - 2 * t2 + t;
-  const h01 = -2 * t3 + 3 * t2;
-  const h11 = t3 - t2;
-  const m1 = 0.5 * (p2 - p0);
-  const m2 = 0.5 * (p3 - p1);
-  const yLin = h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2;
-
-  if (phase === 'intermediate') {
-    const d0 = p1 - p0;
-    const d1 = p2 - p1;
-    const yMin = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
-    const y = 0.35 * yLin + 0.65 * yMin;
-    return Math.max(-1.0, Math.min(1.0, y));
-  }
-
-  return Math.max(-1.0, Math.min(1.0, yLin));
-}
-
 class NativeDspStreamer {
   constructor() {
     this.cacheDir = path.join(os.tmpdir(), 'rooplayer_dsp_cache');
@@ -180,7 +152,11 @@ class NativeDspStreamer {
       workerData: {
         tmpFile,
         leftBuffer: pcm.left.buffer,
+        leftByteOffset: pcm.left.byteOffset,
+        leftLength: pcm.left.length,
         rightBuffer: pcm.right.buffer,
+        rightByteOffset: pcm.right.byteOffset,
+        rightLength: pcm.right.length,
         sampleRate: pcm.sampleRate,
         dsdMode,
         dsdOrder,
@@ -230,7 +206,7 @@ class NativeDspStreamer {
   }
 
   // Create progressive streaming session for High-Res PCM Upsampling (WAV format)
-  async createPcmSession(token, filePath, startSec = 0, targetSampleRate = 192000, precision = 24, track = null, filterPhase = 'linear') {
+  async createPcmSession(token, filePath, startSec = 0, targetSampleRate = 192000, track = null, filterPhase = 'linear') {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.wav`);

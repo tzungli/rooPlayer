@@ -6,45 +6,16 @@
  * 
  * 功能涵蓋：
  * 1. 原始音訊格式剖析 (WAV / AIFF / DSF / DFF)
- * 2. 64-bit 浮點多相高階三次 Hermite 升頻超取樣濾波器 (44.1k/48k ➔ 88.2k/96k/176.4k/192k/352.8k/384k)
- * 3. 5階高頻噪聲整形 1-bit Delta-Sigma 調變器 (PCM ➔ DSD64 / DSD128 / DSD256 / DSD512)
- * 4. 92-byte 標準 Sony DSF 容器動態即時封裝
- * 5. Native DSD 降採樣 (Decimation) 為 24-bit / 88.2kHz WAV 串流
- * 6. 標準 24-bit PCM WAV 串流即時生成
+ * 2. 通用 PCM 樣本讀取 (WAV / AIFF / FLAC WASM 解碼)
+ * 3. Native DSD 降採樣 (Decimation) 為 24-bit / 88.2kHz WAV 串流
+ *
+ * 註：升頻插值濾波器與 1-bit Delta-Sigma 調變器已集中至 dsp-kernel.js，
+ *     由漸進式串流引擎 (native-dsp-streamer) 與 DSD 調變 worker 共同使用。
  */
 
 const fs = require('fs');
 const path = require('path');
 const { FLACDecoder } = require('@wasm-audio-decoders/flac');
-
-// Filter Phase Interpolation Kernel (Linear, Minimum, Intermediate / Slow Roll-off)
-function interpolateSample(p0, p1, p2, p3, t, phase = 'linear') {
-  if (phase === 'minimum') {
-    const d0 = p1 - p0;
-    const d1 = p2 - p1;
-    const y = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
-    return Math.max(-1.0, Math.min(1.0, y));
-  }
-  const t2 = t * t;
-  const t3 = t2 * t;
-  const h00 = 2 * t3 - 3 * t2 + 1;
-  const h10 = t3 - 2 * t2 + t;
-  const h01 = -2 * t3 + 3 * t2;
-  const h11 = t3 - t2;
-  const m1 = 0.5 * (p2 - p0);
-  const m2 = 0.5 * (p3 - p1);
-  const yLin = h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2;
-
-  if (phase === 'intermediate') {
-    const d0 = p1 - p0;
-    const d1 = p2 - p1;
-    const yMin = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
-    const y = 0.35 * yLin + 0.65 * yMin;
-    return Math.max(-1.0, Math.min(1.0, y));
-  }
-
-  return Math.max(-1.0, Math.min(1.0, yLin));
-}
 
 class NativeAudioEngine {
   constructor() {
@@ -197,8 +168,152 @@ class NativeAudioEngine {
   }
 
   // ----------------------------------------------------
+  // 3b. 剖析 DFF (DSDIFF / DSTFF) 格式結構 (取得 DSD 時脈與樣本總數)
+  // ----------------------------------------------------
+  parseDff(filePath) {
+    const fd = fs.openSync(filePath, 'r');
+    let bytesRead = 0;
+    const headerBuf = Buffer.alloc(4096);
+    try {
+      bytesRead = fs.readSync(fd, headerBuf, 0, 4096, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (bytesRead < 16) return null;
+
+    if (headerBuf.slice(0, 4).toString() !== 'FORM') return null;
+    const formType = headerBuf.slice(8, 12).toString();
+    if (formType !== 'DSD ' && formType !== 'DSDF') return null;
+
+    let dsdRate = 0;
+    let sampleCount = 0;
+    let channels = 0;
+
+    // DSDIFF chunk 結構：4-byte ID + 4-byte 大端序 size，chunk 長度以偶數對齊。
+    // 音訊屬性 (FSCH 取樣時脈 / NSCH 聲道數 / NSCP 樣本總數) 位於巢狀 FORM 'SND ' 容器內。
+    const walk = (start, end) => {
+      let offset = start;
+      while (offset + 8 <= end) {
+        const id = headerBuf.slice(offset, offset + 4).toString();
+        const size = headerBuf.readUInt32BE(offset + 4);
+        const dataStart = offset + 8;
+        if (size > end - dataStart) break;
+
+        if (id === 'FSCH' && size >= 4) {
+          dsdRate = headerBuf.readUInt32BE(dataStart);
+        } else if (id === 'NSCP' && size >= 6) {
+          let count = 0n;
+          for (let i = 0; i < 6; i++) count = (count << 8n) | BigInt(headerBuf[dataStart + i]);
+          sampleCount = Number(count);
+        } else if (id === 'NSCH' && size >= 1) {
+          channels = headerBuf.readUInt8(dataStart);
+        } else if (id === 'FORM') {
+          const nestedType = headerBuf.slice(dataStart, dataStart + 4).toString();
+          if (nestedType === 'SND ' || nestedType === 'DIIN') {
+            walk(dataStart + 4, dataStart + size);
+          }
+        }
+
+        offset = dataStart + size + (size % 2);
+      }
+    };
+    walk(12, bytesRead);
+
+    if (!dsdRate || !sampleCount) return null;
+    return {
+      type: 'dff',
+      dsdRate,
+      channels: channels || 2,
+      sampleCount
+    };
+  }
+
+  // ----------------------------------------------------
+  // 3b. FLAC in ISOBMFF / CMAF 解封裝 (TIDAL DASH 串流)
+  // TIDAL 部分曲目的 DASH 以 fragmented MP4 容器封裝 FLAC 取樣
+  // (ftyp + moov[stsd 'fLaC' 樣本入口內嵌 STREAMINFO] + moof/mdat...)。
+  // 還原為標準 raw FLAC 位元組流：'fLaC' + STREAMINFO + 全部 mdat FLAC 幀。
+  // ----------------------------------------------------
+  isIsoBmff(fileBuf) {
+    return fileBuf.length > 12 && fileBuf.toString('ascii', 4, 8) === 'ftyp';
+  }
+
+  extractFlacFromIsoBmff(fileBuf) {
+    const boxAt = (off) => {
+      let size = fileBuf.readUInt32BE(off);
+      let headerSize = 8;
+      if (size === 1) {
+        if (off + 16 > fileBuf.length) return null;
+        size = Number(fileBuf.readBigUInt64BE(off + 8));
+        headerSize = 16;
+      } else if (size === 0) {
+        size = fileBuf.length - off;
+      }
+      if (size < headerSize || off + size > fileBuf.length) return null;
+      return { size, headerSize, type: fileBuf.toString('ascii', off + 4, off + 8) };
+    };
+
+    // Descend moov container chain to stsd, locate the embedded STREAMINFO
+    // metadata block (last-flag block type 0, size 0x22 = 34 bytes) inside
+    // the 'fLaC' sample entry (TIDAL embeds it via a dfLa box).
+    let streamInfoBlock = null;
+    const walkMoov = (off, end) => {
+      while (off + 8 <= end && !streamInfoBlock) {
+        const box = boxAt(off);
+        if (!box) break;
+        if (box.type === 'trak' || box.type === 'mdia' || box.type === 'minf' || box.type === 'stbl') {
+          walkMoov(off + box.headerSize, off + box.size);
+        } else if (box.type === 'stsd') {
+          const entryCount = fileBuf.readUInt32BE(off + 12);
+          let eo = off + 16;
+          for (let i = 0; i < entryCount && eo + 8 <= off + box.size; i++) {
+            const esize = fileBuf.readUInt32BE(eo);
+            if (esize < 8) break;
+            const fourcc = fileBuf.toString('ascii', eo + 4, eo + 8);
+            if (fourcc === 'fLaC') {
+              for (let p = eo + 8; p + 38 <= eo + esize; p++) {
+                if (fileBuf[p] === 0x80 && fileBuf[p + 1] === 0x00 && fileBuf[p + 2] === 0x00 && fileBuf[p + 3] === 0x22) {
+                  streamInfoBlock = Buffer.from(fileBuf.subarray(p, p + 38));
+                  break;
+                }
+              }
+            }
+            eo += esize;
+          }
+        }
+        off += box.size;
+      }
+    };
+
+    // Collect every top-level mdat payload in file (decode) order
+    const mdatPayloads = [];
+    let off = 0;
+    while (off + 8 <= fileBuf.length) {
+      const box = boxAt(off);
+      if (!box) break;
+      if (box.type === 'moov') {
+        walkMoov(off + box.headerSize, off + box.size);
+      } else if (box.type === 'mdat') {
+        mdatPayloads.push(fileBuf.subarray(off + box.headerSize, off + box.size));
+      }
+      off += box.size;
+    }
+
+    if (!mdatPayloads.length) return null;
+
+    // FLAC frames carry full sync codes (0xFFF8); the embedded STREAMINFO is
+    // mandatory for frames that inherit sample size / sample rate from it.
+    if (!streamInfoBlock) {
+      console.error('[NativeAudioEngine] CMAF FLAC container: embedded STREAMINFO not found in fLaC sample entry');
+      return null;
+    }
+
+    return Buffer.concat([Buffer.from('fLaC', 'ascii'), streamInfoBlock, ...mdatPayloads]);
+  }
+
+  // ----------------------------------------------------
   // 4. 通用 PCM 檔案讀取器 (解出正規化 -1.0 ~ +1.0 Float32Array 左右雙聲道)
-  // 支援 WAV, AIFF 及 FLAC (透過高效能 WASM libFLAC 解碼)
+  // 支援 WAV, AIFF 及 FLAC (透過高效能 WASM libFLAC 解碼，含 TIDAL CMAF 容器)
   // ----------------------------------------------------
   async readPcmSamples(filePath, startSec = 0, maxDurationSec = 600) {
     const ext = path.extname(filePath).toLowerCase();
@@ -208,7 +323,18 @@ class NativeAudioEngine {
       const decoder = new FLACDecoder();
       try {
         await decoder.ready;
-        const fileBuf = fs.readFileSync(filePath);
+        let fileBuf = fs.readFileSync(filePath);
+
+        // TIDAL DASH CMAF: FLAC samples inside a fragmented MP4 container
+        if (this.isIsoBmff(fileBuf)) {
+          const extracted = this.extractFlacFromIsoBmff(fileBuf);
+          if (!extracted) {
+            try { decoder.free(); } catch (e) {}
+            return null;
+          }
+          fileBuf = extracted;
+        }
+
         const decoded = await decoder.decodeFile(fileBuf);
         if (!decoded || !decoded.channelData || decoded.channelData.length === 0) {
           try { decoder.free(); } catch (e) {}
@@ -313,259 +439,7 @@ class NativeAudioEngine {
   }
 
   // ----------------------------------------------------
-  // 5. 64-bit 浮點多相高階超取樣升頻器 (支援線性相位、最小相位、混和緩衰減)
-  // ----------------------------------------------------
-  upsampleHermite(left, right, srcRate, dstRate, filterPhase = 'linear') {
-    if (srcRate === dstRate) {
-      return { outL: left, outR: right, dstRate };
-    }
-
-    const ratio = dstRate / srcRate;
-    const inLen = left.length;
-    const outLen = Math.floor(inLen * ratio);
-    const outL = new Float32Array(outLen);
-    const outR = new Float32Array(outLen);
-
-    for (let i = 0; i < outLen; i++) {
-      const pos = i / ratio;
-      const idx = Math.floor(pos);
-      const t = pos - idx;
-
-      const idx0 = Math.max(0, idx - 1);
-      const idx1 = Math.min(inLen - 1, idx);
-      const idx2 = Math.min(inLen - 1, idx + 1);
-      const idx3 = Math.min(inLen - 1, idx + 2);
-
-      outL[i] = interpolateSample(left[idx0], left[idx1], left[idx2], left[idx3], t, filterPhase);
-      outR[i] = interpolateSample(right[idx0], right[idx1], right[idx2], right[idx3], t, filterPhase);
-    }
-
-    return { outL, outR, dstRate };
-  }
-
-  // ----------------------------------------------------
-  // 6. 生成 24-bit PCM WAV 緩衝區 (提供給原生瀏覽器或 DLNA FLAC/WAV 直播)
-  // ----------------------------------------------------
-  encodeWav24(left, right, sampleRate) {
-    const frameCount = left.length;
-    const numChannels = 2;
-    const bytesPerSample = 3;
-    const blockAlign = numChannels * bytesPerSample;
-    const dataSize = frameCount * blockAlign;
-    const totalSize = 44 + dataSize;
-    const buf = Buffer.alloc(totalSize);
-
-    buf.write('RIFF', 0);
-    buf.writeUInt32LE(36 + dataSize, 4);
-    buf.write('WAVE', 8);
-    buf.write('fmt ', 12);
-    buf.writeUInt32LE(16, 16);
-    buf.writeUInt16LE(1, 20); // PCM Format
-    buf.writeUInt16LE(numChannels, 22);
-    buf.writeUInt32LE(sampleRate, 24);
-    buf.writeUInt32LE(sampleRate * blockAlign, 28);
-    buf.writeUInt16LE(blockAlign, 32);
-    buf.writeUInt16LE(24, 34); // 24-bit
-    buf.write('data', 36);
-    buf.writeUInt32LE(dataSize, 40);
-
-    let offset = 44;
-    const maxVal = 8388607;
-    for (let i = 0; i < frameCount; i++) {
-      const valL = Math.max(-maxVal, Math.min(maxVal, Math.round(left[i] * maxVal)));
-      const valR = Math.max(-maxVal, Math.min(maxVal, Math.round(right[i] * maxVal)));
-      buf.writeIntLE(valL, offset, 3);
-      buf.writeIntLE(valR, offset + 3, 3);
-      offset += 6;
-    }
-
-    return buf;
-  }
-
-  // ----------------------------------------------------
-  // 7. 高頻噪聲整形 1-bit Delta-Sigma Modulator (PCM ➔ DSD DSF)
-  // ----------------------------------------------------
-  encodeDsdDsf(left, right, srcRate, dsdMode = 'dsd64', maxDurationSec = 300, dsdOrder = 5, filterPhase = 'linear') {
-    const mode = (dsdMode || 'dsd64').toLowerCase();
-    const order = [2, 5, 7].includes(parseInt(dsdOrder, 10)) ? parseInt(dsdOrder, 10) : 5;
-    const phase = ['linear', 'minimum', 'intermediate'].includes(filterPhase) ? filterPhase : 'linear';
-
-    let dsdRate = 2822400; // Standard Sony DSD64 (44.1kHz * 64)
-    if (mode === 'dsd128') dsdRate = 5644800; // Standard DSD128 (44.1kHz * 128)
-    else if (mode === 'dsd256') dsdRate = 11289600; // Standard DSD256 (44.1kHz * 256)
-    else if (mode === 'dsd512') dsdRate = 22579200; // Standard DSD512 (44.1kHz * 512)
-
-    const maxFrames = Math.floor(maxDurationSec * srcRate);
-    const inLen = Math.min(left.length, maxFrames);
-    const ratio = dsdRate / srcRate;
-    const invRatio = 1.0 / ratio;
-    const outBits = Math.floor(inLen * ratio);
-
-    const blockSize = 4096; // 4096 bytes = 32768 1-bit samples per channel block
-    const samplesPerBlock = blockSize * 8;
-    const totalBlocks = Math.ceil(outBits / samplesPerBlock);
-    const totalSamplesPerChannel = totalBlocks * samplesPerBlock;
-    const totalDataBytes = totalBlocks * 2 * blockSize;
-    const totalFileBytes = 92 + totalDataBytes;
-
-    const buf = Buffer.alloc(totalFileBytes);
-    let off = 0;
-
-    // DSF Header (92 bytes)
-    // 1. 'DSD ' Chunk (28 bytes)
-    buf.write('DSD ', off); off += 4;
-    buf.writeBigUInt64LE(28n, off); off += 8;
-    buf.writeBigUInt64LE(BigInt(totalFileBytes), off); off += 8;
-    buf.writeBigUInt64LE(0n, off); off += 8;
-
-    // 2. 'fmt ' Chunk (52 bytes)
-    buf.write('fmt ', off); off += 4;
-    buf.writeBigUInt64LE(52n, off); off += 8;
-    buf.writeUInt32LE(1, off); off += 4; // Format version = 1
-    buf.writeUInt32LE(0, off); off += 4; // Format ID = 0 (DSD raw)
-    buf.writeUInt32LE(2, off); off += 4; // Channel Type = 2 (stereo)
-    buf.writeUInt32LE(2, off); off += 4; // Channels = 2
-    buf.writeUInt32LE(dsdRate, off); off += 4; // Sample Rate
-    buf.writeUInt32LE(1, off); off += 4; // Bits per sample = 1
-    buf.writeBigUInt64LE(BigInt(totalSamplesPerChannel), off); off += 8;
-    buf.writeUInt32LE(blockSize, off); off += 4; // Block size = 4096
-    buf.writeUInt32LE(0, off); off += 4; // Reserved
-
-    // 3. 'data' Chunk (12 bytes)
-    buf.write('data', off); off += 4;
-    buf.writeBigUInt64LE(BigInt(12 + totalDataBytes), off); off += 8;
-
-    // Modulator States
-    let s1_L = 0, s2_L = 0, y_L = 0;
-    let s1_R = 0, s2_R = 0, y_R = 0;
-    let s3_L = 0, s4_L = 0, s5_L = 0, s6_L = 0, s7_L = 0;
-    let s3_R = 0, s4_R = 0, s5_R = 0, s6_R = 0, s7_R = 0;
-
-    for (let b = 0; b < totalBlocks; b++) {
-      const leftBlockOffset = 92 + b * 2 * blockSize;
-      const rightBlockOffset = leftBlockOffset + blockSize;
-      const startSampleIdx = b * samplesPerBlock;
-
-      for (let byteIdx = 0; byteIdx < blockSize; byteIdx++) {
-        let byteValL = 0;
-        let byteValR = 0;
-        const baseSample = startSampleIdx + (byteIdx << 3);
-
-        for (let bit = 0; bit < 8; bit++) {
-          const outIdx = baseSample + bit;
-          const pos = outIdx * invRatio;
-          const idx = pos | 0;
-          const t = pos - idx;
-
-          const p0L = idx > 0 ? left[idx - 1] : left[0];
-          const p1L = idx < inLen ? left[idx] : 0;
-          const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
-          const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
-          const rawL = interpolateSample(p0L, p1L, p2L, p3L, t, phase);
-
-          const p0R = idx > 0 ? right[idx - 1] : right[0];
-          const p1R = idx < inLen ? right[idx] : 0;
-          const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
-          const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
-          const rawR = interpolateSample(p0R, p1R, p2R, p3R, t, phase);
-
-          if (order === 2) {
-            const uL = rawL * 0.75;
-            s1_L += uL - y_L;
-            if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
-            s2_L += s1_L - 0.5 * y_L;
-            if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
-            y_L = (s2_L >= 0) ? 1.0 : -1.0;
-            if (y_L > 0) byteValL |= (1 << bit);
-
-            const uR = rawR * 0.75;
-            s1_R += uR - y_R;
-            if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
-            s2_R += s1_R - 0.5 * y_R;
-            if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
-            y_R = (s2_R >= 0) ? 1.0 : -1.0;
-            if (y_R > 0) byteValR |= (1 << bit);
-          } else if (order === 5) {
-            const uL = rawL * 0.65;
-            s1_L += uL - y_L - 0.0006 * s2_L;
-            if (s1_L > 3.5) s1_L = 3.5; else if (s1_L < -3.5) s1_L = -3.5;
-            s2_L += s1_L;
-            if (s2_L > 3.5) s2_L = 3.5; else if (s2_L < -3.5) s2_L = -3.5;
-            s3_L += s2_L - 0.5 * y_L - 0.0018 * s4_L;
-            if (s3_L > 3.5) s3_L = 3.5; else if (s3_L < -3.5) s3_L = -3.5;
-            s4_L += s3_L;
-            if (s4_L > 3.5) s4_L = 3.5; else if (s4_L < -3.5) s4_L = -3.5;
-            s5_L += s4_L - 0.25 * y_L;
-            if (s5_L > 3.5) s5_L = 3.5; else if (s5_L < -3.5) s5_L = -3.5;
-            const sigma_L = s5_L + 0.1 * s3_L + 0.05 * s1_L;
-            y_L = (sigma_L >= 0) ? 1.0 : -1.0;
-            if (y_L > 0) byteValL |= (1 << bit);
-
-            const uR = rawR * 0.65;
-            s1_R += uR - y_R - 0.0006 * s2_R;
-            if (s1_R > 3.5) s1_R = 3.5; else if (s1_R < -3.5) s1_R = -3.5;
-            s2_R += s1_R;
-            if (s2_R > 3.5) s2_R = 3.5; else if (s2_R < -3.5) s2_R = -3.5;
-            s3_R += s2_R - 0.5 * y_R - 0.0018 * s4_R;
-            if (s3_R > 3.5) s3_R = 3.5; else if (s3_R < -3.5) s3_R = -3.5;
-            s4_R += s3_R;
-            if (s4_R > 3.5) s4_R = 3.5; else if (s4_R < -3.5) s4_R = -3.5;
-            s5_R += s4_R - 0.25 * y_R;
-            if (s5_R > 3.5) s5_R = 3.5; else if (s5_R < -3.5) s5_R = -3.5;
-            const sigma_R = s5_R + 0.1 * s3_R + 0.05 * s1_R;
-            y_R = (sigma_R >= 0) ? 1.0 : -1.0;
-            if (y_R > 0) byteValR |= (1 << bit);
-          } else {
-            const uL = rawL * 0.55;
-            s1_L += uL - y_L - 0.0003 * s2_L;
-            if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
-            s2_L += s1_L;
-            if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
-            s3_L += s2_L - 0.5 * y_L - 0.0010 * s4_L;
-            if (s3_L > 3.0) s3_L = 3.0; else if (s3_L < -3.0) s3_L = -3.0;
-            s4_L += s3_L;
-            if (s4_L > 3.0) s4_L = 3.0; else if (s4_L < -3.0) s4_L = -3.0;
-            s5_L += s4_L - 0.25 * y_L - 0.0022 * s6_L;
-            if (s5_L > 3.0) s5_L = 3.0; else if (s5_L < -3.0) s5_L = -3.0;
-            s6_L += s5_L;
-            if (s6_L > 3.0) s6_L = 3.0; else if (s6_L < -3.0) s6_L = -3.0;
-            s7_L += s6_L - 0.1 * y_L;
-            if (s7_L > 3.0) s7_L = 3.0; else if (s7_L < -3.0) s7_L = -3.0;
-            const sigma_L = s7_L + 0.08 * s5_L + 0.04 * s3_L + 0.02 * s1_L;
-            y_L = (sigma_L >= 0) ? 1.0 : -1.0;
-            if (y_L > 0) byteValL |= (1 << bit);
-
-            const uR = rawR * 0.55;
-            s1_R += uR - y_R - 0.0003 * s2_R;
-            if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
-            s2_R += s1_R;
-            if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
-            s3_R += s2_R - 0.5 * y_R - 0.0010 * s4_R;
-            if (s3_R > 3.0) s3_R = 3.0; else if (s3_R < -3.0) s3_R = -3.0;
-            s4_R += s3_R;
-            if (s4_R > 3.0) s4_R = 3.0; else if (s4_R < -3.0) s4_R = -3.0;
-            s5_R += s4_R - 0.25 * y_R - 0.0022 * s6_R;
-            if (s5_R > 3.0) s5_R = 3.0; else if (s5_R < -3.0) s5_R = -3.0;
-            s6_R += s5_R;
-            if (s6_R > 3.0) s6_R = 3.0; else if (s6_R < -3.0) s6_R = -3.0;
-            s7_R += s6_R - 0.1 * y_R;
-            if (s7_R > 3.0) s7_R = 3.0; else if (s7_R < -3.0) s7_R = -3.0;
-            const sigma_R = s7_R + 0.08 * s5_R + 0.04 * s3_R + 0.02 * s1_R;
-            y_R = (sigma_R >= 0) ? 1.0 : -1.0;
-            if (y_R > 0) byteValR |= (1 << bit);
-          }
-        }
-
-        buf[leftBlockOffset + byteIdx] = byteValL;
-        buf[rightBlockOffset + byteIdx] = byteValR;
-      }
-    }
-
-    return buf;
-  }
-
-  // ----------------------------------------------------
-  // 8. Native DSF Decimation 降採樣為 24-bit / 88.2kHz WAV 緩衝區
+  // 5. Native DSF Decimation 降採樣為 24-bit / 88.2kHz WAV 緩衝區
   // ----------------------------------------------------
   decimateDsfToWav(filePath, startSec = 0, maxDurationSec = 600) {
     const dsfInfo = this.parseDsf(filePath);
