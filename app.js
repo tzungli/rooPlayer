@@ -3596,118 +3596,90 @@ function renderAlbumMetadata(album) {
   if (!metaGrid) return;
 
   // Extract initial values from album and track objects
-  let artist = isUnknownArtist(album.artist) ? '正在線上查找歌手...' : (album.artist || '各種演出者');
-  let year = album.year ? `${album.year} 年` : (album.date ? `${album.date.slice(0, 4)} 年` : '未載明');
-  let releaseDate = album.date || (album.year ? `${album.year} 年` : '未載明');
-  let genre = album.genre || '未分類風格';
+  let year = '未載明';
+  if (album.year) {
+    year = String(album.year).includes('年') ? String(album.year) : `${album.year} 年`;
+  } else if (album.date) {
+    const rawY = String(album.date).slice(0, 4);
+    if (rawY && !isNaN(rawY)) year = `${rawY} 年`;
+  }
+
   let label = album.label || null;
-  let producer = album.producer || null;
-  let composer = album.composer || null;
-  let copyright = album.copyright || null;
+  if (!label && album.copyright) {
+    const clean = album.copyright.replace(/^[℗©pPcC0-9\s,\.\-]+/, '').replace(/(under exclusive license to|licensed to|a division of).*$/i, '').trim();
+    if (clean && clean.length > 2) label = clean;
+  }
 
   (album.tracks || []).forEach(t => {
     if (!label && t.label) label = t.label;
-    if (!producer && t.producer) producer = t.producer;
-    if (!composer && t.composer) composer = t.composer;
-    if (!copyright && t.copyright) copyright = t.copyright;
-    if ((!releaseDate || releaseDate === '未載明') && t.date) releaseDate = t.date;
+    if (!label && t.copyright) {
+      const clean = t.copyright.replace(/^[℗©pPcC0-9\s,\.\-]+/, '').replace(/(under exclusive license to|licensed to|a division of).*$/i, '').trim();
+      if (clean && clean.length > 2) label = clean;
+    }
+    if ((!year || year === '未載明') && (t.year || t.date)) {
+      const yVal = t.year || t.date;
+      const rawY = String(yVal).slice(0, 4);
+      if (rawY && !isNaN(rawY)) year = `${rawY} 年`;
+    }
   });
-
-  const firstTrack = (album.tracks && album.tracks[0]) || {};
-  const rawPath = firstTrack.filePath || firstTrack.fileName || album.filePath || '';
-  const ext = getAudioFormatFromPath(rawPath, album.formatName || 'PCM').toUpperCase();
-  const isDsd = ext === 'DSF' || ext === 'DFF' || ext === 'DSD';
-  let specsText = '';
-  if (isDsd) {
-    const dsdMhz = album.sampleRate ? `${(album.sampleRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
-    specsText = `DSD ${dsdMhz} 1-bit Direct Stream Digital (無損母帶)`;
-  } else {
-    const bitDepth = album.bitsPerSample || firstTrack.bitsPerSample || 16;
-    const sampleRateKhz = formatKhz(album.sampleRate || firstTrack.sampleRate || 44100);
-    const isLossless = album.isLossless || ['WAV', 'FLAC', 'AIFF', 'ALAC', 'APE'].includes(ext);
-    specsText = `${ext} ${bitDepth}-bit / ${sampleRateKhz} ${isLossless ? '發燒無損母帶' : '數位音訊'}`;
-  }
 
   const trackCount = (album.tracks && Array.isArray(album.tracks)) ? album.tracks.length : (album.numberOfTracks || 0);
   const tracksDurationText = (album.tracks && album.tracks.length)
     ? `${album.tracks.length} 首歌曲 • ${formatTotalAlbumDuration(album.tracks)}`
     : `${trackCount} 首歌曲`;
 
-  function buildGridHtml(curArtist, curProducer, curReleaseDate, curLabel, curGenre, curComposer, curSpecs, curTracksDur, curCopyright, hasOnlineData) {
+  function buildGridHtml(curLabel, curYear, curTracksDur, hasOnlineData) {
     if (sourceBadge) {
-      sourceBadge.textContent = hasOnlineData ? '母帶標籤與線上音樂資料庫 (已同步)' : '本機母帶音訊元資料';
+      sourceBadge.textContent = hasOnlineData ? '線上資料庫已同步' : '音訊元資料';
       sourceBadge.style.background = hasOnlineData ? 'rgba(16, 185, 129, 0.15)' : 'rgba(59, 130, 246, 0.15)';
       sourceBadge.style.color = hasOnlineData ? '#34d399' : '#60a5fa';
       sourceBadge.style.borderColor = hasOnlineData ? 'rgba(16, 185, 129, 0.3)' : 'rgba(59, 130, 246, 0.3)';
     }
 
-    let html = `
+    return `
       <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">🎤</span> 主要歌手 / 演出者</div>
-        <div class="meta-value accent">${escapeXml(curArtist)}</div>
-      </div>
-      <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">🎛️</span> 專輯製作人 / 混音</div>
-        <div class="meta-value" id="metaProducerVal">${escapeXml(curProducer || '母帶檔案未載明 (依專輯製作群)')}</div>
-      </div>
-      <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">📅</span> 發行年份 / 發行日期</div>
-        <div class="meta-value" id="metaDateVal">${escapeXml(curReleaseDate)}</div>
-      </div>
-      <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">🏢</span> 發行公司 / 唱片廠牌</div>
+        <div class="meta-icon-label"><span class="meta-icon">🏢</span> 發行公司</div>
         <div class="meta-value" id="metaLabelVal">${escapeXml(curLabel || '獨立發行 / 未標記廠牌')}</div>
       </div>
       <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">🏷️</span> 音樂風格 / 曲風</div>
-        <div class="meta-value">${escapeXml(curGenre)}</div>
+        <div class="meta-icon-label"><span class="meta-icon">📅</span> 發行年份</div>
+        <div class="meta-value" id="metaDateVal">${escapeXml(curYear)}</div>
       </div>
       <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">🎼</span> 作曲 / 詞曲創作</div>
-        <div class="meta-value" id="metaComposerVal">${escapeXml(curComposer || curArtist)}</div>
-      </div>
-      <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">🔊</span> 錄音規格 / 取樣率</div>
-        <div class="meta-value">${escapeXml(curSpecs)}</div>
-      </div>
-      <div class="meta-card">
-        <div class="meta-icon-label"><span class="meta-icon">⏱️</span> 曲目總數與總時長</div>
+        <div class="meta-icon-label"><span class="meta-icon">⏱️</span> 總曲目與總時長</div>
         <div class="meta-value">${escapeXml(curTracksDur)}</div>
       </div>
     `;
-
-    if (curCopyright) {
-      html += `
-        <div class="meta-card meta-card-wide">
-          <div class="meta-icon-label"><span class="meta-icon">📜</span> 版權宣告與出版型號 (Copyright & Publishing)</div>
-          <div class="meta-value" id="metaCopyrightVal" style="font-weight: 400; font-size: 13px; color: var(--text-sub);">${escapeXml(curCopyright)}</div>
-        </div>
-      `;
-    }
-    return html;
   }
 
   // Render initially with local metadata
-  metaGrid.innerHTML = buildGridHtml(artist, producer, releaseDate, label, genre, composer, specsText, tracksDurationText, copyright, false);
+  metaGrid.innerHTML = buildGridHtml(label, year, tracksDurationText, false);
 
-  // Background fetch online enrichment if producer, label, copyright, or releaseDate is missing
-  if (!producer || !label || !copyright || releaseDate === '未載明') {
+  // Background fetch online enrichment if label or year is missing
+  if (!label || year === '未載明') {
     fetchOnlineAlbumCredits(album).then(onlineCredits => {
       if (state.activeAlbumDetail && state.activeAlbumDetail.title === album.title && state.activeAlbumDetail.artist === album.artist) {
         let hasUpdated = false;
-        if (!producer && onlineCredits.producer) { producer = onlineCredits.producer; hasUpdated = true; }
-        if (!label && onlineCredits.label) { label = onlineCredits.label; hasUpdated = true; }
-        if ((!releaseDate || releaseDate === '未載明') && onlineCredits.releaseDate) { releaseDate = onlineCredits.releaseDate; hasUpdated = true; }
-        if (!copyright && onlineCredits.copyright) { copyright = onlineCredits.copyright; hasUpdated = true; }
-        if (!composer && onlineCredits.composer) { composer = onlineCredits.composer; hasUpdated = true; }
+        if (!label && onlineCredits.label) {
+          label = onlineCredits.label;
+          hasUpdated = true;
+        }
+        if ((!year || year === '未載明') && onlineCredits.releaseDate) {
+          const parsedYear = String(onlineCredits.releaseDate).slice(0, 4);
+          if (parsedYear && !isNaN(parsedYear)) {
+            year = `${parsedYear} 年`;
+            hasUpdated = true;
+          }
+        }
 
         if (hasUpdated) {
-          metaGrid.innerHTML = buildGridHtml(artist, producer, releaseDate, label, genre, composer, specsText, tracksDurationText, copyright, true);
+          metaGrid.innerHTML = buildGridHtml(label, year, tracksDurationText, true);
         }
       }
     }).catch(() => {});
   }
 }
+
 
 // ----------------- Album Recommendations Engine (Metadata-driven) -----------------
 function renderAlbumRecommendations(album) {

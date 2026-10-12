@@ -1611,8 +1611,8 @@ body.table-col-resizing * {
 }
 
 .album-header-credits-wrap .album-meta-grid {
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 10px 16px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 18px;
   margin-top: 6px;
 }
 

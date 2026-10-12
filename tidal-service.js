@@ -467,7 +467,9 @@ class TidalService {
       audioQuality: quality,
       qualityLabel: qualityLabel,
       type: a.type || 'ALBUM',
-      mediaMetadata: a.mediaMetadata
+      mediaMetadata: a.mediaMetadata,
+      copyright: a.copyright || '',
+      label: a.copyright ? a.copyright.replace(/^[℗©pPcC0-9\s,\.\-]+/, '').replace(/(under exclusive license to|licensed to|a division of).*$/i, '').trim() : ''
     };
   }
 }
