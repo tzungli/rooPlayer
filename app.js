@@ -24,7 +24,7 @@ const state = {
   activeGenreFilter: null,
   recentlyPlayedAlbums: [],
   activeFilter: 'all',
-  sortBy: 'title',
+  sortBy: 'added',
   trackSortBy: 'default',
   history: ['overview'],
   historyIndex: 0,
@@ -1980,7 +1980,14 @@ function renderAlbums() {
   }
 
   // Sort
-  if (state.sortBy === 'title') {
+  if (state.sortBy === 'added') {
+    filtered.sort((a, b) => {
+      const aTime = a.addedAt || 0;
+      const bTime = b.addedAt || 0;
+      if (bTime !== aTime) return bTime - aTime;
+      return (a.title || '').localeCompare(b.title || '');
+    });
+  } else if (state.sortBy === 'title') {
     filtered.sort((a, b) => a.title.localeCompare(b.title));
   } else if (state.sortBy === 'artist') {
     filtered.sort((a, b) => a.artist.localeCompare(b.artist));

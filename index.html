@@ -14,7 +14,6 @@
       <div class="brand">
         <img src="icon.png" alt="rooPlayer" class="brand-app-icon" style="width: 22px; height: 22px; border-radius: 5px; object-fit: cover; box-shadow: 0 0 8px rgba(124, 58, 237, 0.4);">
         <span class="brand-text">rooPlayer</span>
-        <span class="brand-badge">CORE • LOCAL</span>
       </div>
       <div class="history-nav">
         <button id="btnNavBack" class="icon-btn" title="返回">❮</button>
@@ -303,6 +302,7 @@
               <button class="pill" data-filter="recent">最近新增</button>
             </div>
             <select id="albumSortSelect" class="select-dropdown">
+              <option value="added" selected>依新增順序排列</option>
               <option value="title">依專輯名稱 A-Z</option>
               <option value="artist">依演出者 A-Z</option>
               <option value="year">依發行年份 (新到舊)</option>
@@ -859,17 +859,6 @@
                 <span class="kkbox-badge-name">KKBOX</span>
                 <span class="kkbox-badge-tag">STREAMING EXPLORER</span>
               </div>
-              <div class="kkbox-view-switcher">
-                <button class="kkbox-switch-btn active" id="btnKkboxTabCharts" title="瀏覽 KKBOX 即時熱門排行榜">
-                  🏆 即時排行榜
-                </button>
-                <button class="kkbox-switch-btn" id="btnKkboxTabFeatured" title="探索 KKBOX 官方精選推薦歌單">
-                  ✨ 精選推薦
-                </button>
-                <button class="kkbox-switch-btn" id="btnKkboxTabNewHits" title="發現 KKBOX 速爆最新發行歌曲">
-                  🆕 新歌速爆
-                </button>
-              </div>
             </div>
 
             <div class="kkbox-header-right">
@@ -880,6 +869,21 @@
               </div>
               <button class="btn btn-sm btn-kkbox-login" id="btnOpenKkboxLoginModal" title="KKBOX 帳號連線資訊">
                 🔑 KKBOX 帳號
+              </button>
+            </div>
+          </div>
+
+          <!-- KKBOX Sub-Navigation Bar (獨立分頁導覽欄，比照 TIDAL 佈局) -->
+          <div class="kkbox-subnav-bar">
+            <div class="kkbox-subnav-tabs">
+              <button class="kkbox-subnav-tab kkbox-switch-btn active" id="btnKkboxTabCharts" title="瀏覽 KKBOX 即時熱門排行榜">
+                🏆 即時排行榜
+              </button>
+              <button class="kkbox-subnav-tab kkbox-switch-btn" id="btnKkboxTabFeatured" title="探索 KKBOX 官方精選推薦歌單">
+                ✨ 精選推薦
+              </button>
+              <button class="kkbox-subnav-tab kkbox-switch-btn" id="btnKkboxTabNewHits" title="發現 KKBOX 速爆最新發行歌曲">
+                🆕 新歌速爆
               </button>
             </div>
           </div>
