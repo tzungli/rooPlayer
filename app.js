@@ -2093,16 +2093,48 @@ function createAlbumCard(album) {
 function createArtistCard(art) {
   const card = document.createElement('div');
   card.className = 'artist-card';
-  const initial = art.name.charAt(0).toUpperCase();
+  const initial = (art.name || '?').charAt(0).toUpperCase();
   const isFav = isArtistFavorite(art.name);
+
+  let subText = '';
+  if (art.albums && typeof art.albums.size === 'number') {
+    const trkLen = (art.tracks && art.tracks.length) || 0;
+    subText = `${art.albums.size} 張專輯 • ${trkLen} 首曲目`;
+  } else if (art.albums && Array.isArray(art.albums)) {
+    const trkLen = (art.tracks && art.tracks.length) || 0;
+    subText = `${art.albums.length} 張專輯 • ${trkLen} 首曲目`;
+  } else if (art.albumCount) {
+    subText = art.albumCount;
+  } else if (art.isTidal) {
+    subText = 'TIDAL 推薦藝人';
+  } else {
+    subText = '演出者';
+  }
+
+  let avatarHtml = `<div class="artist-avatar">${initial}</div>`;
+  if (art.picture && window.tidalService) {
+    const picUrl = window.tidalService.getCoverUrl(art.picture, 320);
+    if (picUrl) {
+      avatarHtml = `
+        <div class="artist-avatar" style="overflow: hidden; background: #27272a;">
+          <img src="${picUrl}" alt="${escapeXml(art.name)}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block;" onerror="this.style.display='none';this.parentElement.textContent='${initial}';">
+        </div>
+      `;
+    }
+  }
+
+  const tidalBadgeHtml = art.isTidal 
+    ? '<span class="platform-chip tidal" style="position:absolute;bottom:2px;right:2px;font-size:9px;padding:1px 6px;background:#000;color:#00e5ff;border:1px solid #00e5ff;border-radius:10px;font-weight:700;">TIDAL</span>'
+    : '';
 
   card.innerHTML = `
     <div class="artist-avatar-wrap">
-      <div class="artist-avatar">${initial}</div>
+      ${avatarHtml}
       <button class="artist-fav-btn ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛演出者' : '加入最愛演出者'}">${getStarSvg(isFav, 14)}</button>
+      ${tidalBadgeHtml}
     </div>
     <div class="artist-name">${escapeXml(art.name)}</div>
-    <div class="artist-sub">${art.albums.size} 張專輯 • ${art.tracks.length} 首曲目</div>
+    <div class="artist-sub">${escapeXml(subText)}</div>
   `;
   card.addEventListener('click', (e) => {
     if (e.target.closest('.artist-fav-btn')) {
@@ -3655,7 +3687,54 @@ function renderAlbumMetadata(album) {
 }
 
 
-// ----------------- Album Recommendations Engine (Metadata-driven) -----------------
+// ----------------- Album Recommendations Card Component -----------------
+function createRecommendAlbumCard(alb, reason) {
+  const card = document.createElement('div');
+  card.className = 'recommend-card';
+
+  const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
+  const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
+
+  let specLabel = '';
+  if (alb.isTidal) {
+    const isHiRes = alb.audioQuality === 'HI_RES_LOSSLESS' || alb.audioQuality === 'HIRES' || (alb.mediaMetadata?.tags?.includes('HIRES_LOSSLESS'));
+    specLabel = isHiRes ? 'TIDAL MAX 24b' : 'TIDAL FLAC 16b';
+  } else {
+    const firstTrk = (alb.tracks && alb.tracks[0]) || {};
+    const albFmt = getAudioFormatFromPath(firstTrk.filePath || firstTrk.fileName || alb.filePath, alb.formatName || 'PCM').toUpperCase();
+    const isAlbDsd = albFmt === 'DSF' || albFmt === 'DFF' || albFmt === 'DSD';
+    const sampleKhz = formatKhz(alb.sampleRate || firstTrk.sampleRate || 44100);
+    const bitDepth = alb.bitsPerSample || firstTrk.bitsPerSample || (isAlbDsd ? 1 : 16);
+    specLabel = isAlbDsd ? `DSD 1b/${sampleKhz}` : `${albFmt} ${bitDepth}b/${sampleKhz}`;
+  }
+
+  const tidalBadgeHtml = alb.isTidal 
+    ? '<span class="recommend-tidal-pill">TIDAL</span>'
+    : '';
+
+  card.innerHTML = `
+    <div class="recommend-art-wrap" style="position: relative;">
+      <img src="${coverSrc}" class="recommend-card-art" alt="${escapeXml(alb.title)}" loading="lazy" onerror="this.onerror=null;this.src='${defaultCover}';">
+      <span class="recommend-badge-pill">${escapeXml(reason)}</span>
+      ${tidalBadgeHtml}
+    </div>
+    <div class="recommend-title" title="${escapeXml(alb.title)}">${escapeXml(alb.title)}</div>
+    <div class="recommend-artist" title="${escapeXml(alb.artist)}">${escapeXml(alb.artist)}</div>
+    <div class="recommend-meta">
+      <span>${alb.year || alb.genre || ''}</span>
+      <span class="format-chip" style="font-size: 9px; padding: 1px 5px; ${alb.isTidal ? 'background: rgba(0, 229, 255, 0.12); color: #00e5ff; border-color: rgba(0, 229, 255, 0.3);' : ''}">${specLabel}</span>
+    </div>
+  `;
+
+  card.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openAlbumDetail(alb);
+  });
+
+  return card;
+}
+
+// ----------------- Album Recommendations Engine (Metadata-driven + TIDAL) -----------------
 function renderAlbumRecommendations(album) {
   const container = document.getElementById('albumRecommendationsGrid');
   const countBadge = document.getElementById('recommendCountBadge');
@@ -3686,12 +3765,12 @@ function renderAlbumRecommendations(album) {
 
   const candidates = (state.albums || []).filter(cand => {
     // Exclude current album
-    const isSameTitle = cand.title.toLowerCase().trim() === album.title.toLowerCase().trim();
-    const isSameArtist = cand.artist.toLowerCase().trim() === album.artist.toLowerCase().trim();
+    const isSameTitle = (cand.title || '').toLowerCase().trim() === (album.title || '').toLowerCase().trim();
+    const isSameArtist = (cand.artist || '').toLowerCase().trim() === (album.artist || '').toLowerCase().trim();
     return !(isSameTitle && isSameArtist);
   });
 
-  // Calculate similarity scores
+  // Calculate similarity scores for local library albums
   const scored = candidates.map(cand => {
     let score = 0;
     let reason = '精選推薦';
@@ -3724,7 +3803,7 @@ function renderAlbumRecommendations(album) {
     }
 
     // 2. Same Artist Bonus
-    if (cand.artist.toLowerCase().trim() === album.artist.toLowerCase().trim()) {
+    if ((cand.artist || '').toLowerCase().trim() === (album.artist || '').toLowerCase().trim()) {
       score += 50;
       if (score < 100) reason = `同為 ${album.artist} 作品`;
     }
@@ -3757,58 +3836,100 @@ function renderAlbumRecommendations(album) {
   // Sort descending by score
   scored.sort((a, b) => b.score - a.score);
 
-  // Take top recommended albums
-  const recommendations = scored.slice(0, 5);
+  // Take top local recommended albums (up to 4)
+  const localRecommendations = scored.slice(0, 4);
 
-  if (countBadge) {
-    countBadge.textContent = `${recommendations.length} 張推薦`;
-  }
+  const displayedTitles = new Set();
+  displayedTitles.add((album.title || '').toLowerCase().trim());
 
-  if (recommendations.length === 0) {
+  localRecommendations.forEach(item => {
+    displayedTitles.add((item.album.title || '').toLowerCase().trim());
+    container.appendChild(createRecommendAlbumCard(item.album, item.reason));
+  });
+
+  const isTidalLoggedIn = window.tidalService && window.tidalService.isLoggedIn;
+
+  if (localRecommendations.length === 0 && !isTidalLoggedIn) {
     const empty = document.createElement('div');
     empty.className = 'recommend-empty-hint';
     empty.textContent = `目前本機音樂庫中暫無其他 ${currentGenre || '同類型'} 專輯，在「資料夾」加入更多音樂目錄即可自動擴充風格比對推薦！`;
     container.appendChild(empty);
-    return;
+  } else if (countBadge) {
+    countBadge.textContent = `${localRecommendations.length} 張推薦`;
   }
 
-  recommendations.forEach(item => {
-    const alb = item.album;
-    const card = document.createElement('div');
-    card.className = 'recommend-card';
+  // 5. Enrich with online TIDAL albums if logged in
+  if (isTidalLoggedIn) {
+    const searchPromises = [];
+    const curArtistName = (album.artist || '').trim();
 
-    const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
-    const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
-    const firstTrk = (alb.tracks && alb.tracks[0]) || {};
-    const albFmt = getAudioFormatFromPath(firstTrk.filePath || firstTrk.fileName || alb.filePath, alb.formatName || 'PCM').toUpperCase();
-    const isAlbDsd = albFmt === 'DSF' || albFmt === 'DFF' || albFmt === 'DSD';
-    const sampleKhz = formatKhz(alb.sampleRate || firstTrk.sampleRate || 44100);
-    const bitDepth = alb.bitsPerSample || firstTrk.bitsPerSample || (isAlbDsd ? 1 : 16);
-    const specLabel = isAlbDsd ? `DSD 1b/${sampleKhz}` : `${albFmt} ${bitDepth}b/${sampleKhz}`;
+    if (curArtistName && !isUnknownArtist(curArtistName)) {
+      searchPromises.push(
+        window.tidalService.search(curArtistName, 8)
+          .then(res => ({ type: 'artist', albums: res?.albums || [] }))
+          .catch(() => ({ type: 'artist', albums: [] }))
+      );
+    }
 
-    card.innerHTML = `
-      <div class="recommend-art-wrap">
-        <img src="${coverSrc}" class="recommend-card-art" alt="${escapeXml(alb.title)}" loading="lazy" onerror="this.onerror=null;this.src='${defaultCover}';">
-        <span class="recommend-badge-pill">${escapeXml(item.reason)}</span>
-      </div>
-      <div class="recommend-title" title="${escapeXml(alb.title)}">${escapeXml(alb.title)}</div>
-      <div class="recommend-artist" title="${escapeXml(alb.artist)}">${escapeXml(alb.artist)}</div>
-      <div class="recommend-meta">
-        <span>${alb.year || alb.genre || ''}</span>
-        <span class="format-chip" style="font-size: 9px; padding: 1px 5px;">${specLabel}</span>
-      </div>
-    `;
+    if (currentGenre && currentGenre !== 'Various') {
+      searchPromises.push(
+        window.tidalService.search(currentGenre, 8)
+          .then(res => ({ type: 'genre', albums: res?.albums || [] }))
+          .catch(() => ({ type: 'genre', albums: [] }))
+      );
+    }
 
-    card.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openAlbumDetail(alb);
+    Promise.all(searchPromises).then(results => {
+      if (state.activeAlbumDetail !== album) return;
+
+      const tidalCandidates = [];
+      results.forEach(res => {
+        (res.albums || []).forEach(tAlb => {
+          if (!tAlb || !tAlb.title) return;
+          const normTitle = (tAlb.title || '').toLowerCase().trim();
+          if (displayedTitles.has(normTitle)) return;
+          displayedTitles.add(normTitle);
+
+          let reason = 'TIDAL 發燒精選';
+          if (res.type === 'artist' || (tAlb.artist || '').toLowerCase().trim() === curArtistName.toLowerCase().trim()) {
+            reason = `同為 ${curArtistName} (TIDAL)`;
+          } else if (currentGenre && currentGenre !== 'Various') {
+            reason = `TIDAL ${currentGenre} 精選`;
+          }
+          tidalCandidates.push({ album: tAlb, reason });
+        });
+      });
+
+      const selectedTidal = tidalCandidates.slice(0, 5);
+      if (selectedTidal.length > 0) {
+        const emptyHint = container.querySelector('.recommend-empty-hint');
+        if (emptyHint) emptyHint.remove();
+
+        selectedTidal.forEach(item => {
+          container.appendChild(createRecommendAlbumCard(item.album, item.reason));
+        });
+      }
+
+      const totalCount = container.querySelectorAll('.recommend-card').length;
+      if (countBadge) {
+        countBadge.textContent = selectedTidal.length > 0 
+          ? `${totalCount} 張推薦 (含 TIDAL)` 
+          : `${totalCount} 張推薦`;
+      }
+
+      if (totalCount === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'recommend-empty-hint';
+        empty.textContent = `暫無其他 ${currentGenre || '同類型'} 專輯推薦。`;
+        container.appendChild(empty);
+      }
+    }).catch(err => {
+      console.warn('TIDAL album recommendations fetch error:', err);
     });
-
-    container.appendChild(card);
-  });
+  }
 }
 
-// ----------------- Recommended Artists Engine (Genre-based Random Sampling) -----------------
+// ----------------- Recommended Artists Engine (Genre-based + TIDAL) -----------------
 function renderAlbumArtistRecommendations(album) {
   const container = document.getElementById('albumArtistRecommendationsGrid');
   const countBadge = document.getElementById('recommendArtistCountBadge');
@@ -3852,15 +3973,12 @@ function renderAlbumArtistRecommendations(album) {
   const otherArtists = [];
 
   candidateArtists.forEach(art => {
-    // Collect all genre tokens and raw genre strings across artist's tracks and albums
     let hasGenreMatch = false;
     const artTracks = art.tracks || [];
     const artAlbums = state.albums.filter(a => (a.artist || '').toLowerCase().trim() === art.name.toLowerCase().trim());
 
-    // Check with matchItemGenre first (handles classical, jazz, rock, pop, vocal, etc.)
     if (currentGenre && currentGenre !== 'Various') {
       if (matchItemGenre({ genre: currentGenre, artist: art.name }, currentGenre)) {
-        // check if artist's albums/tracks match
         const anyMatch = artAlbums.some(a => matchItemGenre(a, currentGenre)) || artTracks.some(t => matchItemGenre(t, currentGenre));
         if (anyMatch) hasGenreMatch = true;
       }
@@ -3899,31 +4017,110 @@ function renderAlbumArtistRecommendations(album) {
   let chosenArtists = [];
   if (matchingArtists.length > 0) {
     const shuffledMatching = shuffleArray(matchingArtists);
-    chosenArtists = shuffledMatching.slice(0, 6);
+    chosenArtists = shuffledMatching.slice(0, 4);
   }
 
   // Fallback: if not enough matching artists, fill with random artists
-  if (chosenArtists.length < 6 && otherArtists.length > 0) {
+  if (chosenArtists.length < 4 && otherArtists.length > 0) {
     const shuffledOthers = shuffleArray(otherArtists);
-    const needed = 6 - chosenArtists.length;
+    const needed = 4 - chosenArtists.length;
     chosenArtists.push(...shuffledOthers.slice(0, needed));
   }
 
-  if (countBadge) {
-    countBadge.textContent = `${chosenArtists.length} 位推薦`;
-  }
+  const seenArtistNames = new Set();
+  if (curArtist) seenArtistNames.add(curArtist);
 
-  if (chosenArtists.length === 0) {
+  chosenArtists.forEach(art => {
+    seenArtistNames.add((art.name || '').toLowerCase().trim());
+    container.appendChild(createArtistCard(art));
+  });
+
+  const isTidalLoggedIn = window.tidalService && window.tidalService.isLoggedIn;
+
+  if (chosenArtists.length === 0 && !isTidalLoggedIn) {
     const empty = document.createElement('div');
     empty.className = 'recommend-empty-hint';
     empty.textContent = `目前本機音樂庫中暫無其他 ${currentGenre || '同類型'} 演出者，匯入更多演出者作品即可自動擴充風格比對推薦！`;
     container.appendChild(empty);
-    return;
+  } else if (countBadge) {
+    countBadge.textContent = `${chosenArtists.length} 位推薦`;
   }
 
-  chosenArtists.forEach(art => {
-    container.appendChild(createArtistCard(art));
-  });
+  // Enrich with online TIDAL artists if logged in
+  if (isTidalLoggedIn) {
+    const artistPromises = [];
+    const curArtistName = (album.artist || '').trim();
+
+    if (curArtistName && !isUnknownArtist(curArtistName)) {
+      artistPromises.push(
+        window.tidalService.searchArtist(curArtistName)
+          .then(artObj => artObj?.id ? window.tidalService.getSimilarArtists(artObj.id, 8) : [])
+          .catch(() => [])
+      );
+      artistPromises.push(
+        window.tidalService.search(curArtistName, 6)
+          .then(res => res?.artists || [])
+          .catch(() => [])
+      );
+    }
+
+    if (currentGenre && currentGenre !== 'Various') {
+      artistPromises.push(
+        window.tidalService.search(currentGenre, 8)
+          .then(res => res?.artists || [])
+          .catch(() => [])
+      );
+    }
+
+    Promise.all(artistPromises).then(results => {
+      if (state.activeAlbumDetail !== album) return;
+
+      const allTidalArtists = results.flat();
+      const tidalArtists = [];
+
+      allTidalArtists.forEach(ta => {
+        if (!ta || !ta.name) return;
+        const normA = ta.name.toLowerCase().trim();
+        if (!normA || seenArtistNames.has(normA) || isUnknownArtist(normA)) return;
+        seenArtistNames.add(normA);
+
+        tidalArtists.push({
+          id: `tidal_art_${ta.id}`,
+          tidalId: ta.id,
+          name: ta.name,
+          picture: ta.picture,
+          isTidal: true,
+          albumCount: currentGenre && currentGenre !== 'Various' ? `TIDAL ${currentGenre} 藝人` : 'TIDAL 推薦藝人'
+        });
+      });
+
+      const selectedTidalArtists = tidalArtists.slice(0, 5);
+      if (selectedTidalArtists.length > 0) {
+        const emptyHint = container.querySelector('.recommend-empty-hint');
+        if (emptyHint) emptyHint.remove();
+
+        selectedTidalArtists.forEach(art => {
+          container.appendChild(createArtistCard(art));
+        });
+      }
+
+      const totalArtists = container.querySelectorAll('.artist-card').length;
+      if (countBadge) {
+        countBadge.textContent = selectedTidalArtists.length > 0
+          ? `${totalArtists} 位推薦 (含 TIDAL)`
+          : `${totalArtists} 位推薦`;
+      }
+
+      if (totalArtists === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'recommend-empty-hint';
+        empty.textContent = `暫無其他 ${currentGenre || '同類型'} 演出者推薦。`;
+        container.appendChild(empty);
+      }
+    }).catch(err => {
+      console.warn('TIDAL artist recommendations fetch error:', err);
+    });
+  }
 }
 
 function renderDetailTracklist(album) {

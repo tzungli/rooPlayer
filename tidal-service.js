@@ -221,6 +221,16 @@ class TidalService {
     return res.albums || [];
   }
 
+  async getSimilarArtists(artistId, limit = 10) {
+    if (!artistId) return [];
+    try {
+      const res = await this.api(`/artists/${artistId}/similar`, { limit });
+      return (res && res.items) ? res.items : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   // ==========================================================
   // User Collection (Favorites & Playlists)
   // ==========================================================
