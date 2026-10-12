@@ -428,18 +428,25 @@
               <div class="detail-tag">ALBUM</div>
               <h1 class="detail-title" id="detailTitle">Album Title</h1>
               <div class="detail-artist" id="detailArtist">Artist Name</div>
-              <div class="detail-specs" id="detailSpecs">
-                <span class="spec-chip" id="detailFormatSpec">24-bit / 96kHz Lossless</span>
-                <span class="spec-chip" id="detailChannelsSpec">2 Channels (Stereo)</span>
-                <span class="spec-chip" id="detailGenre">Classical</span>
-              </div>
-              <div class="detail-actions">
+
+              <div class="detail-actions" style="margin-bottom: 14px;">
                 <button class="btn btn-primary" id="btnPlayAlbumNow">▶ 播放專輯</button>
                 <button class="btn btn-secondary" id="btnShuffleAlbum">🔀 隨機播放</button>
                 <button class="btn btn-secondary" id="btnFavAlbumDetail"><svg class="fav-svg-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> <span>加入最愛專輯</span></button>
                 <button class="btn btn-secondary" id="btnTidalLibraryToggle" style="display: none;">
                   <span id="btnTidalLibraryToggleIcon">➕</span> <span id="btnTidalLibraryToggleText">加入曲庫</span>
                 </button>
+              </div>
+
+              <!-- 專輯製作資訊與母帶元資料 (整合至封面右側) -->
+              <div class="album-header-credits-wrap" id="albumHeaderCreditsWrap">
+                <div class="album-header-credits-header">
+                  <span class="credits-header-title">📀 專輯製作與規格 Credits & Specs</span>
+                  <span class="metadata-source-badge" id="albumMetaSourceBadge">Audio Metadata</span>
+                </div>
+                <div class="album-meta-grid" id="albumMetaGrid">
+                  <!-- Injected via JS -->
+                </div>
               </div>
             </div>
           </div>
@@ -497,19 +504,6 @@
                 <!-- Injected via JS -->
               </tbody>
             </table>
-          </div>
-
-          <!-- 專輯元資料與製作資訊 (Album Credits & Metadata) -->
-          <div class="album-metadata-section" id="albumMetadataSection">
-            <div class="section-header" style="margin-bottom: 12px;">
-              <div class="header-with-tag">
-                <h3 style="font-size: 16px;">📀 專輯元資料與製作資訊 Album Credits & Metadata</h3>
-                <span class="metadata-source-badge" id="albumMetaSourceBadge">Audio Metadata</span>
-              </div>
-            </div>
-            <div class="album-meta-grid" id="albumMetaGrid">
-              <!-- Injected via JS -->
-            </div>
           </div>
 
           <!-- 同類型推薦專輯 (由歌曲 meta 資料判斷) -->
@@ -1014,17 +1008,6 @@
                 <span class="tidal-badge-name">TIDAL</span>
                 <span class="tidal-badge-tag">HI-RES EXPLORER</span>
               </div>
-              <div class="tidal-view-switcher">
-                <button class="tidal-switch-btn active" id="btnTidalTabFeatured" title="探索 TIDAL 官方推薦與發燒母帶">
-                  💎 發燒推薦
-                </button>
-                <button class="tidal-switch-btn" id="btnTidalTabNewReleases" title="最新發行 Hi-Res 專輯">
-                  🆕 最新發行
-                </button>
-                <button class="tidal-switch-btn" id="btnTidalTabCollection" title="瀏覽我的 TIDAL 雲端最愛收藏">
-                  ❤️ 我的收藏
-                </button>
-              </div>
             </div>
 
             <div class="tidal-header-right">
@@ -1035,6 +1018,24 @@
               </div>
               <button class="btn btn-sm btn-tidal-account" id="btnOpenTidalAccount" title="TIDAL 帳號與連線資訊">
                 💎 TIDAL 帳號
+              </button>
+            </div>
+          </div>
+
+          <!-- TIDAL Sub-Navigation Bar (獨立分頁導覽欄，免除擠壓跳行) -->
+          <div class="tidal-subnav-bar">
+            <div class="tidal-subnav-tabs">
+              <button class="tidal-subnav-tab active" id="btnTidalTabFeatured" title="探索 TIDAL 官方推薦與發燒母帶">
+                💎 發燒推薦
+              </button>
+              <button class="tidal-subnav-tab" id="btnTidalTabNewReleases" title="最新發行 Hi-Res 專輯">
+                🆕 最新發行
+              </button>
+              <button class="tidal-subnav-tab" id="btnTidalTabOfficialPlaylists" title="TIDAL 官方主題與發燒評測播放清單">
+                📑 官方歌單
+              </button>
+              <button class="tidal-subnav-tab" id="btnTidalTabCollection" title="瀏覽我的 TIDAL 雲端最愛收藏">
+                ❤️ 我的收藏
               </button>
             </div>
           </div>
@@ -1096,6 +1097,34 @@
                 </div>
                 <div class="album-grid" id="tidalNewReleasesGrid">
                   <div class="tidal-loading-indicator">⏳ 正在載入 TIDAL 最新發行專輯...</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pane 2.5: Official Curated Playlists -->
+            <div class="tidal-content-pane" id="tidalPaneOfficialPlaylists" style="display: none;">
+              <div class="tidal-api-view-inner">
+                <div class="tidal-section-title-wrap">
+                  <div>
+                    <h2>📑 TIDAL 官方精選歌單 (Official Curated Playlists)</h2>
+                    <span class="tidal-sub-desc">TIDAL 官方精心編選之發燒評測、高動態母帶與主題歌單 • 支援一鍵整張點播與匯入佇列</span>
+                  </div>
+                  <div class="tidal-pane-actions">
+                    <button class="btn btn-sm btn-secondary" id="btnRefreshTidalOfficialPlaylists">🔄 重新整理</button>
+                  </div>
+                </div>
+                <!-- Curated playlist filter chips -->
+                <div class="tidal-filter-chips-bar" id="tidalOfficialPlaylistChips">
+                  <button class="tidal-chip-btn active" data-playlist-cat="audiophile">發燒音響 Hi-Res</button>
+                  <button class="tidal-chip-btn" data-playlist-cat="masters">官方母帶 Masters</button>
+                  <button class="tidal-chip-btn" data-playlist-cat="vocal">發燒人聲女聲</button>
+                  <button class="tidal-chip-btn" data-playlist-cat="jazz">藍調爵士名演</button>
+                  <button class="tidal-chip-btn" data-playlist-cat="classical">古典交響名盤</button>
+                  <button class="tidal-chip-btn" data-playlist-cat="relax">放鬆輕音樂 Chill</button>
+                  <button class="tidal-chip-btn" data-playlist-cat="top">全球熱播榜單</button>
+                </div>
+                <div class="album-grid" id="tidalOfficialPlaylistsGrid">
+                  <div class="tidal-loading-indicator">⏳ 正在載入 TIDAL 官方歌單...</div>
                 </div>
               </div>
             </div>

@@ -1196,11 +1196,15 @@ function rebuildLibraryCollections() {
         producer: t.producer || null,
         composer: t.composer || null,
         copyright: t.copyright || null,
+        addedAt: t.addedAt || 0,
         tracks: []
       });
     }
     const alb = albumMap.get(albumKey);
     alb.tracks.push(t);
+    if (t.addedAt && (!alb.addedAt || t.addedAt > alb.addedAt)) {
+      alb.addedAt = t.addedAt;
+    }
     if (t.isTidal) {
       alb.isTidal = true;
       if (!alb.tidalId && (t.tidalAlbumId || t.albumId)) alb.tidalId = t.tidalAlbumId || t.albumId;
@@ -1371,6 +1375,13 @@ function updateBadgesAndStats() {
   document.getElementById('albumCountBadge').textContent = totalAlbums;
   document.getElementById('artistCountBadge').textContent = totalArtists;
   document.getElementById('trackCountBadge').textContent = totalTracks;
+  const genreBadge = document.getElementById('genreCountBadge');
+  if (genreBadge) {
+    const totalGenres = (state.genres && state.genres.length > 0)
+      ? state.genres.length
+      : (typeof CANONICAL_GENRES !== 'undefined' ? CANONICAL_GENRES.length : 15);
+    genreBadge.textContent = totalGenres;
+  }
 
   // Favorites badges and headers
   const favAlbumsCount = getFavoriteAlbumsList().length;
@@ -1646,6 +1657,39 @@ async function renderArtistSpotlight(forceRefresh = false) {
         albumsGrid.appendChild(createAlbumCard(alb));
       });
     }
+
+    // 若已登入 TIDAL，非同步在 TIDAL 搜尋該演出者之發燒雲端專輯並加入相關精選專輯
+    if (window.tidalService && window.tidalService.isLoggedIn) {
+      window.tidalService.search(artistName, 8).then(res => {
+        if (currentSpotlightArtistName !== artistName) return;
+        const tAlbums = (res && res.albums) ? res.albums : [];
+        if (!tAlbums || tAlbums.length === 0) return;
+
+        const displayedTitles = new Set(selectedAlbums.map(a => (a.title || '').toLowerCase().trim()));
+        const extraTidalAlbums = [];
+        for (const ta of tAlbums) {
+          const normTitle = (ta.title || '').toLowerCase().trim();
+          if (!displayedTitles.has(normTitle)) {
+            displayedTitles.add(normTitle);
+            extraTidalAlbums.push(ta);
+          }
+          if (selectedAlbums.length + extraTidalAlbums.length >= 6) break;
+        }
+
+        if (extraTidalAlbums.length > 0) {
+          if (albumsWrap) albumsWrap.style.display = 'block';
+          extraTidalAlbums.forEach(ta => {
+            albumsGrid.appendChild(createTidalAlbumCard(ta));
+          });
+          const totalCount = selectedAlbums.length + extraTidalAlbums.length;
+          if (albumsTitle) {
+            albumsTitle.textContent = `📀 相關精選專輯 Selected Albums (${totalCount} 張，含 TIDAL 發燒雲端母帶)`;
+          }
+        }
+      }).catch(err => {
+        console.warn('Spotlight TIDAL albums search error:', err);
+      });
+    }
   }
 
   // 3. Fetch Bio & Photo from Wikipedia / Online API
@@ -1856,12 +1900,20 @@ function renderOverview() {
   // 3. Render 最近聆聽 Recent Played Albums (最多 5 張專輯)
   renderRecentPlayedAlbums();
 
-  // 4. Render 精選與最近新增 (最多呈現 5 張專輯)
+  // 4. Render 精選與最近新增 (最多呈現 5 張專輯，包含新增進資料庫的 TIDAL 專輯)
   overviewGrid.innerHTML = '';
   const curSize = state.albumCoverSize || 'medium';
   overviewGrid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
   overviewGrid.classList.add(`cover-size-${curSize}`);
-  const featured = state.albums.slice(0, 5);
+  
+  // 依加入時間排序，確保新加入曲庫的 TIDAL 專輯與本機最新專輯優先呈現於總覽
+  const sortedAlbums = [...state.albums].sort((a, b) => {
+    const aTime = a.addedAt || 0;
+    const bTime = b.addedAt || 0;
+    if (aTime !== bTime) return bTime - aTime;
+    return 0;
+  });
+  const featured = sortedAlbums.slice(0, 5);
   featured.forEach(alb => {
     overviewGrid.appendChild(createAlbumCard(alb));
   });
@@ -2004,6 +2056,17 @@ function createAlbumCard(album) {
       <div class="album-year">${album.year ? album.year + ' • ' : ''}${album.tracks ? album.tracks.length + ' 首' : ''}${playCountText}</div>
     </div>
   `;
+
+  // Explicit click on album artwork cover opens full album details
+  const artWrap = card.querySelector('.album-art-wrap');
+  if (artWrap) {
+    artWrap.style.cursor = 'pointer';
+    artWrap.addEventListener('click', (e) => {
+      if (e.target.closest('.card-fav-btn') || e.target.closest('.card-play-btn')) return;
+      e.stopPropagation();
+      openAlbumDetail(album);
+    });
+  }
 
   // Click card to open album details, or click artist to view artist details
   card.addEventListener('click', (e) => {
@@ -3359,10 +3422,11 @@ async function fetchAlbumBio(album) {
     }
   } else {
     // Elegant fallback overview generated from local metadata (doubled/tripled content density)
+    const trackCount = (album.tracks && Array.isArray(album.tracks)) ? album.tracks.length : (album.numberOfTracks || 0);
     const sampleTracks = (album.tracks && album.tracks.length > 0)
       ? album.tracks.slice(0, 3).map(t => `「${t.title}」`).join('、')
       : `「${album.title}」`;
-    const totalDurationText = formatTotalAlbumDuration(album.tracks);
+    const totalDurationText = formatTotalAlbumDuration(album.tracks || []);
     const yearText = album.year ? `於 ${album.year} 年錄製發行` : (album.date ? `於 ${album.date.slice(0, 4)} 年錄製發行` : '所精心打造');
     const genreText = album.genre && album.genre !== 'Various' ? album.genre : '多元精緻風格';
     const specKhz = album.sampleRate ? Math.round(album.sampleRate / 1000) : 44.1;
@@ -3383,7 +3447,7 @@ async function fetchAlbumBio(album) {
 
     const p1 = `《${album.title}》是由知名演出者 ${album.artist} ${yearText}的代表性音樂作品${labelPart}${producerPart}${composerPart}。作品在藝術性與音樂張力上皆深具份量，細膩融合了 ${genreText} 的核心精髓，展現出高度成熟的編曲層次與深厚的情感共鳴。`;
 
-    const p2 = `全張專輯共精選收錄 ${album.tracks.length} 首完整曲目錄音，總播放時間長達 ${totalDurationText}。其中包括焦點代表作如 ${sampleTracks} 等，在樂器對位、節奏鋪陳與人聲演繹之間呈現精緻的動態起伏，為樂迷帶來沉浸式的完整聽覺旅程。`;
+    const p2 = `全張專輯共精選收錄 ${trackCount} 首完整曲目錄音，總播放時間長達 ${totalDurationText}。其中包括焦點代表作如 ${sampleTracks} 等，在樂器對位、節奏鋪陳與人聲演繹之間呈現精緻的動態起伏，為樂迷帶來沉浸式的完整聽覺旅程。`;
 
     const p3 = `母帶規格與聲學品質方面，本音樂庫以 ${formatLabel} 高規格完整珍藏，採 ${channelDesc} 架構。錄音具備寬闊的音場深度與豐富的微動態細節，殘響延伸與器樂質感皆表現優異。推薦透過 Bit-Perfect 原音直通輸出或開啟 DSP 升頻引擎，體驗至臻完美的發燒級聆賞享受。`;
 
@@ -3564,7 +3628,10 @@ function renderAlbumMetadata(album) {
     specsText = `${ext} ${bitDepth}-bit / ${sampleRateKhz} ${isLossless ? '發燒無損母帶' : '數位音訊'}`;
   }
 
-  const tracksDurationText = `${album.tracks.length} 首歌曲 • ${formatTotalAlbumDuration(album.tracks)}`;
+  const trackCount = (album.tracks && Array.isArray(album.tracks)) ? album.tracks.length : (album.numberOfTracks || 0);
+  const tracksDurationText = (album.tracks && album.tracks.length)
+    ? `${album.tracks.length} 首歌曲 • ${formatTotalAlbumDuration(album.tracks)}`
+    : `${trackCount} 首歌曲`;
 
   function buildGridHtml(curArtist, curProducer, curReleaseDate, curLabel, curGenre, curComposer, curSpecs, curTracksDur, curCopyright, hasOnlineData) {
     if (sourceBadge) {
@@ -4001,6 +4068,7 @@ async function addTidalAlbumToLibrary(tidalAlbumId, preloadedData = null) {
     const album = albumData.album || albumData;
     const tracks = albumData.tracks;
 
+    const now = Date.now();
     tracks.forEach(tr => {
       tr.isTidal = true;
       tr.tidalAlbumId = tidalAlbumId;
@@ -4008,10 +4076,13 @@ async function addTidalAlbumToLibrary(tidalAlbumId, preloadedData = null) {
       tr.artist = tr.artist || album.artist;
       tr.cover = tr.cover || album.cover;
       tr.genre = tr.genre || album.genre || 'Pop';
+      tr.addedAt = now;
     });
 
     state.tracks = [...state.tracks, ...tracks];
     rebuildLibraryCollections();
+    viewDirtyState.overview = true;
+    viewDirtyState.albums = true;
 
     if (window.electronAPI && window.electronAPI.saveLibraryTracks) {
       await window.electronAPI.saveLibraryTracks(state.tracks);
@@ -4046,6 +4117,8 @@ async function removeTidalAlbumFromLibrary(tidalAlbumId) {
 
   if (removed > 0) {
     rebuildLibraryCollections();
+    viewDirtyState.overview = true;
+    viewDirtyState.albums = true;
     if (window.electronAPI && window.electronAPI.saveLibraryTracks) {
       await window.electronAPI.saveLibraryTracks(state.tracks);
     }
@@ -4277,39 +4350,44 @@ async function renderAlbumVersions(album) {
 }
 
 function openAlbumDetail(album) {
+  if (!album) return;
   state.activeAlbumDetail = album;
   applyDetailCoverSize(state.detailCoverSize || 'medium');
-  const defaultDetailCover = createSvgCover(album.title, album.artist, '#27272a', '#09090b');
-  detailCoverImg.src = formatCoverSrc(album.cover) || defaultDetailCover;
-  detailCoverImg.onerror = () => {
-    detailCoverImg.onerror = null;
-    detailCoverImg.src = defaultDetailCover;
-  };
-  detailTitle.textContent = album.title;
+  const defaultDetailCover = createSvgCover(album.title || 'Album', album.artist || 'Artist', '#27272a', '#09090b');
+  if (detailCoverImg) {
+    detailCoverImg.src = formatCoverSrc(album.cover) || defaultDetailCover;
+    detailCoverImg.onerror = () => {
+      detailCoverImg.onerror = null;
+      detailCoverImg.src = defaultDetailCover;
+    };
+  }
+  if (detailTitle) detailTitle.textContent = album.title || '未知專輯';
   if (detailYear) detailYear.textContent = '';
-  detailGenre.textContent = album.genre || 'Various';
+  if (detailGenre) detailGenre.textContent = album.genre || 'Various';
 
-  if (isUnknownArtist(album.artist)) {
-    const cachedArt = getCachedResolvedArtist(album.title);
-    if (cachedArt) {
-      applyResolvedArtistToAlbum(album, cachedArt);
-      detailArtist.textContent = cachedArt;
+  if (detailArtist) {
+    if (isUnknownArtist(album.artist)) {
+      const cachedArt = getCachedResolvedArtist(album.title);
+      if (cachedArt) {
+        applyResolvedArtistToAlbum(album, cachedArt);
+        detailArtist.textContent = cachedArt;
+      } else {
+        detailArtist.innerHTML = '<span style="color: var(--accent-purple); font-size: 14px; font-weight: normal;">🔍 正在透過專輯名稱搜尋線上音樂庫歌手...</span>';
+        findArtistByAlbumTitleOnline(album.title).then(found => {
+          if (found && state.activeAlbumDetail === album) {
+            applyResolvedArtistToAlbum(album, found);
+            if (detailArtist) detailArtist.textContent = found;
+            try { fetchAlbumBio(album); } catch (e) {}
+            try { renderAlbumMetadata(album); } catch (e) {}
+            try { renderDetailTracklist(album); } catch (e) {}
+          } else if (state.activeAlbumDetail === album && isUnknownArtist(album.artist)) {
+            if (detailArtist) detailArtist.textContent = '未知演出者';
+          }
+        });
+      }
     } else {
-      detailArtist.innerHTML = '<span style="color: var(--accent-purple); font-size: 14px; font-weight: normal;">🔍 正在透過專輯名稱搜尋線上音樂庫歌手...</span>';
-      findArtistByAlbumTitleOnline(album.title).then(found => {
-        if (found && state.activeAlbumDetail === album) {
-          applyResolvedArtistToAlbum(album, found);
-          detailArtist.textContent = found;
-          fetchAlbumBio(album);
-          renderAlbumMetadata(album);
-          renderDetailTracklist(album);
-        } else if (state.activeAlbumDetail === album && isUnknownArtist(album.artist)) {
-          detailArtist.textContent = '未知演出者';
-        }
-      });
+      detailArtist.textContent = album.artist || '未知演出者';
     }
-  } else {
-    detailArtist.textContent = album.artist;
   }
   
   const firstTrack = (album.tracks && album.tracks[0]) || {};
@@ -4393,29 +4471,55 @@ function openAlbumDetail(album) {
   }
 
   // Clicking artist in detail view opens artist page
-  detailArtist.style.cursor = 'pointer';
-  detailArtist.onclick = () => {
-    openArtistDetail(album.artist);
-  };
+  if (detailArtist) {
+    detailArtist.style.cursor = 'pointer';
+    detailArtist.onclick = () => {
+      openArtistDetail(album.artist);
+    };
+  }
 
   // 1. Fetch Album Bio (Online search + Auto Traditional Chinese Translation)
-  updateAlbumIntroCollapseUI();
-  fetchAlbumBio(album);
+  try {
+    updateAlbumIntroCollapseUI();
+    fetchAlbumBio(album);
+  } catch (e) {
+    console.warn('fetchAlbumBio error:', e);
+  }
 
   // 2. Render Album Credits & Metadata (Artist, Producer, Release Year, Record Label, etc.)
-  renderAlbumMetadata(album);
+  try {
+    renderAlbumMetadata(album);
+  } catch (e) {
+    console.warn('renderAlbumMetadata error:', e);
+  }
 
   // 3. Render Recommended Albums (Based on metadata & same genre)
-  renderAlbumRecommendations(album);
+  try {
+    renderAlbumRecommendations(album);
+  } catch (e) {
+    console.warn('renderAlbumRecommendations error:', e);
+  }
 
   // 4. Render Recommended Artists (Genre-based random sampling)
-  renderAlbumArtistRecommendations(album);
+  try {
+    renderAlbumArtistRecommendations(album);
+  } catch (e) {
+    console.warn('renderAlbumArtistRecommendations error:', e);
+  }
 
   // 5. Update TIDAL Library button state
-  updateAlbumDetailLibraryButton(album);
+  try {
+    updateAlbumDetailLibraryButton(album);
+  } catch (e) {
+    console.warn('updateAlbumDetailLibraryButton error:', e);
+  }
 
   // 6. Roon-Style Album Versions Comparison & Resolution
-  renderAlbumVersions(album);
+  try {
+    renderAlbumVersions(album);
+  } catch (e) {
+    console.warn('renderAlbumVersions error:', e);
+  }
 
   navigateTo('albumDetail');
   const mainContentEl = document.getElementById('mainContent');
@@ -6469,8 +6573,8 @@ function navigateTo(viewId) {
   if (state.currentView !== viewId) {
     state.history.push(viewId);
     state.historyIndex = state.history.length - 1;
-    applyView(viewId, true);
   }
+  applyView(viewId, true);
 }
 
 function applyView(viewId, updateNav = true) {
@@ -8380,7 +8484,7 @@ class KKBoxService {
 
   async getNewHitsPlaylists() {
     if (this.newHitsCache) return this.newHitsCache;
-    const json = await this.fetchApi(`/new-hits-playlists?territory=${this.territory}&limit=50`);
+    const json = await this.fetchApi(`/new-hits-playlists?territory=${this.territory}&limit=10`);
     this.newHitsCache = json.data || [];
     return this.newHitsCache;
   }
@@ -9028,6 +9132,21 @@ function initKkboxStreaming() {
 // ==========================================================
 let tidalService = null;
 
+function openTidalLoginModal() {
+  const modal = document.getElementById('tidalLoginModal');
+  if (!modal) return;
+  updateTidalUIStatus();
+  modal.style.display = 'flex';
+}
+window.openTidalLoginModal = openTidalLoginModal;
+
+function closeTidalLoginModal() {
+  const modal = document.getElementById('tidalLoginModal');
+  if (!modal) return;
+  modal.style.display = 'none';
+}
+window.closeTidalLoginModal = closeTidalLoginModal;
+
 async function initTidalStreaming() {
   if (typeof TidalService !== 'undefined') {
     tidalService = new TidalService();
@@ -9053,17 +9172,6 @@ async function initTidalStreaming() {
       e.stopPropagation();
       navigateTo('tidal');
     });
-  }
-
-  function openTidalLoginModal() {
-    if (!modal) return;
-    updateTidalUIStatus();
-    modal.style.display = 'flex';
-  }
-
-  function closeTidalLoginModal() {
-    if (!modal) return;
-    modal.style.display = 'none';
   }
 
   if (btnClose) btnClose.addEventListener('click', closeTidalLoginModal);
@@ -9175,12 +9283,14 @@ async function initTidalStreaming() {
 // -------------------------------------------------------------
 let currentTidalTab = 'featured';
 let currentTidalCuratedChip = 'audiophile';
+let currentTidalOfficialPlaylistChip = 'audiophile';
 let tidalCachedFavorites = null;
 let currentTidalPlaylistDetail = null;
 
 function setupTidalExplorerUI() {
   const tabFeatured = document.getElementById('btnTidalTabFeatured');
   const tabNewReleases = document.getElementById('btnTidalTabNewReleases');
+  const tabOfficialPlaylists = document.getElementById('btnTidalTabOfficialPlaylists');
   const tabCollection = document.getElementById('btnTidalTabCollection');
 
   const btnSearch = document.getElementById('btnTidalSearch');
@@ -9194,6 +9304,7 @@ function setupTidalExplorerUI() {
 
   const btnRefreshFeatured = document.getElementById('btnRefreshTidalFeatured');
   const btnRefreshNewReleases = document.getElementById('btnRefreshTidalNewReleases');
+  const btnRefreshOfficialPlaylists = document.getElementById('btnRefreshTidalOfficialPlaylists');
   const btnRefreshCollection = document.getElementById('btnRefreshTidalCollection');
 
   const btnSubFavAlbums = document.getElementById('btnTidalSubFavAlbums');
@@ -9208,6 +9319,7 @@ function setupTidalExplorerUI() {
   // Tab Switching
   if (tabFeatured) tabFeatured.addEventListener('click', () => switchTidalTab('featured'));
   if (tabNewReleases) tabNewReleases.addEventListener('click', () => switchTidalTab('newReleases'));
+  if (tabOfficialPlaylists) tabOfficialPlaylists.addEventListener('click', () => switchTidalTab('officialPlaylists'));
   if (tabCollection) tabCollection.addEventListener('click', () => switchTidalTab('collection'));
 
   // Search
@@ -9252,9 +9364,23 @@ function setupTidalExplorerUI() {
     });
   }
 
+  // Official Playlists Filter Chips
+  const officialPlaylistChips = document.getElementById('tidalOfficialPlaylistChips');
+  if (officialPlaylistChips) {
+    officialPlaylistChips.addEventListener('click', (e) => {
+      const chip = e.target.closest('.tidal-chip-btn');
+      if (!chip) return;
+      officialPlaylistChips.querySelectorAll('.tidal-chip-btn').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      const cat = chip.getAttribute('data-playlist-cat') || 'audiophile';
+      loadTidalOfficialPlaylists(cat, true);
+    });
+  }
+
   // Refresh buttons
   if (btnRefreshFeatured) btnRefreshFeatured.addEventListener('click', () => loadTidalFeatured(currentTidalCuratedChip, true));
   if (btnRefreshNewReleases) btnRefreshNewReleases.addEventListener('click', () => loadTidalNewReleases(true));
+  if (btnRefreshOfficialPlaylists) btnRefreshOfficialPlaylists.addEventListener('click', () => loadTidalOfficialPlaylists(currentTidalOfficialPlaylistChip, true));
   if (btnRefreshCollection) btnRefreshCollection.addEventListener('click', () => loadTidalCollection(true));
 
   // Collection Sub-Tabs
@@ -9343,6 +9469,11 @@ function onOpenTidalView() {
     if (grid && (grid.querySelector('.tidal-loading-indicator') || grid.children.length === 0)) {
       loadTidalNewReleases();
     }
+  } else if (currentTidalTab === 'officialPlaylists') {
+    const grid = document.getElementById('tidalOfficialPlaylistsGrid');
+    if (grid && (grid.querySelector('.tidal-loading-indicator') || grid.children.length === 0)) {
+      loadTidalOfficialPlaylists(currentTidalOfficialPlaylistChip);
+    }
   } else if (currentTidalTab === 'collection') {
     loadTidalCollection();
   }
@@ -9352,10 +9483,12 @@ function switchTidalTab(tabName) {
   currentTidalTab = tabName;
   const tabFeatured = document.getElementById('btnTidalTabFeatured');
   const tabNewReleases = document.getElementById('btnTidalTabNewReleases');
+  const tabOfficialPlaylists = document.getElementById('btnTidalTabOfficialPlaylists');
   const tabCollection = document.getElementById('btnTidalTabCollection');
 
   const paneFeatured = document.getElementById('tidalPaneFeatured');
   const paneNewReleases = document.getElementById('tidalPaneNewReleases');
+  const paneOfficialPlaylists = document.getElementById('tidalPaneOfficialPlaylists');
   const paneCollection = document.getElementById('tidalPaneCollection');
   const paneSearch = document.getElementById('tidalPaneSearch');
   const detailView = document.getElementById('tidalPlaylistDetailView');
@@ -9364,8 +9497,8 @@ function switchTidalTab(tabName) {
   if (detailView) detailView.style.display = 'none';
   if (explorerContainer) explorerContainer.style.display = 'block';
 
-  [tabFeatured, tabNewReleases, tabCollection].forEach(t => t && t.classList.remove('active'));
-  [paneFeatured, paneNewReleases, paneCollection, paneSearch].forEach(p => {
+  [tabFeatured, tabNewReleases, tabOfficialPlaylists, tabCollection].forEach(t => t && t.classList.remove('active'));
+  [paneFeatured, paneNewReleases, paneOfficialPlaylists, paneCollection, paneSearch].forEach(p => {
     if (p) {
       p.classList.remove('active');
       p.style.display = 'none';
@@ -9386,6 +9519,13 @@ function switchTidalTab(tabName) {
       paneNewReleases.style.display = 'block';
     }
     loadTidalNewReleases();
+  } else if (tabName === 'officialPlaylists') {
+    if (tabOfficialPlaylists) tabOfficialPlaylists.classList.add('active');
+    if (paneOfficialPlaylists) {
+      paneOfficialPlaylists.classList.add('active');
+      paneOfficialPlaylists.style.display = 'block';
+    }
+    loadTidalOfficialPlaylists(currentTidalOfficialPlaylistChip);
   } else if (tabName === 'collection') {
     if (tabCollection) tabCollection.classList.add('active');
     if (paneCollection) {
@@ -9613,6 +9753,30 @@ async function loadTidalNewReleases(force = false) {
   } catch (err) {
     console.error('Failed to load TIDAL new releases:', err);
     grid.innerHTML = `<div class="empty-hint" style="grid-column: 1/-1; color: #ef4444;">載入最新發行失敗: ${escapeXml(err.message)}</div>`;
+  }
+}
+
+async function loadTidalOfficialPlaylists(category = 'audiophile', force = false) {
+  currentTidalOfficialPlaylistChip = category;
+  const grid = document.getElementById('tidalOfficialPlaylistsGrid');
+  if (!grid) return;
+  if (!force && grid.children.length > 1 && !grid.querySelector('.tidal-loading-indicator')) return;
+
+  grid.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在載入 TIDAL 官方精選歌單...</div>';
+
+  try {
+    const playlists = await window.tidalService.getOfficialPlaylists(category, 30);
+    grid.innerHTML = '';
+    if (!playlists || playlists.length === 0) {
+      grid.innerHTML = '<div class="empty-hint" style="grid-column: 1/-1;">暫無此分類官方歌單</div>';
+      return;
+    }
+    playlists.forEach(pl => {
+      grid.appendChild(createTidalPlaylistCard(pl));
+    });
+  } catch (err) {
+    console.error('Failed to load TIDAL official playlists:', err);
+    grid.innerHTML = `<div class="empty-hint" style="grid-column: 1/-1; color: #ef4444;">載入官方歌單失敗: ${escapeXml(err.message)}</div>`;
   }
 }
 

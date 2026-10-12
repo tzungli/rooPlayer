@@ -169,12 +169,13 @@ class TidalService {
   // ==========================================================
 
   async search(query, limit = 20) {
-    if (!query || !query.trim()) return { albums: [], tracks: [], artists: [] };
+    if (!query || !query.trim()) return { albums: [], tracks: [], artists: [], playlists: [] };
     const res = await this.api('/search', { query: query.trim(), limit });
     return {
       albums: (res.albums && res.albums.items) ? res.albums.items.map(a => this.normalizeAlbum(a)) : [],
       tracks: (res.tracks && res.tracks.items) ? res.tracks.items.map(t => this.normalizeTrack(t)) : [],
-      artists: (res.artists && res.artists.items) ? res.artists.items : []
+      artists: (res.artists && res.artists.items) ? res.artists.items : [],
+      playlists: (res.playlists && res.playlists.items) ? res.playlists.items : []
     };
   }
 
@@ -366,6 +367,21 @@ class TidalService {
     const q = queries[curatedTag] || queries.audiophile;
     const res = await this.search(q, limit);
     return res.albums || [];
+  }
+
+  async getOfficialPlaylists(category = 'audiophile', limit = 30) {
+    const queries = {
+      audiophile: 'Audiophile Hi-Res Master',
+      masters: 'TIDAL Masters',
+      relax: 'Relax Acoustic Chill',
+      vocal: 'Audiophile Vocal',
+      jazz: 'Blue Note Jazz Masters',
+      classical: 'Classical Masterpieces',
+      top: 'TIDAL Hits'
+    };
+    const q = queries[category] || queries.audiophile;
+    const res = await this.search(q, limit);
+    return res.playlists || [];
   }
 
   async getPlaylist(playlistUuid) {
