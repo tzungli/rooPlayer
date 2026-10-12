@@ -9,7 +9,7 @@
 // 所有升頻 / DSD 調變的 DSP 數學只存在於這一個檔案。
 // ==========================================
 
-// Filter Phase Interpolation Kernel (Linear, Minimum, Intermediate / Slow Roll-off)
+// Filter Phase Interpolation Kernel (Linear / Minimum / Intermediate 35:65 blend)
 function interpolateSample(p0, p1, p2, p3, t, phase = 'linear') {
   if (phase === 'minimum') {
     const d0 = p1 - p0;
