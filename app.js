@@ -5508,7 +5508,7 @@ function updateSignalPathUI(track = null) {
       if (signalSoxArrow) signalSoxArrow.style.display = 'block';
       if (signalSoxStage) signalSoxStage.style.display = 'flex';
       if (signalSoxTitle) signalSoxTitle.textContent = `升頻引擎：1-bit ${modeUpper} Delta-Sigma 調變 (${orderNum} 階)`;
-      if (signalSoxDesc) signalSoxDesc.textContent = `超取樣升頻規格：PCM ${srcKhz} ➔ ${modeUpper} (1-bit / ${mhz} • ${orderNum} 階 CRFB 諧振噪聲整形 • ${phaseDesc})`;
+      if (signalSoxDesc) signalSoxDesc.textContent = `超取樣升頻規格：PCM ${srcKhz} ➔ ${modeUpper} (1-bit / ${mhz} • ${orderNum} 階 Delta-Sigma 噪聲整形 • ${phaseDesc})`;
 
       if (engineTitle) engineTitle.textContent = `rooPlayer 1-bit DSD Modulator Engine (${orderNum} 階)`;
       if (engineDesc) engineDesc.textContent = `${orderNum} 階 64-bit 浮點即時超取樣調變碼流 (${phaseDesc})，高頻噪聲上移至 100 kHz 射頻頻段，維持音訊帶平坦模擬聽感`;
