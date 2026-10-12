@@ -1071,6 +1071,49 @@ body {
   letter-spacing: 0.5px;
   border-bottom: 1px solid var(--border-color);
   box-sizing: border-box;
+  position: relative;
+}
+
+.col-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 9px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  z-index: 10;
+  touch-action: none;
+}
+
+.col-resizer::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  bottom: 20%;
+  right: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  transition: all 0.15s ease;
+}
+
+.col-resizer:hover::after,
+.col-resizer.resizing::after {
+  background: var(--accent-purple, #d946ef);
+  box-shadow: 0 0 6px rgba(217, 70, 239, 0.8);
+  top: 10%;
+  bottom: 10%;
+  width: 3px;
+}
+
+body.table-col-resizing {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body.table-col-resizing * {
+  user-select: none !important;
 }
 
 .tracklist-table td {
@@ -4939,6 +4982,15 @@ body {
   opacity: 1;
 }
 
+#kkboxExplorerContainer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 /* Panes */
 .kkbox-content-pane {
   flex: 1;
@@ -4952,6 +5004,10 @@ body {
 .kkbox-content-pane.active {
   display: flex !important;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .kkbox-webview-wrapper {
@@ -4983,8 +5039,31 @@ body {
 .kkbox-api-view-inner {
   padding: 24px 32px;
   overflow-y: auto;
+  flex: 1;
+  min-height: 0;
   height: 100%;
   box-sizing: border-box;
+}
+
+.kkbox-api-view-inner::-webkit-scrollbar,
+.kkbox-detail-view::-webkit-scrollbar {
+  width: 8px;
+}
+
+.kkbox-api-view-inner::-webkit-scrollbar-track,
+.kkbox-detail-view::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.kkbox-api-view-inner::-webkit-scrollbar-thumb,
+.kkbox-detail-view::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.kkbox-api-view-inner::-webkit-scrollbar-thumb:hover,
+.kkbox-detail-view::-webkit-scrollbar-thumb:hover {
+  background: rgba(37, 213, 255, 0.5);
 }
 
 .kkbox-section-title-wrap {
@@ -5319,6 +5398,14 @@ body {
 
 /* KKBOX Detail Drill-Down View */
 .kkbox-detail-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 24px 32px;
   animation: fadeIn 0.2s ease-in-out;
 }
 

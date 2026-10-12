@@ -414,6 +414,7 @@ async function initApp() {
   setupHistoryEvents();
   setupSearch();
   setupCoverSizeControls();
+  setupResizableTables();
   initAudioZones();
   initDspControls();
   initKkboxStreaming();
@@ -1070,10 +1071,16 @@ function syncAllFavoriteUIs() {
   });
 }
 
-// Smart Genre Inference & Matching Engine
-function inferGenreFromTrack(track) {
-  if (track.genre && track.genre !== 'Unknown') return track.genre;
-  const text = [(track.genre || ''), (track.album || ''), (track.artist || ''), (track.filePath || '')].join(' ').toLowerCase();
+// Canonical Genre Pillars Registry
+const CANONICAL_GENRES = [
+  'Classical', 'Jazz', 'Rock', 'Pop', 'Electronic',
+  'Soul / R&B', 'Blues', 'Folk', 'Soundtrack', 'Metal',
+  'Hip Hop', 'Ambient', 'Vocal', 'Audiophile'
+];
+
+function canonicalizeGenre(rawGenre, track = {}) {
+  const g = (rawGenre || '').trim();
+  const text = [(rawGenre || ''), (track.genre || ''), (track.album || ''), (track.artist || ''), (track.title || ''), (track.filePath || '')].join(' ').toLowerCase();
 
   if (/classi|orchestr|symphon|baroque|opera|chamber|philharmonic|concerto|piano|beethoven|bach|mozart|chopin|tchaikovsky|orff|brahms|handel|vivaldi|古典|交響|協奏|獨奏|管弦|鋼琴曲|樂團|愛樂/i.test(text)) {
     return 'Classical';
@@ -1081,101 +1088,58 @@ function inferGenreFromTrack(track) {
   if (/jazz|fusion|swing|bop|bebop|big band|dixieland|smooth jazz|bossa|miles davis|coltrane|chesky|爵士|巴薩諾瓦/i.test(text)) {
     return 'Jazz';
   }
+  if (/soundtrack|ost|film|movie|cinematic|game|anime|bandes originales|vocaloid|サウンドトラック|ゲーム|動畫音樂|動畫影視音樂|原聲|配樂|影視|動漫/i.test(text)) {
+    return 'Soundtrack';
+  }
   if (/metal|heavy metal|thrash|death metal|black metal|doom|power metal|金屬/i.test(text)) {
     return 'Metal';
   }
-  if (/rock|punk|grunge|alternative|hard rock|psychedelic|prog rock|搖滾/i.test(text)) {
+  if (/rock|punk|grunge|alternative|hard rock|psychedelic|prog rock|britpop|j-rock|搖滾|朋克/i.test(text)) {
     return 'Rock';
   }
-  if (/folk|acoustic|country|bluegrass|singer-songwriter|民謠|民歌|民樂/i.test(text)) {
-    return 'Folk';
-  }
-  if (/soundtrack|ost|film score|movie score|original score|game score|原聲|配樂/i.test(text)) {
-    return 'Soundtrack';
-  }
-  if (/ambient|new age|meditation|drone|relax|atmospheric|enya|氛圍|新世紀|冥想/i.test(text)) {
-    return 'Ambient';
-  }
-  if (/vocal|singer|choral|acappella|fujita|人聲|美聲|聲樂|演唱|女聲|男聲/i.test(text)) {
-    return 'Vocal';
-  }
-  if (/audiophile|hi-end|hifi|burmester|b&w|示範片|展cd|音響展|發燒/i.test(text)) {
-    return 'Audiophile';
-  }
-  if (/soul|r&b|rnb|rhythm and blues|motown|funk|neo-soul|靈魂樂/i.test(text)) {
+  if (/soul|motown|r&b|rnb|rhythm and blues|funk|gospel|neo-soul|節奏藍調|靈魂樂/i.test(text)) {
     return 'Soul / R&B';
   }
-  if (/blues|chicago blues|delta blues|bb king|藍調/i.test(text)) {
+  if (/blues|delta blues|chicago blues|country blues|bb king|藍調/i.test(text)) {
     return 'Blues';
+  }
+  if (/folk|bluegrass|celtic|americana|singer-songwriter|singer songwriter|民謠|民歌|民樂/i.test(text)) {
+    return 'Folk';
   }
   if (/hip.?hop|rap|trap|boom bap|嘻哈|饒舌/i.test(text)) {
     return 'Hip Hop';
   }
-  if (/electro|techno|house|trance|synth|edm|downtempo|chillout|電子/i.test(text)) {
+  if (/electro|techno|house|trance|synth|edm|downtempo|chillout|dance|disco|club|電子|電音/i.test(text)) {
     return 'Electronic';
   }
-  if (/pop|synthpop|dance|disco|ballad|cantopop|mandopop|c-pop|j-pop|k-pop|流行|華語/i.test(text)) {
+  if (/ambient|new age|meditation|drone|relax|atmospheric|enya|contemporary instrumental|氛圍|新世紀|冥想/i.test(text)) {
+    return 'Ambient';
+  }
+  if (/vocal|choral|acappella|acapella|chanson|美聲|聲樂|人聲|歌謠曲/i.test(text)) {
+    return 'Vocal';
+  }
+  if (/audiophile|hi-end|hifi|binaural|burmester|b&w|示範片|展cd|音響展|發燒/i.test(text)) {
+    return 'Audiophile';
+  }
+  if (/pop|cantopop|mandopop|c-pop|cpop|j-pop|jpop|k-pop|synth-pop|ballad|chinese|asian music|老歌|流行|華語|一般流行/i.test(text)) {
     return 'Pop';
   }
-  return 'Audiophile';
+  return 'Pop';
+}
+
+// Smart Genre Inference & Matching Engine
+function inferGenreFromTrack(track) {
+  return canonicalizeGenre(track.genre, track);
 }
 
 function matchItemGenre(item, genreName) {
   if (!item || !genreName) return false;
   const target = genreName.toLowerCase().trim();
-  const itemGenre = (item.genre || '').toLowerCase().trim();
-  const text = [(item.genre || ''), (item.title || ''), (item.album || ''), (item.artist || ''), (item.filePath || '')].join(' ').toLowerCase();
-
-  // 1. Direct substring match
-  if (itemGenre && (itemGenre.includes(target) || target.includes(itemGenre))) return true;
-
-  // 2. Pillar keyword rules
-  if (/classi|古典/i.test(target)) {
-    return /classi|orchestr|symphon|baroque|opera|chamber|philharmonic|concerto|piano|beethoven|bach|mozart|chopin|tchaikovsky|orff|brahms|handel|vivaldi|古典|交響|協奏|獨奏|管弦|鋼琴曲|樂團|愛樂/i.test(text);
-  }
-  if (/jazz|爵士/i.test(target)) {
-    return /jazz|fusion|swing|bop|bebop|big band|dixieland|smooth jazz|bossa|miles davis|coltrane|chesky|爵士|巴薩諾瓦/i.test(text);
-  }
-  if (/metal|金屬/i.test(target)) {
-    return /metal|heavy metal|thrash|death metal|black metal|doom|power metal|金屬/i.test(text);
-  }
-  if (/rock|搖滾/i.test(target)) {
-    return /rock|punk|grunge|alternative|hard rock|psychedelic|prog rock|搖滾/i.test(text);
-  }
-  if (/soul|r&b|靈魂/i.test(target)) {
-    return /soul|r&b|rnb|rhythm and blues|motown|funk|neo-soul|靈魂樂/i.test(text);
-  }
-  if (/blues|藍調/i.test(target)) {
-    return /blues|chicago blues|delta blues|bb king|藍調/i.test(text);
-  }
-  if (/folk|民謠|民歌/i.test(target)) {
-    return /folk|acoustic|country|bluegrass|singer-songwriter|民謠|民歌|民樂/i.test(text);
-  }
-  if (/soundtrack|ost|原聲|配樂/i.test(target)) {
-    return /soundtrack|ost|film score|movie score|original score|game score|原聲|配樂/i.test(text);
-  }
-  if (/ambient|氛圍|新世紀/i.test(target)) {
-    return /ambient|new age|meditation|drone|relax|atmospheric|enya|氛圍|新世紀|冥想/i.test(text);
-  }
-  if (/vocal|人聲|發燒/i.test(target)) {
-    return /vocal|singer|choral|acappella|fujita|人聲|美聲|聲樂|演唱|女聲|男聲|發燒/i.test(text);
-  }
-  if (/audiophile|hi-fi|hi-end/i.test(target)) {
-    return /audiophile|hi-end|hifi|burmester|b&w|示範片|展cd|音響展|發燒/i.test(text);
-  }
-  if (/hip.?hop|嘻哈|饒舌/i.test(target)) {
-    return /hip.?hop|rap|trap|boom bap|嘻哈|饒舌/i.test(text);
-  }
-  if (/electr|電子/i.test(target)) {
-    return /electro|techno|house|trance|synth|edm|downtempo|chillout|電子/i.test(text);
-  }
-  if (/pop|流行/i.test(target)) {
-    return /pop|synthpop|dance|disco|ballad|cantopop|mandopop|c-pop|j-pop|k-pop|流行|華語/i.test(text);
-  }
-
-  // 3. Token-based word match
-  const tokens = target.split(/[\s\/\,\&]+/).filter(Boolean);
-  return tokens.some(tok => tok.length >= 2 && text.includes(tok));
+  const itemGenre = canonicalizeGenre(item.genre, item).toLowerCase();
+  if (itemGenre === target) return true;
+  const rawGenre = (item.genre || '').toLowerCase().trim();
+  if (rawGenre && (rawGenre === target || rawGenre.includes(target) || target.includes(rawGenre))) return true;
+  return false;
 }
 
 // Group Tracks into Albums, Artists, Genres
@@ -1202,10 +1166,8 @@ function rebuildLibraryCollections() {
       }
     }
 
-    // If track genre is missing or unknown, infer it intelligently
-    if (!t.genre || t.genre === 'Unknown') {
-      t.genre = inferGenreFromTrack(t);
-    }
+    // Canonicalize track genre
+    t.genre = canonicalizeGenre(t.genre, t);
 
     // Albums grouping
     const albumKey = `${t.album}___${t.artist}`;
@@ -1253,12 +1215,7 @@ function rebuildLibraryCollections() {
     art.tracks.push(t);
 
     // Genres collection
-    if (t.genre && t.genre !== 'Unknown') {
-      t.genre.split(',').forEach(g => {
-        const trimmed = g.trim();
-        if (trimmed) genreSet.add(trimmed);
-      });
-    }
+    genreSet.add(t.genre);
   });
 
   // Post-process albums: inherit cover from any child track, sort tracks
@@ -1276,17 +1233,12 @@ function rebuildLibraryCollections() {
       const childWithCover = alb.tracks.find(tr => tr.cover);
       if (childWithCover) alb.cover = formatCoverSrc(childWithCover.cover);
     }
-    if (!alb.genre || alb.genre === 'Unknown') {
-      const childWithGenre = alb.tracks.find(tr => tr.genre && tr.genre !== 'Unknown');
-      if (childWithGenre) {
-        alb.genre = childWithGenre.genre;
-      } else {
-        alb.genre = inferGenreFromTrack({ album: alb.title, artist: alb.artist, filePath: alb.tracks[0]?.filePath });
-      }
-    }
+    alb.genre = canonicalizeGenre(alb.genre, alb);
+    genreSet.add(alb.genre);
     alb.tracks.sort((a, b) => (a.trackNumber || 0) - (b.trackNumber || 0));
   });
 
+  CANONICAL_GENRES.forEach(p => genreSet.add(p));
   state.albums = Array.from(albumMap.values());
   state.artists = Array.from(artistMap.values());
   state.genres = Array.from(genreSet);
@@ -2603,6 +2555,7 @@ function renderTracks() {
   renderNextTracksChunk();
   setupTracksScrollListener();
   scheduleNextTracksIdleChunk();
+  setupResizableTable('allTracksTable', 'all_tracks');
 }
 
 function renderNextTracksChunk() {
@@ -2719,6 +2672,102 @@ function scheduleNextTracksIdleChunk() {
   }, 120);
 }
 
+// ----------------- Resizable Table Columns Engine -----------------
+function saveTableColWidths(table, storageKey) {
+  if (!table) return;
+  const widths = {};
+  table.querySelectorAll('thead th').forEach((th, idx) => {
+    if (th.style.width) {
+      widths[idx] = th.style.width;
+    }
+  });
+  try {
+    localStorage.setItem('rooplayer_col_widths_' + storageKey, JSON.stringify(widths));
+  } catch (e) {}
+}
+
+function restoreTableColWidths(table, storageKey) {
+  if (!table) return;
+  try {
+    const raw = localStorage.getItem('rooplayer_col_widths_' + storageKey);
+    if (!raw) return;
+    const widths = JSON.parse(raw);
+    const headers = table.querySelectorAll('thead th');
+    headers.forEach((th, idx) => {
+      if (widths[idx]) {
+        th.style.width = widths[idx];
+      }
+    });
+  } catch (e) {}
+}
+
+function setupResizableTable(tableId, storageKey) {
+  const table = typeof tableId === 'string' ? document.getElementById(tableId) : tableId;
+  if (!table) return;
+
+  const headers = table.querySelectorAll('thead th');
+  if (!headers.length) return;
+
+  // Restore saved widths on startup
+  restoreTableColWidths(table, storageKey);
+
+  headers.forEach((th, idx) => {
+    if (th.querySelector('.col-resizer')) return;
+
+    // Minimum width based on column type
+    const minW = idx === 0 || idx === 1 ? 28 : (idx === headers.length - 1 ? 55 : 60);
+
+    const resizer = document.createElement('div');
+    resizer.className = 'col-resizer';
+    resizer.title = '拖曳調整此欄位寬度（連按兩下重設預設值）';
+    th.appendChild(resizer);
+
+    // Double-click to reset width
+    resizer.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      th.style.width = '';
+      saveTableColWidths(table, storageKey);
+      showToast('已重設欄位寬度');
+    });
+
+    resizer.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const startX = e.pageX;
+      const startWidth = th.getBoundingClientRect().width;
+      resizer.classList.add('resizing');
+      document.body.classList.add('table-col-resizing');
+
+      function onMouseMove(moveEvent) {
+        moveEvent.preventDefault();
+        const diff = moveEvent.pageX - startX;
+        const newWidth = Math.max(minW, Math.round(startWidth + diff));
+        th.style.width = `${newWidth}px`;
+      }
+
+      function onMouseUp() {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        resizer.classList.remove('resizing');
+        document.body.classList.remove('table-col-resizing');
+        saveTableColWidths(table, storageKey);
+      }
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+  });
+}
+
+function setupResizableTables() {
+  setupResizableTable('allTracksTable', 'all_tracks');
+  setupResizableTable('favTracksTable', 'fav_tracks');
+  setupResizableTable('historyTracksTable', 'history_tracks');
+  setupResizableTable('detailTracklistTable', 'album_detail_tracks');
+}
+
 // Realistic Genre Illustration & Metadata Registry
 function getGenreIllustrationInfo(genreName) {
   const g = (genreName || '').toLowerCase().trim();
@@ -2779,24 +2828,14 @@ function renderGenres() {
 
   const headerCount = document.getElementById('genresHeaderCount');
 
-  // Collect all genres: scanned user genres + curated core genres
+  // Collect all genres: strictly canonical core genres
   const genreSet = new Set();
   (state.genres || []).forEach(g => {
-    if (g && g.trim() && g !== 'Unknown') genreSet.add(g.trim());
+    const cg = canonicalizeGenre(g);
+    if (cg) genreSet.add(cg);
   });
 
-  const CURATED_PILLARS = [
-    'Classical', 'Jazz', 'Rock', 'Pop', 'Electronic',
-    'Soul / R&B', 'Blues', 'Folk', 'Soundtrack', 'Metal',
-    'Hip Hop', 'Ambient', 'Vocal', 'Audiophile'
-  ];
-
-  CURATED_PILLARS.forEach(cg => {
-    const exists = Array.from(genreSet).some(g => g.toLowerCase() === cg.toLowerCase());
-    if (!exists) {
-      genreSet.add(cg);
-    }
-  });
+  CANONICAL_GENRES.forEach(cg => genreSet.add(cg));
 
   const genreList = Array.from(genreSet);
 
@@ -3752,6 +3791,7 @@ function renderDetailTracklist(album) {
     });
     detailTracklistTbody.appendChild(tr);
   });
+  setupResizableTable('detailTracklistTable', 'album_detail_tracks');
 }
 
 function openAlbumDetail(album) {
@@ -6001,6 +6041,7 @@ function renderFavTracks() {
 
       tbody.appendChild(tr);
     });
+    setupResizableTable('favTracksTable', 'fav_tracks');
   }
 }
 
