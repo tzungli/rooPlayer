@@ -61,6 +61,7 @@ body {
 
 /* ----------------- Custom Titlebar ----------------- */
 #titlebar {
+  position: relative;
   height: 48px;
   background-color: var(--bg-header);
   border-bottom: 1px solid var(--border-color);
@@ -79,6 +80,10 @@ body {
   display: flex;
   align-items: center;
   -webkit-app-region: no-drag;
+}
+
+.titlebar-left {
+  min-width: 310px;
 }
 
 .brand {
@@ -117,7 +122,12 @@ body {
 
 .history-nav {
   display: flex;
+  align-items: center;
   gap: 6px;
+  position: absolute;
+  left: 230px;
+  -webkit-app-region: no-drag;
+  z-index: 2;
 }
 
 .icon-btn {
