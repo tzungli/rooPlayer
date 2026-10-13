@@ -165,7 +165,9 @@ function buildGaussFilter(fsOut, srcRate, minimumPhase = false) {
     for (let j = -half; j <= half; j++) h[j + half] = gaussTap(j / S);
     let sum = 0;
     for (let i = 0; i < n - 1; i++) sum += h[i];
-    const g = ratio / sum;
+    // S>1 時多相分支以 stride=ratio·S 個網格點取樣插值係數，分支和 = Σ_grid h/(ratio·S)，
+    // 故網格和需為 ratio·S（S=1 時即 ratio）。
+    const g = ratio * S / sum;
     for (let i = 0; i < n; i++) h[i] *= g;
     return { h, S, lo: -L, hi: L, ratio, integerRatio, fsOut, srcRate, minimumPhase: false, taps: 2 * half + 1 };
   }
@@ -205,6 +207,65 @@ function buildGaussFilter(fsOut, srcRate, minimumPhase = false) {
   return { h, S, lo: 0, hi: budget - 1, ratio, integerRatio, fsOut, srcRate, minimumPhase: true, taps: budget };
 }
 
+// ---------------------------------------------------------------------------
+// HQPlayer "extended poly sinc" (EXT2) 風格 FIR 升頻濾波器 — 路線B閉式重新實作
+//
+// 注意：HQPlayer 的 EXT2 內部參數未公開，此為依「extended poly sinc」家族之
+// 公開設計性格所做的閉式近似（Kaiser 窗 sinc）：
+//   h(t) = sinc(2·fc·t/fs) · I0(β·sqrt(1-(t/L)²))/I0(β)
+// 「extended」性格 = 截止點 fc 延伸到源 Nyquist 之上（1.27×，與本引擎 gauss
+// 家族同一延伸因子），整個過渡帶位於音訊帶之上：
+//   - 通帶 [0, 源Nyquist] 完全平坦（無高頻滾降）
+//   - 源Nyquist..fc 之間的鏡像「泄漏」（約 0dB，位於 22k 以上，可量測不可聽）
+//   - fc+Δ 以上鏡像抑制 ≈ -140dB（EXT 級深止帶）
+// 線性相位（對稱預/後鈴振，同 gauss-long 性格；最小相位版本請用 gauss-min）。
+//
+//   Δ（過渡寬度）= 0.136 × srcRate（44.1k → 6kHz，「medium」級長度）
+//   Kaiser 階數公式 N ≈ (As-7.95)·fsOut/(14.347·Δ)；β = 0.1102(As-8.7)
+//   截斷上限與 gauss 相同：Lcap = 150e6/srcRate/2（≈150 MMAC/s/聲道）；
+//   截斷只使過渡帶變寬，止帶深度由窗決定（≈As）不受影響。
+// 非整數 ratio 用 S=8 子樣本网格 + 線性插值（與 gauss 相同）。
+// ---------------------------------------------------------------------------
+function buildPolyExt2Filter(fsOut, srcRate) {
+  const AS_DB = 140;
+  const fc = Math.min(1.27 * srcRate / 2, 0.45 * fsOut);
+  const trans = 0.136 * srcRate;
+  const beta = 0.1102 * (AS_DB - 8.7);
+  const Lcap = Math.floor(150e6 / srcRate / 2);
+  let L = Math.min(Math.ceil((AS_DB - 7.95) * fsOut / (2 * 14.347 * trans)), Lcap);
+  if (L < 8) L = 8;
+
+  const ratio = fsOut / srcRate;
+  const integerRatio = Math.abs(ratio - Math.round(ratio)) < 1e-9;
+  const S = integerRatio ? 1 : 8;
+
+  // modified Bessel I0（級數收斂快速，β≤15 時 30 項內達 double 精度）
+  const besselI0 = (x) => {
+    let sum = 1, term = 1;
+    for (let k = 1; k <= 40; k++) { term *= (x / 2) / k; sum += term * term; if (term * term < sum * 1e-17) break; }
+    return sum;
+  };
+  const i0beta = besselI0(beta);
+  const ext2Tap = (t) => {
+    if (Math.abs(t) > L) return 0;
+    const x = 2 * fc * t / fsOut;
+    const s = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+    const u = t / L;
+    const w = besselI0(beta * Math.sqrt(Math.max(0, 1 - u * u))) / i0beta;
+    return (2 * fc / fsOut) * s * w;
+  };
+
+  const half = L * S;
+  const n = 2 * half + 2; // +1 guard tap for sub-sample interpolation edge
+  const h = new Float64Array(n);
+  for (let j = -half; j <= half; j++) h[j + half] = ext2Tap(j / S);
+  let sum = 0;
+  for (let i = 0; i < n - 1; i++) sum += h[i];
+  const g = ratio * S / sum; // 同 buildGaussFilter：S>1 時網格和需為 ratio·S
+  for (let i = 0; i < n; i++) h[i] *= g;
+  return { h, S, lo: -L, hi: L, ratio, integerRatio, fsOut, srcRate, minimumPhase: false, taps: 2 * half + 1 };
+}
+
 // Evaluate the Gauss FIR at output index outIdx for a zero-stuffed input grid
 // (input sample k lands at output position k·ratio). out = Σ_k input[k]·h(outIdx - k·ratio)
 // h support is [gf.lo, gf.hi] in output-sample units, stored on the S grid.
@@ -221,8 +282,11 @@ function firSample(input, inLen, outIdx, ratio, gf) {
     for (let k = kStart; k <= kEnd; k++, m -= r) acc += input[k] * h[m];
   } else {
     let t = outIdx - kStart * ratio;
+    const maxJ = (hi - lo) * S;
     for (let k = kStart; k <= kEnd; k++, t -= ratio) {
-      const j = (t - lo) * S;
+      let j = (t - lo) * S;
+      // 浮點捨入可能讓 j 微越界（-1e-9 量級）=> 夾回邊界，誤差可忽略
+      if (j < 0) j = 0; else if (j > maxJ) j = maxJ;
       const j0 = Math.floor(j);
       const frac = j - j0;
       acc += input[k] * (h[j0] + frac * (h[j0 + 1] - h[j0]));
@@ -267,9 +331,11 @@ function buildDsfHeader(totalFileBytes, dsdRate, totalSamplesPerChannel, blockSi
 // 5th / 7th order: synthesized CIFFR (cascade of integrators + feedforward taps +
 // ultrasonic resonator pairs, see CIFFR_5 / CIFFR_7 coefficient tables above).
 // Input upsampling: Linear / Minimum / Intermediate phase Hermite interpolation,
-// 'gauss-long' = Poly-Sinc-Gauss Long FIR (linear phase), or 'gauss-min' = the
-// minimum-phase variant of the same design (zero pre-ringing). Both require a
-// gaussFilter built by buildGaussFilter(); falls back to linear Hermite when absent.
+// 'gauss-long' = Poly-Sinc-Gauss Long FIR (linear phase), 'gauss-min' = the
+// minimum-phase variant of the same design (zero pre-ringing), or 'poly-ext2' =
+// extended-poly-sinc (EXT2) style Kaiser-windowed sinc (see buildPolyExt2Filter).
+// All three require a gaussFilter built by buildGaussFilter()/buildPolyExt2Filter();
+// falls back to linear Hermite when absent.
 //
 // Stateful: internal integrator state persists across processBlocks() calls,
 // so one instance can drive both whole-file encoding and progressive batch encoding
@@ -277,9 +343,9 @@ function buildDsfHeader(totalFileBytes, dsdRate, totalSamplesPerChannel, blockSi
 class DsdModulator {
   constructor(dsdOrder = 5, filterPhase = 'linear', gaussFilter = null) {
     this.order = [2, 5, 7].includes(parseInt(dsdOrder, 10)) ? parseInt(dsdOrder, 10) : 5;
-    let phase = ['linear', 'minimum', 'intermediate', 'gauss-long', 'gauss-min'].includes(filterPhase) ? filterPhase : 'linear';
-    // 'gauss-long' / 'gauss-min' 需要 buildGaussFilter() 產生的係數；缺少時退回線性 Hermite
-    if ((phase === 'gauss-long' || phase === 'gauss-min') && !gaussFilter) phase = 'linear';
+    let phase = ['linear', 'minimum', 'intermediate', 'gauss-long', 'gauss-min', 'poly-ext2'].includes(filterPhase) ? filterPhase : 'linear';
+    // FIR phases need coefficients from buildGaussFilter()/buildPolyExt2Filter(); fall back to linear Hermite
+    if ((phase === 'gauss-long' || phase === 'gauss-min' || phase === 'poly-ext2') && !gaussFilter) phase = 'linear';
     this.phase = phase;
     this.gf = gaussFilter || null;
 
@@ -302,7 +368,7 @@ class DsdModulator {
     const out = Buffer.allocUnsafe(numBlocks * 2 * blockSize);
     const order = this.order;
     const phase = this.phase;
-    const useGauss = phase === 'gauss-long' || phase === 'gauss-min';
+    const useGauss = phase === 'gauss-long' || phase === 'gauss-min' || phase === 'poly-ext2';
     const ratio = 1 / invRatio;
     const gf = this.gf;
 
@@ -451,6 +517,7 @@ class DsdModulator {
 module.exports = {
   interpolateSample,
   buildGaussFilter,
+  buildPolyExt2Filter,
   firSample,
   getDsdRate,
   buildDsfHeader,

@@ -11,7 +11,7 @@ const stream = require('stream');
 const EventEmitter = require('events');
 const { Worker } = require('worker_threads');
 const nativeAudioEngine = require('./native-audio-engine');
-const { interpolateSample, buildGaussFilter, firSample } = require('./dsp-kernel');
+const { interpolateSample, buildGaussFilter, buildPolyExt2Filter, firSample } = require('./dsp-kernel');
 
 // Progressive Streaming Reader with Backpressure Flow Control
 // Prevents downstream DLNA/UPnP renderers from reading unwritten / zero-padded blocks
@@ -221,9 +221,12 @@ class NativeDspStreamer {
     const outFrames = Math.floor(inLen * ratio);
 
     // 'gauss-long' / 'gauss-min' 濾波相位：Poly-Sinc-Gauss Long FIR 升頻（線性或最小相位，設計見 dsp-kernel.js）
+    // 'poly-ext2'：extended poly sinc (EXT2) 風格 Kaiser 窗 sinc FIR（設計見 dsp-kernel.js）
     let gaussFilter = null;
     if (filterPhase === 'gauss-long' || filterPhase === 'gauss-min') {
       try { gaussFilter = buildGaussFilter(targetSampleRate, srcRate, filterPhase === 'gauss-min'); } catch (e) { gaussFilter = null; }
+    } else if (filterPhase === 'poly-ext2') {
+      try { gaussFilter = buildPolyExt2Filter(targetSampleRate, srcRate); } catch (e) { gaussFilter = null; }
     }
 
     const bytesPerSample = 3; // 24-bit PCM
