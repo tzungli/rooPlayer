@@ -544,7 +544,7 @@ class DsdModulator {
             s2_L += s1_L - 0.5 * y_L;
             if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
             y_L = (s2_L >= 0) ? 1.0 : -1.0;
-            if (y_L > 0) byteValL |= (1 << bit);
+            if (y_L > 0) byteValL |= (1 << (7 - bit)); // DSF spec: MSB-first
 
             const uR = rawR * 0.75;
             s1_R += uR - y_R;
@@ -552,7 +552,7 @@ class DsdModulator {
             s2_R += s1_R - 0.5 * y_R;
             if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
             y_R = (s2_R >= 0) ? 1.0 : -1.0;
-            if (y_R > 0) byteValR |= (1 << bit);
+            if (y_R > 0) byteValR |= (1 << (7 - bit)); // DSF spec: MSB-first
           } else if (order === 5) {
             // 5th-Order CIFFR: 1 DC zero + 2 ultrasonic resonator zero pairs (see CIFFR_5; coefficients hoisted above)
             const uL = rawL * scale;
@@ -568,7 +568,7 @@ class DsdModulator {
             if (s5_L > CLAMP) s5_L = CLAMP; else if (s5_L < -CLAMP) s5_L = -CLAMP;
             const sigma_L = uL + a1 * s1_L + a2 * s2_L + a4 * s4_L;
             y_L = (sigma_L >= 0) ? 1.0 : -1.0;
-            if (y_L > 0) byteValL |= (1 << bit);
+            if (y_L > 0) byteValL |= (1 << (7 - bit)); // DSF spec: MSB-first
 
             const uR = rawR * scale;
             s1_R += c1 * (uR - y_R);
@@ -583,7 +583,7 @@ class DsdModulator {
             if (s5_R > CLAMP) s5_R = CLAMP; else if (s5_R < -CLAMP) s5_R = -CLAMP;
             const sigma_R = uR + a1 * s1_R + a2 * s2_R + a4 * s4_R;
             y_R = (sigma_R >= 0) ? 1.0 : -1.0;
-            if (y_R > 0) byteValR |= (1 << bit);
+            if (y_R > 0) byteValR |= (1 << (7 - bit)); // DSF spec: MSB-first
           } else {
             // 7th-Order CIFFR: 1 DC zero + 3 ultrasonic resonator zero pairs (see CIFFR_7; coefficients hoisted above)
             const uL = rawL * scale;
@@ -603,7 +603,7 @@ class DsdModulator {
             if (s7_L > CLAMP) s7_L = CLAMP; else if (s7_L < -CLAMP) s7_L = -CLAMP;
             const sigma_L = uL + a1 * s1_L + a2 * s2_L + a4 * s4_L + a6 * s6_L;
             y_L = (sigma_L >= 0) ? 1.0 : -1.0;
-            if (y_L > 0) byteValL |= (1 << bit);
+            if (y_L > 0) byteValL |= (1 << (7 - bit)); // DSF spec: MSB-first
 
             const uR = rawR * scale;
             s1_R += c1 * (uR - y_R);
@@ -622,7 +622,7 @@ class DsdModulator {
             if (s7_R > CLAMP) s7_R = CLAMP; else if (s7_R < -CLAMP) s7_R = -CLAMP;
             const sigma_R = uR + a1 * s1_R + a2 * s2_R + a4 * s4_R + a6 * s6_R;
             y_R = (sigma_R >= 0) ? 1.0 : -1.0;
-            if (y_R > 0) byteValR |= (1 << bit);
+            if (y_R > 0) byteValR |= (1 << (7 - bit)); // DSF spec: MSB-first
           }
         }
 

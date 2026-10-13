@@ -494,7 +494,7 @@ class NativeAudioEngine {
         for (let bit = 0; bit < decimateRatio; bit++) {
           const bitPos = startBit + bit;
           const byteIdx = Math.floor(bitPos / 8);
-          const bitShift = bitPos % 8;
+          const bitShift = 7 - (bitPos % 8); // DSF/DFF spec: MSB-first
 
           const bitL = (blockPair[byteIdx] >> bitShift) & 1;
           sumL += bitL ? 1 : -1;
