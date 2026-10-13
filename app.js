@@ -4844,7 +4844,7 @@ async function playCurrentTrack() {
 
   // Update UI Elements
   playerTitle.textContent = track.title;
-  playerArtist.textContent = `${track.artist} — ${track.album}`;
+  playerArtist.textContent = `${track.artist} — ${track.title}`;
   const defaultPlayerCover = createSvgCover(track.album, track.artist, '#27272a', '#09090b');
   playerCoverImg.src = formatCoverSrc(track.cover || (foundAlbum ? foundAlbum.cover : null)) || defaultPlayerCover;
   playerCoverImg.onerror = () => {
@@ -4951,7 +4951,7 @@ async function playCurrentTrack() {
           console.warn('[DLNA] TIDAL cache assembly failed:', e);
         }
       }
-      playerArtist.textContent = `${track.artist} — ${track.album}`;
+      playerArtist.textContent = `${track.artist} — ${track.title}`;
 
       // No cached file = nothing the DLNA streaming server can serve; fail with a clear
       // message instead of a cryptic "path argument must be of type string" TypeError.
@@ -5042,7 +5042,7 @@ async function playCurrentTrack() {
       if (track.filePath && String(track.filePath).endsWith('.flac')) {
         playerArtist.textContent = `⚡ 正在透過 DSP 升頻引擎調變 TIDAL 音訊...`;
         await playSoxTrack(track, 0);
-        playerArtist.textContent = `${track.artist} — ${track.album}`;
+        playerArtist.textContent = `${track.artist} — ${track.title}`;
         if (track.duration) totalTimeLabel.textContent = formatDuration(track.duration);
         prefetchNextTidalTracks();
         return;
@@ -5100,7 +5100,7 @@ async function playCurrentTrack() {
         if (cached) {
           track.filePath = cached;
           await playSoxTrack(track, 0);
-          playerArtist.textContent = `${track.artist} — ${track.album}`;
+          playerArtist.textContent = `${track.artist} — ${track.title}`;
           if (track.duration) totalTimeLabel.textContent = formatDuration(track.duration);
           prefetchNextTidalTracks();
           return;
@@ -5114,7 +5114,7 @@ async function playCurrentTrack() {
       return nativeAudio.play().then(() => {
         state.isPlaying = true;
         updatePlayPauseBtnUI();
-        playerArtist.textContent = `${track.artist} — ${track.album}`;
+        playerArtist.textContent = `${track.artist} — ${track.title}`;
         if (track.duration) totalTimeLabel.textContent = formatDuration(track.duration);
         const qLabel = (track.bitDepth === 24 || (track.sampleRate && track.sampleRate > 48000)) ? '24-bit Hi-Res' : '16-bit Lossless';
         showToast(`🎵 正在播放 TIDAL 原生串流: 《${track.title}》 [${qLabel}]`);
@@ -5156,7 +5156,7 @@ async function playCurrentTrack() {
     }).then(() => {
       state.isPlaying = true;
       updatePlayPauseBtnUI();
-      playerArtist.textContent = `${track.artist} — ${track.album}`;
+      playerArtist.textContent = `${track.artist} — ${track.title}`;
       totalTimeLabel.textContent = formatDuration(track.duration || 30);
       showToast(`🎵 正在播放 KKBOX 線上串流: 《${track.title}》`);
     }).catch(err => {
