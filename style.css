@@ -1832,7 +1832,8 @@ body.table-col-resizing * {
 /* Two-column layout: Left (Signal Path) & Right (Upsampling Engine) */
 .signal-path-columns {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* 左欄（即時訊號串流路徑）縮短，右欄（升頻引擎設定）加寬以容納更多濾波器選項 */
+  grid-template-columns: 2fr 3fr;
   gap: 28px;
   align-items: start;
 }
