@@ -427,6 +427,18 @@ class DsdModulator {
     const ratio = 1 / invRatio;
     const gf = this.gf;
 
+    // Hot-path hoisting: resolve coefficient table lookups once per batch, not per bit.
+    let c1 = 0, c2 = 0, c3 = 0, c4 = 0, c5 = 0, c6 = 0, c7 = 0;
+    let g1 = 0, g2 = 0, g3 = 0, a1 = 0, a2 = 0, a4 = 0, a6 = 0, scale = 0;
+    const CLAMP = CIFFR_CLAMP;
+    if (order === 5) {
+      c1 = CIFFR_5.c1; c2 = CIFFR_5.c2; c3 = CIFFR_5.c3; c4 = CIFFR_5.c4; c5 = CIFFR_5.c5;
+      g1 = CIFFR_5.g1; g2 = CIFFR_5.g2; a1 = CIFFR_5.a1; a2 = CIFFR_5.a2; a4 = CIFFR_5.a4; scale = CIFFR_5.scale;
+    } else if (order === 7) {
+      c1 = CIFFR_7.c1; c2 = CIFFR_7.c2; c3 = CIFFR_7.c3; c4 = CIFFR_7.c4; c5 = CIFFR_7.c5; c6 = CIFFR_7.c6; c7 = CIFFR_7.c7;
+      g1 = CIFFR_7.g1; g2 = CIFFR_7.g2; g3 = CIFFR_7.g3; a1 = CIFFR_7.a1; a2 = CIFFR_7.a2; a4 = CIFFR_7.a4; a6 = CIFFR_7.a6; scale = CIFFR_7.scale;
+    }
+
     // Load persistent state into hot locals
     let s1_L = this.s1L, s2_L = this.s2L, s3_L = this.s3L, s4_L = this.s4L, s5_L = this.s5L, s6_L = this.s6L, s7_L = this.s7L, y_L = this.yL;
     let s1_R = this.s1R, s2_R = this.s2R, s3_R = this.s3R, s4_R = this.s4R, s5_R = this.s5R, s6_R = this.s6R, s7_R = this.s7R, y_R = this.yR;
@@ -484,73 +496,73 @@ class DsdModulator {
             y_R = (s2_R >= 0) ? 1.0 : -1.0;
             if (y_R > 0) byteValR |= (1 << bit);
           } else if (order === 5) {
-            // 5th-Order CIFFR: 1 DC zero + 2 ultrasonic resonator zero pairs (see CIFFR_5)
-            const uL = rawL * CIFFR_5.scale;
-            s1_L += CIFFR_5.c1 * (uL - y_L);
-            if (s1_L > CIFFR_CLAMP) s1_L = CIFFR_CLAMP; else if (s1_L < -CIFFR_CLAMP) s1_L = -CIFFR_CLAMP;
-            s2_L += CIFFR_5.c2 * s1_L - CIFFR_5.g1 * s3_L;
-            if (s2_L > CIFFR_CLAMP) s2_L = CIFFR_CLAMP; else if (s2_L < -CIFFR_CLAMP) s2_L = -CIFFR_CLAMP;
-            s3_L += CIFFR_5.c3 * s2_L;
-            if (s3_L > CIFFR_CLAMP) s3_L = CIFFR_CLAMP; else if (s3_L < -CIFFR_CLAMP) s3_L = -CIFFR_CLAMP;
-            s4_L += CIFFR_5.c4 * s3_L - CIFFR_5.g2 * s5_L;
-            if (s4_L > CIFFR_CLAMP) s4_L = CIFFR_CLAMP; else if (s4_L < -CIFFR_CLAMP) s4_L = -CIFFR_CLAMP;
-            s5_L += CIFFR_5.c5 * s4_L;
-            if (s5_L > CIFFR_CLAMP) s5_L = CIFFR_CLAMP; else if (s5_L < -CIFFR_CLAMP) s5_L = -CIFFR_CLAMP;
-            const sigma_L = uL + CIFFR_5.a1 * s1_L + CIFFR_5.a2 * s2_L + CIFFR_5.a4 * s4_L;
+            // 5th-Order CIFFR: 1 DC zero + 2 ultrasonic resonator zero pairs (see CIFFR_5; coefficients hoisted above)
+            const uL = rawL * scale;
+            s1_L += c1 * (uL - y_L);
+            if (s1_L > CLAMP) s1_L = CLAMP; else if (s1_L < -CLAMP) s1_L = -CLAMP;
+            s2_L += c2 * s1_L - g1 * s3_L;
+            if (s2_L > CLAMP) s2_L = CLAMP; else if (s2_L < -CLAMP) s2_L = -CLAMP;
+            s3_L += c3 * s2_L;
+            if (s3_L > CLAMP) s3_L = CLAMP; else if (s3_L < -CLAMP) s3_L = -CLAMP;
+            s4_L += c4 * s3_L - g2 * s5_L;
+            if (s4_L > CLAMP) s4_L = CLAMP; else if (s4_L < -CLAMP) s4_L = -CLAMP;
+            s5_L += c5 * s4_L;
+            if (s5_L > CLAMP) s5_L = CLAMP; else if (s5_L < -CLAMP) s5_L = -CLAMP;
+            const sigma_L = uL + a1 * s1_L + a2 * s2_L + a4 * s4_L;
             y_L = (sigma_L >= 0) ? 1.0 : -1.0;
             if (y_L > 0) byteValL |= (1 << bit);
 
-            const uR = rawR * CIFFR_5.scale;
-            s1_R += CIFFR_5.c1 * (uR - y_R);
-            if (s1_R > CIFFR_CLAMP) s1_R = CIFFR_CLAMP; else if (s1_R < -CIFFR_CLAMP) s1_R = -CIFFR_CLAMP;
-            s2_R += CIFFR_5.c2 * s1_R - CIFFR_5.g1 * s3_R;
-            if (s2_R > CIFFR_CLAMP) s2_R = CIFFR_CLAMP; else if (s2_R < -CIFFR_CLAMP) s2_R = -CIFFR_CLAMP;
-            s3_R += CIFFR_5.c3 * s2_R;
-            if (s3_R > CIFFR_CLAMP) s3_R = CIFFR_CLAMP; else if (s3_R < -CIFFR_CLAMP) s3_R = -CIFFR_CLAMP;
-            s4_R += CIFFR_5.c4 * s3_R - CIFFR_5.g2 * s5_R;
-            if (s4_R > CIFFR_CLAMP) s4_R = CIFFR_CLAMP; else if (s4_R < -CIFFR_CLAMP) s4_R = -CIFFR_CLAMP;
-            s5_R += CIFFR_5.c5 * s4_R;
-            if (s5_R > CIFFR_CLAMP) s5_R = CIFFR_CLAMP; else if (s5_R < -CIFFR_CLAMP) s5_R = -CIFFR_CLAMP;
-            const sigma_R = uR + CIFFR_5.a1 * s1_R + CIFFR_5.a2 * s2_R + CIFFR_5.a4 * s4_R;
+            const uR = rawR * scale;
+            s1_R += c1 * (uR - y_R);
+            if (s1_R > CLAMP) s1_R = CLAMP; else if (s1_R < -CLAMP) s1_R = -CLAMP;
+            s2_R += c2 * s1_R - g1 * s3_R;
+            if (s2_R > CLAMP) s2_R = CLAMP; else if (s2_R < -CLAMP) s2_R = -CLAMP;
+            s3_R += c3 * s2_R;
+            if (s3_R > CLAMP) s3_R = CLAMP; else if (s3_R < -CLAMP) s3_R = -CLAMP;
+            s4_R += c4 * s3_R - g2 * s5_R;
+            if (s4_R > CLAMP) s4_R = CLAMP; else if (s4_R < -CLAMP) s4_R = -CLAMP;
+            s5_R += c5 * s4_R;
+            if (s5_R > CLAMP) s5_R = CLAMP; else if (s5_R < -CLAMP) s5_R = -CLAMP;
+            const sigma_R = uR + a1 * s1_R + a2 * s2_R + a4 * s4_R;
             y_R = (sigma_R >= 0) ? 1.0 : -1.0;
             if (y_R > 0) byteValR |= (1 << bit);
           } else {
-            // 7th-Order CIFFR: 1 DC zero + 3 ultrasonic resonator zero pairs (see CIFFR_7)
-            const uL = rawL * CIFFR_7.scale;
-            s1_L += CIFFR_7.c1 * (uL - y_L);
-            if (s1_L > CIFFR_CLAMP) s1_L = CIFFR_CLAMP; else if (s1_L < -CIFFR_CLAMP) s1_L = -CIFFR_CLAMP;
-            s2_L += CIFFR_7.c2 * s1_L - CIFFR_7.g1 * s3_L;
-            if (s2_L > CIFFR_CLAMP) s2_L = CIFFR_CLAMP; else if (s2_L < -CIFFR_CLAMP) s2_L = -CIFFR_CLAMP;
-            s3_L += CIFFR_7.c3 * s2_L;
-            if (s3_L > CIFFR_CLAMP) s3_L = CIFFR_CLAMP; else if (s3_L < -CIFFR_CLAMP) s3_L = -CIFFR_CLAMP;
-            s4_L += CIFFR_7.c4 * s3_L - CIFFR_7.g2 * s5_L;
-            if (s4_L > CIFFR_CLAMP) s4_L = CIFFR_CLAMP; else if (s4_L < -CIFFR_CLAMP) s4_L = -CIFFR_CLAMP;
-            s5_L += CIFFR_7.c5 * s4_L;
-            if (s5_L > CIFFR_CLAMP) s5_L = CIFFR_CLAMP; else if (s5_L < -CIFFR_CLAMP) s5_L = -CIFFR_CLAMP;
-            s6_L += CIFFR_7.c6 * s5_L - CIFFR_7.g3 * s7_L;
-            if (s6_L > CIFFR_CLAMP) s6_L = CIFFR_CLAMP; else if (s6_L < -CIFFR_CLAMP) s6_L = -CIFFR_CLAMP;
-            s7_L += CIFFR_7.c7 * s6_L;
-            if (s7_L > CIFFR_CLAMP) s7_L = CIFFR_CLAMP; else if (s7_L < -CIFFR_CLAMP) s7_L = -CIFFR_CLAMP;
-            const sigma_L = uL + CIFFR_7.a1 * s1_L + CIFFR_7.a2 * s2_L + CIFFR_7.a4 * s4_L + CIFFR_7.a6 * s6_L;
+            // 7th-Order CIFFR: 1 DC zero + 3 ultrasonic resonator zero pairs (see CIFFR_7; coefficients hoisted above)
+            const uL = rawL * scale;
+            s1_L += c1 * (uL - y_L);
+            if (s1_L > CLAMP) s1_L = CLAMP; else if (s1_L < -CLAMP) s1_L = -CLAMP;
+            s2_L += c2 * s1_L - g1 * s3_L;
+            if (s2_L > CLAMP) s2_L = CLAMP; else if (s2_L < -CLAMP) s2_L = -CLAMP;
+            s3_L += c3 * s2_L;
+            if (s3_L > CLAMP) s3_L = CLAMP; else if (s3_L < -CLAMP) s3_L = -CLAMP;
+            s4_L += c4 * s3_L - g2 * s5_L;
+            if (s4_L > CLAMP) s4_L = CLAMP; else if (s4_L < -CLAMP) s4_L = -CLAMP;
+            s5_L += c5 * s4_L;
+            if (s5_L > CLAMP) s5_L = CLAMP; else if (s5_L < -CLAMP) s5_L = -CLAMP;
+            s6_L += c6 * s5_L - g3 * s7_L;
+            if (s6_L > CLAMP) s6_L = CLAMP; else if (s6_L < -CLAMP) s6_L = -CLAMP;
+            s7_L += c7 * s6_L;
+            if (s7_L > CLAMP) s7_L = CLAMP; else if (s7_L < -CLAMP) s7_L = -CLAMP;
+            const sigma_L = uL + a1 * s1_L + a2 * s2_L + a4 * s4_L + a6 * s6_L;
             y_L = (sigma_L >= 0) ? 1.0 : -1.0;
             if (y_L > 0) byteValL |= (1 << bit);
 
-            const uR = rawR * CIFFR_7.scale;
-            s1_R += CIFFR_7.c1 * (uR - y_R);
-            if (s1_R > CIFFR_CLAMP) s1_R = CIFFR_CLAMP; else if (s1_R < -CIFFR_CLAMP) s1_R = -CIFFR_CLAMP;
-            s2_R += CIFFR_7.c2 * s1_R - CIFFR_7.g1 * s3_R;
-            if (s2_R > CIFFR_CLAMP) s2_R = CIFFR_CLAMP; else if (s2_R < -CIFFR_CLAMP) s2_R = -CIFFR_CLAMP;
-            s3_R += CIFFR_7.c3 * s2_R;
-            if (s3_R > CIFFR_CLAMP) s3_R = CIFFR_CLAMP; else if (s3_R < -CIFFR_CLAMP) s3_R = -CIFFR_CLAMP;
-            s4_R += CIFFR_7.c4 * s3_R - CIFFR_7.g2 * s5_R;
-            if (s4_R > CIFFR_CLAMP) s4_R = CIFFR_CLAMP; else if (s4_R < -CIFFR_CLAMP) s4_R = -CIFFR_CLAMP;
-            s5_R += CIFFR_7.c5 * s4_R;
-            if (s5_R > CIFFR_CLAMP) s5_R = CIFFR_CLAMP; else if (s5_R < -CIFFR_CLAMP) s5_R = -CIFFR_CLAMP;
-            s6_R += CIFFR_7.c6 * s5_R - CIFFR_7.g3 * s7_R;
-            if (s6_R > CIFFR_CLAMP) s6_R = CIFFR_CLAMP; else if (s6_R < -CIFFR_CLAMP) s6_R = -CIFFR_CLAMP;
-            s7_R += CIFFR_7.c7 * s6_R;
-            if (s7_R > CIFFR_CLAMP) s7_R = CIFFR_CLAMP; else if (s7_R < -CIFFR_CLAMP) s7_R = -CIFFR_CLAMP;
-            const sigma_R = uR + CIFFR_7.a1 * s1_R + CIFFR_7.a2 * s2_R + CIFFR_7.a4 * s4_R + CIFFR_7.a6 * s6_R;
+            const uR = rawR * scale;
+            s1_R += c1 * (uR - y_R);
+            if (s1_R > CLAMP) s1_R = CLAMP; else if (s1_R < -CLAMP) s1_R = -CLAMP;
+            s2_R += c2 * s1_R - g1 * s3_R;
+            if (s2_R > CLAMP) s2_R = CLAMP; else if (s2_R < -CLAMP) s2_R = -CLAMP;
+            s3_R += c3 * s2_R;
+            if (s3_R > CLAMP) s3_R = CLAMP; else if (s3_R < -CLAMP) s3_R = -CLAMP;
+            s4_R += c4 * s3_R - g2 * s5_R;
+            if (s4_R > CLAMP) s4_R = CLAMP; else if (s4_R < -CLAMP) s4_R = -CLAMP;
+            s5_R += c5 * s4_R;
+            if (s5_R > CLAMP) s5_R = CLAMP; else if (s5_R < -CLAMP) s5_R = -CLAMP;
+            s6_R += c6 * s5_R - g3 * s7_R;
+            if (s6_R > CLAMP) s6_R = CLAMP; else if (s6_R < -CLAMP) s6_R = -CLAMP;
+            s7_R += c7 * s6_R;
+            if (s7_R > CLAMP) s7_R = CLAMP; else if (s7_R < -CLAMP) s7_R = -CLAMP;
+            const sigma_R = uR + a1 * s1_R + a2 * s2_R + a4 * s4_R + a6 * s6_R;
             y_R = (sigma_R >= 0) ? 1.0 : -1.0;
             if (y_R > 0) byteValR |= (1 << bit);
           }

@@ -11,7 +11,7 @@ const stream = require('stream');
 const EventEmitter = require('events');
 const { Worker } = require('worker_threads');
 const nativeAudioEngine = require('./native-audio-engine');
-const { interpolateSample, buildGaussFilter, buildPolyExt2Filter, buildHqpPsExt2Filter, firSample } = require('./dsp-kernel');
+const { interpolateSample, buildGaussFilter, buildPolyExt2Filter, buildHqpPsExt2Filter, firSample, getDsdRate, buildDsfHeader, DSD_BLOCK_SIZE, DSD_SAMPLES_PER_BLOCK } = require('./dsp-kernel');
 
 // Progressive Streaming Reader with Backpressure Flow Control
 // Prevents downstream DLNA/UPnP renderers from reading unwritten / zero-padded blocks
@@ -129,13 +129,98 @@ class NativeDspStreamer {
   }
 
   // Create progressive streaming session for PCM -> 1-bit DSD (DSF format)
-  // Powered by background worker_threads to prevent any Electron UI / main process lag
+  // Powered by background worker_threads to prevent any Electron UI / main process lag.
+  //
+  // Parallel segment modulation (fix for DLNA playback dropouts with 5th/7th-order modulators):
+  // a single worker thread modulating 5th/7th-order CIFFR (especially with FIR filter phases or
+  // at DSD128+) can run SLOWER than real time; the progressive DSF file then starves and the
+  // DLNA renderer stops after its buffer drains. The track is split into up to 4 contiguous block
+  // segments modulated by parallel worker threads. The FIRST segment is deliberately short (~8 s):
+  // the contiguous prefix the renderer consumes is gated by the frontier worker's rate, so a short
+  // first segment bounds any stall, and every later segment is pre-generated well before the
+  // renderer reaches it (segment sizes grow geometrically x1.5). Each non-first segment additionally
+  // modulates ~1.5 s of preceding audio (warm-up) that is DISCARDED, so its integrator state at the
+  // segment boundary has converged to the continuous-run state (no audible discontinuity).
+  // Segment/view boundaries are chosen so the input<->output sample mapping stays exact
+  // (required for non-integer ratios such as 48k -> DSD).
   async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear') {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.dsf`);
     const pcm = await nativeAudioEngine.readPcmSamples(filePath, startSec);
     if (!pcm) throw new Error('Native PCM read failed for DSD modulation');
+
+    const srcRate = pcm.sampleRate;
+    const inLen = pcm.left.length;
+    const dsdRate = getDsdRate(dsdMode);
+    const samplesPerBlock = DSD_SAMPLES_PER_BLOCK;
+    const blockSize = DSD_BLOCK_SIZE;
+    const bytesPerBlockPair = 2 * blockSize;
+    const outBits = Math.floor(inLen * (dsdRate / srcRate));
+    const totalBlocks = Math.ceil(outBits / samplesPerBlock);
+    const totalSamplesPerChannel = totalBlocks * samplesPerBlock;
+    const totalFileBytes = 92 + totalBlocks * bytesPerBlockPair;
+
+    // 92-byte standard Sony DSF header, written once here; workers only write their data ranges.
+    const fd = fs.openSync(tmpFile, 'w+');
+    fs.ftruncateSync(fd, totalFileBytes);
+    fs.writeSync(fd, buildDsfHeader(totalFileBytes, dsdRate, totalSamplesPerChannel, blockSize), 0, 92, 0);
+    fs.closeSync(fd);
+
+    // --- Segment geometry (exact integer input<->output mapping) ---
+    const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+    // Segment boundaries are multiples of segAlignBlocks so startBlock * samplesPerBlock always
+    // maps to an exact integer input-sample offset.
+    const segAlignBlocks = dsdRate / gcd(samplesPerBlock * srcRate, dsdRate);
+    // Warm-up / guard bit counts are multiples of stepBits so their input-sample spans are integral.
+    const stepBits = dsdRate / gcd(srcRate, dsdRate);
+    // Guard: max FIR window span in input samples (design cap 150 MMAC/s/ch) + interpolation margin.
+    const guardSamples = Math.ceil(150e6 / dsdRate) + 4;
+    const guardBits = Math.ceil((guardSamples * dsdRate / srcRate) / stepBits) * stepBits;
+    const warmupLcm = (samplesPerBlock * stepBits) / gcd(samplesPerBlock, stepBits);
+    const warmupBitsFull = Math.ceil((1.5 * dsdRate) / warmupLcm) * warmupLcm; // ~1.5 s modulator warm-up
+
+    // Segment sizes: first ~8 s, then geometrically x1.5, so the contiguous prefix crosses segment
+    // boundaries before a slower-than-real-time frontier worker runs out of lead.
+    const segSizes = [];
+    {
+      let remaining = totalBlocks;
+      const maxWorkers = Math.max(1, Math.min(4, os.cpus().length - 1));
+      const minSegBlocks = Math.max(segAlignBlocks, Math.round(6 * dsdRate / samplesPerBlock));
+      while (remaining > 0 && segSizes.length < maxWorkers) {
+        const wantSec = segSizes.length === 0 ? 8 : 8 * Math.pow(1.5, segSizes.length);
+        let sizeBlocks = Math.max(segAlignBlocks, Math.round((wantSec * dsdRate / samplesPerBlock) / segAlignBlocks) * segAlignBlocks);
+        if (segSizes.length > 0 && remaining - sizeBlocks < minSegBlocks) sizeBlocks = remaining; // merge short tail
+        if (sizeBlocks > remaining) sizeBlocks = remaining;
+        segSizes.push(sizeBlocks);
+        remaining -= sizeBlocks;
+      }
+    }
+
+    const segs = [];
+    {
+      let startBlock = 0;
+      for (let i = 0; i < segSizes.length; i++) {
+        const endBlock = startBlock + segSizes[i];
+        const warmupBits = startBlock === 0 ? 0 : Math.min(warmupBitsFull, startBlock * samplesPerBlock);
+        // The view starts guardBits + warmupBits output-bits before the segment (exact integer input
+        // offset). The first segment starts at 0 exactly like the old single-worker whole-file pass
+        // (bit-identical output for the first segment).
+        const viewStartInput = Math.max(0, Math.round(((startBlock * samplesPerBlock - warmupBits - guardBits) * srcRate) / dsdRate));
+        const genStartBit = startBlock === 0 ? 0 : warmupBits + guardBits;
+        const genEndBit = genStartBit + (endBlock - startBlock) * samplesPerBlock;
+        const viewLen = Math.min(inLen - viewStartInput, Math.ceil((genEndBit * srcRate) / dsdRate) + guardSamples);
+        segs.push({ startBlock, endBlock, viewStartInput, viewLen, genStartBit, genEndBit, warmupBits });
+        startBlock = endBlock;
+      }
+    }
+    const K = segs.length;
+
+    // Shared PCM: SharedArrayBuffer views are shared with every worker without per-worker copies.
+    const leftSAB = new SharedArrayBuffer(pcm.left.byteLength);
+    new Float32Array(leftSAB).set(pcm.left);
+    const rightSAB = new SharedArrayBuffer(pcm.right.byteLength);
+    new Float32Array(rightSAB).set(pcm.right);
 
     const session = new EventEmitter();
     session.token = token;
@@ -144,59 +229,105 @@ class NativeDspStreamer {
     session.bytesWritten = 92;
     session.isCompleted = false;
     session.isCancelled = false;
-    session.totalFileBytes = 0;
-    session.durationSec = pcm.left.length / pcm.sampleRate;
+    session.totalFileBytes = totalFileBytes;
+    session.durationSec = inLen / srcRate;
 
     const workerPath = path.join(__dirname, 'dsd-modulator-worker.js');
-    const worker = new Worker(workerPath, {
-      workerData: {
-        tmpFile,
-        leftBuffer: pcm.left.buffer,
-        leftByteOffset: pcm.left.byteOffset,
-        leftLength: pcm.left.length,
-        rightBuffer: pcm.right.buffer,
-        rightByteOffset: pcm.right.byteOffset,
-        rightLength: pcm.right.length,
-        sampleRate: pcm.sampleRate,
-        dsdMode,
-        dsdOrder,
-        filterPhase
-      }
-    });
-    session.worker = worker;
+    const workers = [];
+    const workerProgress = segs.map((s) => s.startBlock); // absolute contiguous completed blocks per segment
+    let completedCount = 0;
+    let initDone = false;
+    let initError = null;
+    let resolveInit, rejectInit;
+    const initPromise = new Promise((res, rej) => { resolveInit = res; rejectInit = rej; });
 
-    await new Promise((resolve, reject) => {
-      let isInit = false;
+    // The reader may only consume the contiguous completed prefix across all segments.
+    const updateAvailable = () => {
+      let prefix = 0;
+      for (let i = 0; i < K; i++) {
+        if (workerProgress[i] >= segs[i].endBlock) { prefix = segs[i].endBlock; continue; }
+        prefix = workerProgress[i];
+        break;
+      }
+      session.bytesWritten = 92 + prefix * bytesPerBlockPair;
+      session.emit('progress', session.bytesWritten);
+    };
+
+    if (K === 0) {
+      session.isCompleted = true;
+      session.bytesWritten = totalFileBytes;
+      initDone = true;
+      resolveInit();
+    }
+
+    for (let i = 0; i < K; i++) {
+      const s = segs[i];
+      const worker = new Worker(workerPath, {
+        workerData: {
+          tmpFile,
+          leftBuffer: leftSAB,
+          leftByteOffset: s.viewStartInput * 4,
+          leftLength: s.viewLen,
+          rightBuffer: rightSAB,
+          rightByteOffset: s.viewStartInput * 4,
+          rightLength: s.viewLen,
+          sampleRate: srcRate,
+          dsdMode,
+          dsdOrder,
+          filterPhase,
+          genStartBit: s.genStartBit,
+          genEndBit: s.genEndBit,
+          warmupBits: s.warmupBits,
+          writeStartBlock: s.startBlock,
+          isPrimary: i === 0
+        }
+      });
+      workers.push(worker);
       worker.on('message', (msg) => {
-        if (msg.type === 'initial') {
-          session.totalFileBytes = msg.totalFileBytes;
-          session.bytesWritten = msg.bytesWritten;
-          isInit = true;
-          resolve();
-        } else if (msg.type === 'progress') {
-          session.bytesWritten = msg.bytesWritten;
-          session.emit('progress', msg.bytesWritten);
-        } else if (msg.type === 'complete') {
-          session.isCompleted = true;
-          session.bytesWritten = msg.bytesWritten;
-          session.emit('complete');
+        if (msg.type === 'progress' || msg.type === 'initial') {
+          workerProgress[i] = Math.max(workerProgress[i], msg.blocksWritten);
+          updateAvailable();
+          if (msg.type === 'initial' && !initDone) { initDone = true; resolveInit(); }
         }
       });
       worker.on('error', (err) => {
         console.error('[DsdWorker] error:', err);
-        if (!isInit) reject(err);
+        if (!initDone) {
+          if (!initError) { initError = err; rejectInit(err); }
+        } else if (!session.isCompleted) {
+          session.isCompleted = true; session.emit('complete'); // degrade to EOF instead of hanging forever
+        }
       });
       worker.on('exit', (code) => {
-        if (!isInit && code !== 0) reject(new Error(`DSD worker exited with code ${code}`));
+        if (code === 0) {
+          workerProgress[i] = segs[i].endBlock;
+          completedCount++;
+          if (completedCount >= K) {
+            session.isCompleted = true;
+            session.bytesWritten = totalFileBytes;
+            session.emit('complete');
+          } else {
+            updateAvailable();
+          }
+        } else if (!initDone) {
+          if (!initError) { initError = new Error(`DSD worker exited with code ${code}`); rejectInit(initError); }
+        } else if (!session.isCompleted) {
+          session.isCompleted = true; session.emit('complete');
+        }
       });
-    });
+    }
+
+    try {
+      await initPromise;
+    } catch (err) {
+      for (const w of workers) { try { w.terminate(); } catch (e) {} }
+      try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
+      throw initError || err;
+    }
 
     session.cancel = () => {
       session.isCancelled = true;
-      if (session.worker) {
-        try { session.worker.terminate(); } catch (e) {}
-        session.worker = null;
-      }
+      for (const w of workers) { try { w.terminate(); } catch (e) {} }
       try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
       this.activeSessions.delete(token);
     };

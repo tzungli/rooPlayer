@@ -1,10 +1,22 @@
 // ==========================================
-// rooPlayer - DSD Modulator Worker Thread
+// rooPlayer - DSD Modulator Worker Thread (segment mode)
 // Dedicated High-Speed Noise-Shaping 1-bit Delta-Sigma Modulator
 // Supports 2nd, 5th, and 7th Order SDM with Linear/Minimum/Intermediate Phase
 // Hermite interpolation, or the 'gauss-long' (linear-phase) / 'gauss-min'
-// (minimum-phase) Poly-Sinc-Gauss FIR upsampling filters.
+// (minimum-phase) Poly-Sinc-Gauss FIR upsampling filters, or the 'poly-ext2' /
+// 'hqp-ps-ext2' extended poly-sinc FIR filters.
 // Completely offloaded from Electron UI / Main Process
+//
+// Parallel segment mode (see createDsdSession in native-dsp-streamer.js): 5th/7th-order
+// CIFFR on a single thread can run slower than real time (DSD128+ or FIR phases), which
+// starved the progressive DSF file and cut off DLNA playback after a few seconds. The track
+// is split into contiguous block segments modulated by independent worker threads.
+// This worker generates view-relative output bits [genStartBit, genEndBit); the first
+// warmupBits of generated output are DISCARDED (they only converge the integrator state to
+// the continuous-run state at the segment boundary), the rest is written at
+// 92 + (writeStartBlock + n) * 2 * DSD_BLOCK_SIZE. The DSF header is written by the main
+// thread. The first segment (writeStartBlock 0, warmupBits 0, view from sample 0) is
+// bit-identical to the old single-worker whole-file pass.
 //
 // All DSP math (interpolation kernel + modulator) comes from dsp-kernel.js,
 // the single source of truth shared with the progressive streaming engine.
@@ -14,7 +26,6 @@ const fs = require('fs');
 const { parentPort, workerData } = require('worker_threads');
 const {
   getDsdRate,
-  buildDsfHeader,
   buildGaussFilter,
   buildPolyExt2Filter,
   buildHqpPsExt2Filter,
@@ -35,11 +46,15 @@ function run() {
     sampleRate,
     dsdMode,
     dsdOrder,
-    filterPhase
+    filterPhase,
+    genStartBit,
+    genEndBit,
+    warmupBits,
+    writeStartBlock,
+    isPrimary
   } = workerData;
 
-  // Respect the subarray view (startSec offset / max duration) instead of
-  // modulating the whole underlying buffer.
+  // The main thread hands an exact input-sample view (segment range + warm-up + FIR guard).
   const left = new Float32Array(leftBuffer, leftByteOffset || 0, leftLength !== undefined ? leftLength : leftBuffer.byteLength / 4);
   const right = new Float32Array(rightBuffer, rightByteOffset || 0, rightLength !== undefined ? rightLength : rightBuffer.byteLength / 4);
   const inLen = left.length;
@@ -47,30 +62,19 @@ function run() {
   const dsdRate = getDsdRate(dsdMode);
   const ratio = dsdRate / sampleRate;
   const invRatio = 1.0 / ratio;
-  const outBits = Math.floor(inLen * ratio);
 
   const blockSize = DSD_BLOCK_SIZE;
   const samplesPerBlock = DSD_SAMPLES_PER_BLOCK;
-  const totalBlocks = Math.ceil(outBits / samplesPerBlock);
-  const totalSamplesPerChannel = totalBlocks * samplesPerBlock;
-  const totalDataBytes = totalBlocks * 2 * blockSize;
-  const totalFileBytes = 92 + totalDataBytes;
+  const bytesPerBlockPair = 2 * blockSize;
 
-  const fd = fs.openSync(tmpFile, 'w+');
-  fs.ftruncateSync(fd, totalFileBytes);
+  const genBlocks = Math.round((genEndBit - genStartBit) / samplesPerBlock);
+  const warmupBlocks = Math.round(warmupBits / samplesPerBlock);
 
-  // 92-byte standard Sony DSF Header
-  const header = buildDsfHeader(totalFileBytes, dsdRate, totalSamplesPerChannel, blockSize);
-  fs.writeSync(fd, header, 0, 92, 0);
+  // Data-only mode: the 92-byte DSF header was already written by the main thread.
+  const fd = fs.openSync(tmpFile, 'r+');
 
-  // Stateful modulator: integrator state carries across every batch,
-  // producing bit-identical output to a single whole-file modulation pass.
-  // 'gauss-long' / 'gauss-min' filter phase: build the Poly-Sinc-Gauss FIR coefficients
-  // (linear- or minimum-phase) for this exact (dsdRate, sampleRate) pair once;
-  // 'poly-ext2': build the extended-poly-sinc (EXT2) style FIR.
-  // 'hqp-ps-ext2': build the poly-sinc-ext2 direct-interpretation FIR (sharp roll-off,
-  // -180dB stopband; see dsp-kernel.js). The kernel then uses the FIR instead of
-  // Hermite interpolation.
+  // 'gauss-long' / 'gauss-min' / 'poly-ext2' / 'hqp-ps-ext2' filter phases: build the FIR
+  // coefficients for this exact (dsdRate, sampleRate) pair once (designs in dsp-kernel.js).
   let gaussFilter = null;
   if (filterPhase === 'gauss-long' || filterPhase === 'gauss-min') {
     try { gaussFilter = buildGaussFilter(dsdRate, sampleRate, filterPhase === 'gauss-min'); } catch (e) { gaussFilter = null; }
@@ -81,60 +85,56 @@ function run() {
   }
   const modulator = new DsdModulator(dsdOrder, filterPhase, gaussFilter);
 
-  let blocksWritten = 0;
-  let bytesWritten = 92;
-
-  // Initial buffer: write first 3 seconds of audio (~1MB - 2MB)
-  const initialBlocks = Math.min(totalBlocks, Math.ceil(3 * dsdRate / samplesPerBlock));
+  let genDone = 0; // generated blocks so far, INCLUDING warm-up blocks
 
   const writeBatch = (count) => {
-    const startB = blocksWritten;
-    const endB = Math.min(totalBlocks, startB + count);
+    const startB = genDone;
+    const endB = Math.min(genBlocks, startB + count);
     if (startB >= endB) return 0;
 
     const chunk = modulator.processBlocks(
       left,
       right,
       inLen,
-      startB * samplesPerBlock,
-      endB * samplesPerBlock,
+      genStartBit + startB * samplesPerBlock,
+      genStartBit + endB * samplesPerBlock,
       invRatio
     );
 
-    const fileOffset = 92 + startB * 2 * blockSize;
-    fs.writeSync(fd, chunk, 0, chunk.length, fileOffset);
-    blocksWritten = endB;
-    bytesWritten = 92 + blocksWritten * 2 * blockSize;
+    // Warm-up blocks are generated (to converge modulator state) but never written.
+    const writeStart = Math.max(startB, warmupBlocks);
+    if (writeStart < endB) {
+      const fileOffset = 92 + (writeStart - warmupBlocks + writeStartBlock) * bytesPerBlockPair;
+      fs.writeSync(fd, chunk, (writeStart - startB) * bytesPerBlockPair, (endB - writeStart) * bytesPerBlockPair, fileOffset);
+    }
+    genDone = endB;
+    parentPort.postMessage({
+      type: 'progress',
+      blocksWritten: writeStartBlock + Math.max(0, genDone - warmupBlocks)
+    });
     return endB - startB;
   };
 
-  // 1. Initial write for instant playback start (< 250ms)
+  // 1. Initial burst for instant playback start (< 250ms): first ~3 seconds of this segment.
+  //    The primary (first) segment's initial write gates the session start.
+  const initialBlocks = Math.min(genBlocks, Math.ceil(3 * dsdRate / samplesPerBlock));
   writeBatch(initialBlocks);
-  parentPort.postMessage({
-    type: 'initial',
-    totalFileBytes,
-    blocksWritten,
-    bytesWritten,
-    totalBlocks
-  });
-
-  // 2. High-speed progressive modulation in background (~100 blocks = 1.1s audio per batch)
-  while (blocksWritten < totalBlocks) {
-    writeBatch(100);
+  if (isPrimary) {
     parentPort.postMessage({
-      type: 'progress',
-      blocksWritten,
-      bytesWritten,
-      totalBlocks
+      type: 'initial',
+      blocksWritten: writeStartBlock + Math.max(0, genDone - warmupBlocks)
     });
+  }
+
+  // 2. High-speed progressive modulation in background (~100 blocks = ~1.1s audio per batch)
+  while (genDone < genBlocks) {
+    writeBatch(100);
   }
 
   try { fs.closeSync(fd); } catch (e) {}
   parentPort.postMessage({
-    type: 'complete',
-    blocksWritten,
-    bytesWritten,
-    totalBlocks
+    type: 'progress',
+    blocksWritten: writeStartBlock + Math.max(0, genBlocks - warmupBlocks)
   });
 }
 
