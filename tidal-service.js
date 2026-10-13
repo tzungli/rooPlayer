@@ -14,6 +14,9 @@ class TidalService {
     // Auth-expiry notification hook (set by the UI layer to prompt re-login)
     this.onAuthExpired = null;
     this._authExpiredNotified = false;
+    // True once a 401 has proven the stored token expired; the TIDAL page uses this
+    // to prompt re-login directly. Never checked at app startup.
+    this.authExpired = false;
   }
 
   /**
@@ -27,10 +30,8 @@ class TidalService {
           this.auth = stored;
           this.countryCode = stored.countryCode || 'TW';
           this.isLoggedIn = true;
-          // Verify session in background
-          this.verifySession().catch(err => {
-            console.warn('[TIDAL] Stored session verification warning:', err);
-          });
+          // No network verification at startup: token validity is only checked when
+          // TIDAL data is actually requested (e.g. opening the TIDAL page).
           return true;
         }
       }
@@ -75,6 +76,7 @@ class TidalService {
       this.countryCode = res.auth.countryCode || 'TW';
       this.isLoggedIn = true;
       this._authExpiredNotified = false;
+      this.authExpired = false;
       await this.verifySession();
       return { success: true, user: this.user, auth: this.auth };
     }
@@ -99,6 +101,7 @@ class TidalService {
     this.countryCode = authData.countryCode;
     this.isLoggedIn = true;
     this._authExpiredNotified = false;
+    this.authExpired = false;
     await this.verifySession();
     return true;
   }
@@ -110,6 +113,8 @@ class TidalService {
     this.auth = null;
     this.isLoggedIn = false;
     this.user = null;
+    this.authExpired = false;
+    this._authExpiredNotified = false;
     this.cachedFavorites = null;
     this.cachedPlaylists = [];
     if (window.electronAPI && window.electronAPI.tidalLogout) {
@@ -125,6 +130,7 @@ class TidalService {
     if (this._authExpiredNotified) return;
     this._authExpiredNotified = true;
     this.isLoggedIn = false;
+    this.authExpired = true;
     this.cachedFavorites = null;
     console.warn('[TIDAL] Access token expired (HTTP 401). Re-authentication required.');
     if (typeof this.onAuthExpired === 'function') {

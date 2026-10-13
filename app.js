@@ -9604,10 +9604,12 @@ async function initTidalStreaming() {
     tidalService = new TidalService();
     window.tidalService = tidalService;
 
-    // When an expired access token (HTTP 401) is detected anywhere in the TIDAL
-    // subsystem, automatically open the streaming account connection dialog once.
+    // When an expired access token (HTTP 401) is detected in the TIDAL subsystem,
+    // prompt re-login only while the user is actually on the TIDAL page. Other pages
+    // (e.g. overview TIDAL recommendations) just fail quietly - no startup prompts.
     tidalService.onAuthExpired = () => {
       updateTidalUIStatus();
+      if (state.currentView !== 'tidal') return;
       const loginModal = document.getElementById('tidalLoginModal');
       if (loginModal && loginModal.style.display === 'flex') return; // already prompting
       showToast('🔒 TIDAL 登入已過期，請重新連線串流帳號');
@@ -9910,7 +9912,17 @@ function setupTidalExplorerUI() {
 function onOpenTidalView() {
   const notConnectedBanner = document.getElementById('tidalNotConnectedBanner');
   const explorerContainer = document.getElementById('tidalExplorerContainer');
+  const svc = window.tidalService;
   const isLoggedIn = window.tidalService && window.tidalService.isLoggedIn;
+
+  // Token already proven expired: prompt re-login directly instead of firing requests
+  // that would all fail with 401.
+  if (svc && svc.authExpired) {
+    if (notConnectedBanner) notConnectedBanner.style.display = 'none';
+    if (explorerContainer) explorerContainer.style.display = 'none';
+    openTidalLoginModal();
+    return;
+  }
 
   if (!isLoggedIn) {
     if (notConnectedBanner) notConnectedBanner.style.display = 'flex';
