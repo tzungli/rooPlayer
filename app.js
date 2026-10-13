@@ -9603,6 +9603,17 @@ async function initTidalStreaming() {
   if (typeof TidalService !== 'undefined') {
     tidalService = new TidalService();
     window.tidalService = tidalService;
+
+    // When an expired access token (HTTP 401) is detected anywhere in the TIDAL
+    // subsystem, automatically open the streaming account connection dialog once.
+    tidalService.onAuthExpired = () => {
+      updateTidalUIStatus();
+      const loginModal = document.getElementById('tidalLoginModal');
+      if (loginModal && loginModal.style.display === 'flex') return; // already prompting
+      showToast('🔒 TIDAL 登入已過期，請重新連線串流帳號');
+      openTidalLoginModal();
+    };
+
     await tidalService.init();
     updateTidalUIStatus();
   }

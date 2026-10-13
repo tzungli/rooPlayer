@@ -11,6 +11,9 @@ class TidalService {
     this.countryCode = 'TW';
     this.cachedFavorites = null;
     this.cachedPlaylists = [];
+    // Auth-expiry notification hook (set by the UI layer to prompt re-login)
+    this.onAuthExpired = null;
+    this._authExpiredNotified = false;
   }
 
   /**
@@ -71,6 +74,7 @@ class TidalService {
       this.auth = res.auth;
       this.countryCode = res.auth.countryCode || 'TW';
       this.isLoggedIn = true;
+      this._authExpiredNotified = false;
       await this.verifySession();
       return { success: true, user: this.user, auth: this.auth };
     }
@@ -94,6 +98,7 @@ class TidalService {
     this.auth = authData;
     this.countryCode = authData.countryCode;
     this.isLoggedIn = true;
+    this._authExpiredNotified = false;
     await this.verifySession();
     return true;
   }
@@ -109,6 +114,43 @@ class TidalService {
     this.cachedPlaylists = [];
     if (window.electronAPI && window.electronAPI.tidalLogout) {
       await window.electronAPI.tidalLogout();
+    }
+  }
+
+  /**
+   * Central handling of an expired/invalid access token (HTTP 401).
+   * Notified once per expiry episode so the UI can open the re-login dialog a single time.
+   */
+  _handleAuthExpired() {
+    if (this._authExpiredNotified) return;
+    this._authExpiredNotified = true;
+    this.isLoggedIn = false;
+    this.cachedFavorites = null;
+    console.warn('[TIDAL] Access token expired (HTTP 401). Re-authentication required.');
+    if (typeof this.onAuthExpired === 'function') {
+      try { this.onAuthExpired(); } catch (e) {}
+    }
+  }
+
+  /**
+   * Probe /sessions with the current token to tell apart a genuinely expired token
+   * from a resource-specific 401 (e.g. an unlicensed item). Returns true if the
+   * token itself is still accepted.
+   */
+  async _probeSessionValid() {
+    const token = this.auth && this.auth.accessToken;
+    if (!token) return false;
+    try {
+      if (window.electronAPI && window.electronAPI.tidalApi) {
+        await window.electronAPI.tidalApi({ endpoint: '/sessions', method: 'GET', body: null, token });
+        return true;
+      }
+      const r = await fetch('https://api.tidal.com/v1/sessions', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      return r.ok;
+    } catch (e) {
+      return false;
     }
   }
 
@@ -133,13 +175,30 @@ class TidalService {
       ? `${endpoint}${qs ? '&' + qs : ''}` 
       : (qs ? `${endpoint}?${qs}` : endpoint);
 
+    const handle401 = async () => {
+      // A 401 on /sessions itself, or a failed /sessions probe, means the token is expired.
+      if (finalEndpoint.startsWith('/sessions') || !(await this._probeSessionValid())) {
+        this._handleAuthExpired();
+        return new Error('TIDAL 登入已過期（HTTP 401）：請重新連線串流帳號');
+      }
+      return null; // token still valid: resource-specific 401, keep original error
+    };
+
     if (window.electronAPI && window.electronAPI.tidalApi) {
-      return await window.electronAPI.tidalApi({
-        endpoint: finalEndpoint,
-        method,
-        body,
-        token: this.auth.accessToken
-      });
+      try {
+        return await window.electronAPI.tidalApi({
+          endpoint: finalEndpoint,
+          method,
+          body,
+          token: this.auth.accessToken
+        });
+      } catch (err) {
+        if (/\b401\b/.test(String(err && err.message))) {
+          const expired = await handle401();
+          if (expired) throw expired;
+        }
+        throw err;
+      }
     }
 
     // Direct fetch fallback
@@ -158,6 +217,11 @@ class TidalService {
       body: body ? JSON.stringify(body) : undefined
     });
 
+    if (res.status === 401) {
+      const expired = await handle401();
+      if (expired) throw expired;
+      throw new Error(`TIDAL API HTTP 401: ${res.statusText}`);
+    }
     if (!res.ok) {
       throw new Error(`TIDAL API HTTP ${res.status}: ${res.statusText}`);
     }
