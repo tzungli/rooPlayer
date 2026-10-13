@@ -3795,15 +3795,12 @@ body.table-col-resizing * {
   width: 100%;
 }
 
-/* Real-time spectrum visualizer (above the progress bar) */
+/* Real-time spectrum visualizer (above the progress bar) - no panel background or border */
 .now-playing-spectrum-wrap {
   position: relative;
   width: 100%;
   height: 110px;
   margin-bottom: 12px;
-  border-radius: 10px;
-  background: linear-gradient(180deg, rgba(139, 92, 246, 0.06), rgba(6, 182, 212, 0.04));
-  border: 1px solid rgba(139, 92, 246, 0.18);
   overflow: hidden;
 }
 
