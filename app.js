@@ -10112,7 +10112,7 @@ function createTidalAlbumCard(alb) {
 function createTidalPlaylistCard(playlist) {
   const card = document.createElement('div');
   card.className = 'album-card';
-  const coverUrl = playlist.image ? tidalService.getCoverUrl(playlist.image, 640) : (playlist.squareImage ? tidalService.getCoverUrl(playlist.squareImage, 640) : '');
+  const coverUrl = tidalService.getPlaylistCoverUrl(playlist, 640);
   const coverSrc = coverUrl || createSvgCover(playlist.title, 'TIDAL Playlist', '#1e293b', '#0f172a');
 
   card.innerHTML = `
@@ -10440,7 +10440,7 @@ async function openTidalPlaylistDetail(playlist) {
   if (descEl) descEl.textContent = playlist.description || 'TIDAL 精選歌單';
   if (metaEl) metaEl.textContent = `共 ${playlist.numberOfTracks || 0} 首歌曲 • 由 ${playlist.creator?.name || 'TIDAL'} 建立`;
 
-  const coverUrl = playlist.image ? tidalService.getCoverUrl(playlist.image, 640) : (playlist.squareImage ? tidalService.getCoverUrl(playlist.squareImage, 640) : '');
+  const coverUrl = tidalService.getPlaylistCoverUrl(playlist, 640);
   if (coverImg) coverImg.src = coverUrl || 'default_cover.png';
 
   if (tracksContainer) tracksContainer.innerHTML = '<div class="tidal-loading-indicator">⏳ 正在載入歌單曲目...</div>';

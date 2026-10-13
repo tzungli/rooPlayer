@@ -414,6 +414,18 @@ class TidalService {
     return `https://resources.tidal.com/images/${cleanId}/${size}x${size}.jpg`;
   }
 
+  // Playlist cover helper: editorial playlists' masonry `image` ids are frequently NOT hosted
+  // on the image CDN (HTTP 403), while `squareImage` is reliably hosted and fits square cards.
+  // Prefer squareImage first, then image; returns '' when neither exists.
+  getPlaylistCoverUrl(playlist, size = 640) {
+    if (!playlist) return '';
+    const candidates = [playlist.squareImage, playlist.image];
+    for (const id of candidates) {
+      if (id) return this.getCoverUrl(id, size);
+    }
+    return '';
+  }
+
   // Data Normalization to rooPlayer unified Track / Album format
   normalizeTrack(t, parentAlbum = null) {
     if (!t) return null;
