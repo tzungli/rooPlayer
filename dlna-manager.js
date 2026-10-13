@@ -784,7 +784,7 @@ class DlnaManager extends EventEmitter {
   }
 
   // Send UPnP SOAP request
-  async sendSoapRequest(controlUrl, serviceType, action, bodyXml) {
+  async sendSoapRequest(controlUrl, serviceType, action, bodyXml, timeoutMs = 6000) {
     const envelope = `<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
   <s:Body>
@@ -795,7 +795,7 @@ class DlnaManager extends EventEmitter {
 </s:Envelope>`;
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const res = await fetch(controlUrl, {
@@ -1404,15 +1404,12 @@ class DlnaManager extends EventEmitter {
   // Cleanup on app exit
   async destroy() {
     this.stopPositionPolling();
-    if (this.currentStreamSession) {
-      try { this.currentStreamSession.cancel(); } catch (e) {}
-      this.currentStreamSession = null;
-    }
-    if (this.nativeDspStreamer) {
-      try { this.nativeDspStreamer.destroy(); } catch (e) {}
-    }
 
-    // Proactively send Stop command to active DLNA renderer so music does not keep playing on hardware device
+    // Send Stop to the active DLNA renderer FIRST, before tearing down the stream session,
+    // so the renderer flushes its internal buffer and goes silent immediately instead of
+    // playing buffered audio for several seconds after the app closes. Short response timeout
+    // keeps app shutdown fast even if the device is slow to answer the SOAP call (the command
+    // itself is already delivered).
     if (this.activeDeviceId && this.activeDeviceId !== 'local') {
       const dev = this.devices.get(this.activeDeviceId);
       if (dev && dev.avControlUrl) {
@@ -1421,10 +1418,22 @@ class DlnaManager extends EventEmitter {
             dev.avControlUrl,
             'urn:schemas-upnp-org:service:AVTransport:1',
             'Stop',
-            `<InstanceID>0</InstanceID>`
+            `<InstanceID>0</InstanceID>`,
+            2500
           );
-        } catch (e) {}
+          console.log(`[DLNA] Stop sent to "${dev.name || dev.id}" on shutdown`);
+        } catch (e) {
+          console.warn(`[DLNA] Stop on shutdown failed: ${e.message}`);
+        }
       }
+    }
+
+    if (this.currentStreamSession) {
+      try { this.currentStreamSession.cancel(); } catch (e) {}
+      this.currentStreamSession = null;
+    }
+    if (this.nativeDspStreamer) {
+      try { this.nativeDspStreamer.destroy(); } catch (e) {}
     }
 
     if (this.scanInterval) clearInterval(this.scanInterval);

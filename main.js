@@ -243,6 +243,17 @@ app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// Ctrl+C / kill signal (e.g. launched via 啟動軟體.bat console): run the same cleanup so the
+// DLNA renderer receives its Stop command instead of playing out its buffer after a hard kill.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, async () => {
+    if (isAppQuitting) return;
+    isAppQuitting = true;
+    try { await cleanupAllAudioStreams(); } catch (e) {}
+    app.exit(0);
+  });
+}
+
 // DSD Streaming Server Engine
 let dsdStreamServer = null;
 let dsdStreamPort = 0;
