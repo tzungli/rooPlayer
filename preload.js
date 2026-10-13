@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resumeDlna: (deviceId) => ipcRenderer.invoke('dlna:resume', deviceId),
   stopDlna: (deviceId) => ipcRenderer.invoke('dlna:stop', deviceId),
   seekDlna: (deviceId, seconds) => ipcRenderer.invoke('dlna:seek', deviceId, seconds),
+  getAudioSpectrum: (token, timeSec) => ipcRenderer.invoke('audio:getSpectrum', token, timeSec),
   setDlnaVolume: (deviceId, volume) => ipcRenderer.invoke('dlna:setVolume', deviceId, volume),
   onDlnaDevicesChanged: (callback) => {
     ipcRenderer.on('dlna:devicesChanged', (_event, list) => callback(list));

@@ -33,6 +33,7 @@ const state = {
   availableDevices: [],
   dlnaCurrentSec: 0,
   dlnaTotalSec: 0,
+  activeSpectrumToken: null,
   favorites: {
     albums: [],
     tracks: [],
@@ -5139,6 +5140,7 @@ async function playCurrentTrack() {
       window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, enrichedTrack, 0, dspOptions).then(res => {
         if (res && res.success) {
           state.isPlaying = true;
+          state.activeSpectrumToken = res.token || null; // DSP sessions carry a spectrum window; direct streams return null data and the visualizer hides itself
           updatePlayPauseBtnUI();
           const dur = track.duration || 0;
           if (dspOptions && dspOptions.dsdMode) {
@@ -10531,6 +10533,142 @@ function updateTidalUIStatus() {
     }
   }
 }
+
+// ================= NOW PLAYING real-time spectrum visualizer =================
+// Fed directly from the DSP engine's source PCM (IPC window fetch ~8/s, FFT in the renderer).
+// Works for DLNA streaming (session token from playDlnaTrack) and local DSP playback (main-side
+// fallback token). Purely visual: it never touches the audio path and hides itself when the
+// active stream has no DSP session (direct passthrough).
+(function nowPlayingSpectrum() {
+  const canvas = document.getElementById('nowPlayingSpectrum');
+  const wrap = document.getElementById('nowPlayingSpectrumWrap');
+  if (!canvas || !wrap) return;
+  if (!window.electronAPI || !window.electronAPI.getAudioSpectrum) { wrap.style.display = 'none'; return; }
+
+  const BARS = 64, FFT_N = 2048;
+  const bars = new Float32Array(BARS), peaks = new Float32Array(BARS), targets = new Float32Array(BARS);
+  const re = new Float64Array(FFT_N), im = new Float64Array(FFT_N);
+  const hann = new Float32Array(FFT_N); let hannSum = 0;
+  for (let i = 0; i < FFT_N; i++) { hann[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / FFT_N); hannSum += hann[i]; }
+
+  // Iterative radix-2 FFT with precomputed tables
+  let bits = 0; while ((1 << bits) < FFT_N) bits++;
+  const rev = new Uint16Array(FFT_N);
+  for (let i = 0; i < FFT_N; i++) { let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b); rev[i] = r; }
+  const cosT = new Float64Array(FFT_N / 2), sinT = new Float64Array(FFT_N / 2);
+  for (let i = 0; i < FFT_N / 2; i++) { cosT[i] = Math.cos(2 * Math.PI * i / FFT_N); sinT[i] = Math.sin(2 * Math.PI * i / FFT_N); }
+  function fftRun() {
+    for (let i = 0; i < FFT_N; i++) { const j = rev[i]; if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+    for (let size = 2; size <= FFT_N; size <<= 1) {
+      const half = size >> 1, step = FFT_N / size;
+      for (let i = 0; i < FFT_N; i += size) {
+        for (let j = i, k = 0; j < i + half; j++, k += step) {
+          const c = cosT[k], s = -sinT[k];
+          const ar = re[j + half], ai = im[j + half];
+          const wr = ar * c - ai * s, wi = ar * s + ai * c;
+          re[j + half] = re[j] - wr; im[j + half] = im[j] - wi;
+          re[j] += wr; im[j] += wi;
+        }
+      }
+    }
+  }
+
+  // Log-frequency bar ranges: 40 Hz .. min(16 kHz, 0.45 x rate)
+  let binRanges = null, binRate = 0;
+  function buildBins(rate) {
+    const fMin = 40, fMax = Math.min(16000, rate * 0.45);
+    binRanges = new Array(BARS);
+    for (let b = 0; b < BARS; b++) {
+      const f0 = fMin * Math.pow(fMax / fMin, b / BARS), f1 = fMin * Math.pow(fMax / fMin, (b + 1) / BARS);
+      const k0 = Math.max(1, Math.round(f0 * FFT_N / rate));
+      const k1 = Math.max(k0 + 1, Math.min(Math.round(f1 * FFT_N / rate), FFT_N / 2 - 1));
+      binRanges[b] = [k0, k1, Math.sqrt(f0 * f1)];
+    }
+    binRate = rate;
+  }
+
+  // DLNA zone -> that stream's DSP session token; local zone -> only DSP playback
+  // (null token = main-side fallback to the latest local DSP session). undefined = no source.
+  function spectrumSource() {
+    if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) return state.activeSpectrumToken || undefined;
+    return (isCurrentDsd || isCurrentSox) ? null : undefined;
+  }
+
+  let fetching = false, lastFetch = 0;
+  async function fetchSpectrum() {
+    const src = spectrumSource();
+    if (src === undefined) { targets.fill(0); return; }
+    let res = null;
+    try { res = await window.electronAPI.getAudioSpectrum(src, getCurrentPlaybackTime()); } catch (e) { res = null; }
+    if (!res || !res.left || res.left.length < FFT_N || !res.rate) { targets.fill(0); return; }
+    if (binRate !== res.rate) buildBins(res.rate);
+    const L = res.left, R = res.right, start = L.length - FFT_N;
+    for (let i = 0; i < FFT_N; i++) { re[i] = (L[start + i] + R[start + i]) * 0.5 * hann[i]; im[i] = 0; }
+    fftRun();
+    for (let b = 0; b < BARS; b++) {
+      const rng = binRanges[b], k0 = rng[0], k1 = rng[1];
+      let acc = 0;
+      for (let k = k0; k < k1; k++) acc += Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+      const mag = acc / ((k1 - k0) * hannSum);
+      let db = 20 * Math.log10(mag + 1e-12);
+      db += Math.max(0, Math.min(14, 10 * Math.log10(rng[2] / 200))); // gentle pink tilt keeps highs lively
+      targets[b] = Math.max(0, Math.min(1, (db + 78) / 66));
+    }
+  }
+
+  // Canvas sizing + gradient matching the scrubber palette (cyan -> purple -> pink)
+  let ctx = null, cw = 0, ch = 0, grad = null;
+  function resize() {
+    cw = canvas.clientWidth; ch = canvas.clientHeight;
+    if (!cw || !ch) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+    ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    grad = ctx.createLinearGradient(0, ch, 0, 0);
+    grad.addColorStop(0, '#06b6d4');
+    grad.addColorStop(0.55, '#8b5cf6');
+    grad.addColorStop(1, '#ec4899');
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, cw, ch);
+    const slot = cw / BARS, barW = Math.max(2, slot * 0.62);
+    ctx.fillStyle = 'rgba(139, 92, 246, 0.16)';
+    ctx.fillRect(0, ch - 2, cw, 2); // idle baseline
+    for (let b = 0; b < BARS; b++) {
+      const v = bars[b];
+      if (v < 0.004) continue;
+      const hgt = Math.max(3, v * (ch - 10));
+      const x = b * slot + (slot - barW) / 2, y = ch - hgt - 2;
+      ctx.globalAlpha = 0.22; // soft glow halo
+      ctx.fillStyle = grad;
+      ctx.fillRect(x - 2, y - 2, barW + 4, hgt + 2);
+      ctx.globalAlpha = 1;
+      ctx.fillRect(x, y, barW, hgt);
+      const py = ch - Math.max(3, peaks[b] * (ch - 10)) - 4; // falling peak-hold caps
+      if (py > 1) { ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'; ctx.fillRect(x, py, barW, 2); }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function frame(ts) {
+    requestAnimationFrame(frame);
+    if (!canvas.clientWidth || canvas.clientWidth !== cw || canvas.clientHeight !== ch) resize();
+    if (!cw || !ch || !ctx) return; // modal closed: no drawing, no fetching
+    if (state.isPlaying && !fetching && ts - lastFetch > 120) {
+      lastFetch = ts; fetching = true;
+      Promise.resolve().then(fetchSpectrum).finally(() => { fetching = false; });
+    }
+    if (!state.isPlaying) targets.fill(0);
+    for (let b = 0; b < BARS; b++) {
+      bars[b] = Math.max(targets[b], bars[b] * 0.90); // instant attack, smooth fall
+      peaks[b] = Math.max(bars[b], peaks[b] - 0.010);
+    }
+    draw();
+  }
+  requestAnimationFrame(frame);
+})();
 
 // Start application
 window.addEventListener('DOMContentLoaded', initApp);

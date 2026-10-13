@@ -1160,7 +1160,7 @@ class DlnaManager extends EventEmitter {
 
     this.playbackState = 'PLAYING';
     this.startPositionPolling(dev);
-    return { success: true, streamUrl };
+    return { success: true, streamUrl, token: streamToken };
   }
 
   // Resume playback on DLNA renderer

@@ -280,6 +280,7 @@ function getDsdStreamPort() {
 // so the main process never computes a whole track synchronously.
 // ==========================================================
 const localDspSessions = new Map(); // sessionKey -> Promise<{ token, session }>
+let lastLocalDspToken = null; // most recent local DSP session token (spectrum IPC fallback)
 
 function serveProgressiveSession(req, res, session) {
   const totalSize = session.totalFileBytes;
@@ -367,6 +368,7 @@ function startDsdStreamingServer() {
             entryPromise.catch(() => { localDspSessions.delete(sessionKey); });
           }
           const entry = await entryPromise;
+          lastLocalDspToken = entry.token; // spectrum fallback for local DSP playback (renderer only has the URL)
           serveProgressiveSession(req, res, entry.session);
         } catch (err) {
           console.error('[StreamServer] Local DSP session error:', err);
@@ -1399,6 +1401,16 @@ ipcMain.handle('dlna:playTrack', async (event, deviceId, track, startSec = 0, ds
     return await dlnaManager.playTrack(deviceId, track, startSec, dspOptions);
   }
   return { success: false };
+});
+
+// NOW PLAYING real-time spectrum: window of the active DSP session's source PCM.
+// token null falls back to the most recent local DSP session token.
+ipcMain.handle('audio:getSpectrum', (event, token, timeSec) => {
+  try {
+    return nativeDspStreamer.getSpectrumWindow(token || lastLocalDspToken, timeSec);
+  } catch (e) {
+    return null;
+  }
 });
 
 ipcMain.handle('dlna:pause', async (event, deviceId) => {

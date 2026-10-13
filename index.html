@@ -1753,6 +1753,11 @@
 
           <!-- Mini Player Bar inside Modal -->
           <div class="now-playing-controls-box">
+            <!-- Real-time spectrum visualizer (fed from the DSP engine's source PCM) -->
+            <div class="now-playing-spectrum-wrap" id="nowPlayingSpectrumWrap">
+              <span class="now-playing-spectrum-tag">REAL-TIME SPECTRUM</span>
+              <canvas id="nowPlayingSpectrum" class="now-playing-spectrum-canvas"></canvas>
+            </div>
             <div class="now-playing-progress-wrap">
               <span class="now-playing-time" id="nowPlayingCurTime">0:00</span>
               <div class="now-playing-scrubber" id="nowPlayingScrubber">

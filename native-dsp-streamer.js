@@ -237,6 +237,10 @@ class NativeDspStreamer {
     session.isCancelled = false;
     session.totalFileBytes = totalFileBytes;
     session.durationSec = inLen / srcRate;
+    // Source PCM exposed for the NOW PLAYING real-time spectrum (zero-copy views on the
+    // SharedArrayBuffers the modulation workers already read).
+    session.startSec = startSec;
+    session.spectrum = { rate: srcRate, left: new Float32Array(leftSAB), right: new Float32Array(rightSAB) };
 
     const workerPath = path.join(__dirname, 'dsd-modulator-worker.js');
     const workers = [];
@@ -431,6 +435,9 @@ class NativeDspStreamer {
     session.isCompleted = false;
     session.isCancelled = false;
     session.durationSec = inLen / srcRate;
+    // Source PCM for the NOW PLAYING real-time spectrum (same arrays the upsampler reads).
+    session.startSec = startSec;
+    session.spectrum = { rate: srcRate, left: inL, right: inR };
 
     // 3. Encoder state & chunk writer using selected filter phase interpolation
     let framesWritten = 0;
@@ -540,6 +547,9 @@ class NativeDspStreamer {
     session.bytesWritten = wavBuf.length;
     session.isCompleted = true;
     session.durationSec = (track && track.duration > 0) ? track.duration : (wavBuf.length / (88200 * 6));
+    // Decimated 24-bit PCM WAV is fully in memory: windows are read straight from it.
+    session.startSec = startSec;
+    session.spectrum = { rate: wavBuf.readUInt32LE(24), wav24: wavBuf.subarray(44) };
     session.cancel = () => {
       try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
       this.activeSessions.delete(token);
@@ -561,6 +571,37 @@ class NativeDspStreamer {
   // Get active session by token
   getSession(token) {
     return this.activeSessions.get(token);
+  }
+
+  // Real-time spectrum window for the NOW PLAYING visualizer: returns the SOURCE PCM around a
+  // playback time from an active DSP session (no extra decoding - the audio is already in memory).
+  getSpectrumWindow(token, timeSec, windowSamples = 4096) {
+    const session = token ? this.activeSessions.get(token) : null;
+    if (!session || !session.spectrum || session.isCancelled) return null;
+    const spec = session.spectrum;
+    const relSec = timeSec - (session.startSec || 0);
+    if (relSec < -1 || relSec > session.durationSec + 2) return null;
+    const n = Math.max(256, Math.min(windowSamples, 8192));
+    const outL = new Float32Array(n), outR = new Float32Array(n);
+    if (spec.wav24) {
+      const totalFrames = spec.wav24.length / 6;
+      const off = Math.max(0, Math.min(totalFrames - n, Math.round(relSec * spec.rate)));
+      for (let i = 0; i < n; i++) {
+        const f = off + i; if (f >= totalFrames) break;
+        const p = f * 6;
+        let vL = spec.wav24[p] | (spec.wav24[p + 1] << 8) | (spec.wav24[p + 2] << 16);
+        if (vL & 0x800000) vL -= 0x1000000;
+        let vR = spec.wav24[p + 3] | (spec.wav24[p + 4] << 8) | (spec.wav24[p + 5] << 16);
+        if (vR & 0x800000) vR -= 0x1000000;
+        outL[i] = vL / 8388608; outR[i] = vR / 8388608;
+      }
+    } else {
+      const len = spec.left.length;
+      const off = Math.max(0, Math.min(len - n, Math.round(relSec * spec.rate)));
+      outL.set(spec.left.subarray(off, off + n));
+      outR.set(spec.right.subarray(off, off + n));
+    }
+    return { rate: spec.rate, left: outL, right: outR };
   }
 
   // Cleanup all sessions on app exit
