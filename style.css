@@ -3804,18 +3804,6 @@ body.table-col-resizing * {
   overflow: hidden;
 }
 
-.now-playing-spectrum-tag {
-  position: absolute;
-  top: 6px;
-  left: 10px;
-  font-size: 9px;
-  letter-spacing: 2px;
-  color: var(--text-muted);
-  opacity: 0.55;
-  pointer-events: none;
-  z-index: 2;
-}
-
 .now-playing-spectrum-canvas {
   position: absolute;
   inset: 0;
