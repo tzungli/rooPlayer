@@ -17,6 +17,7 @@ const {
   buildDsfHeader,
   buildGaussFilter,
   buildPolyExt2Filter,
+  buildHqpPsExt2Filter,
   DsdModulator,
   DSD_BLOCK_SIZE,
   DSD_SAMPLES_PER_BLOCK
@@ -66,13 +67,17 @@ function run() {
   // producing bit-identical output to a single whole-file modulation pass.
   // 'gauss-long' / 'gauss-min' filter phase: build the Poly-Sinc-Gauss FIR coefficients
   // (linear- or minimum-phase) for this exact (dsdRate, sampleRate) pair once;
-  // 'poly-ext2': build the extended-poly-sinc (EXT2) style FIR. The kernel then
-  // uses the FIR instead of Hermite interpolation.
+  // 'poly-ext2': build the extended-poly-sinc (EXT2) style FIR.
+  // 'hqp-ps-ext2': build the poly-sinc-ext2 direct-interpretation FIR (sharp roll-off,
+  // -180dB stopband; see dsp-kernel.js). The kernel then uses the FIR instead of
+  // Hermite interpolation.
   let gaussFilter = null;
   if (filterPhase === 'gauss-long' || filterPhase === 'gauss-min') {
     try { gaussFilter = buildGaussFilter(dsdRate, sampleRate, filterPhase === 'gauss-min'); } catch (e) { gaussFilter = null; }
   } else if (filterPhase === 'poly-ext2') {
     try { gaussFilter = buildPolyExt2Filter(dsdRate, sampleRate); } catch (e) { gaussFilter = null; }
+  } else if (filterPhase === 'hqp-ps-ext2') {
+    try { gaussFilter = buildHqpPsExt2Filter(dsdRate, sampleRate); } catch (e) { gaussFilter = null; }
   }
   const modulator = new DsdModulator(dsdOrder, filterPhase, gaussFilter);
 

@@ -49,7 +49,7 @@ const state = {
         enabled: saved.enabled === true,
         rateMode: saved.rateMode || '4x',
         dsdOrder: [2, 5, 7].includes(parseInt(saved.dsdOrder, 10)) ? parseInt(saved.dsdOrder, 10) : 5,
-        filterPhase: ['linear', 'minimum', 'intermediate', 'gauss-long', 'gauss-min', 'poly-ext2'].includes(saved.filterPhase) ? saved.filterPhase : 'linear'
+        filterPhase: ['linear', 'minimum', 'intermediate', 'gauss-long', 'gauss-min', 'poly-ext2', 'hqp-ps-ext2'].includes(saved.filterPhase) ? saved.filterPhase : 'linear'
       };
     } catch (e) {
       return { enabled: false, rateMode: '4x', dsdOrder: 5, filterPhase: 'linear' };
@@ -5340,7 +5340,7 @@ async function playSoxTrack(track, startSec = 0) {
     nativeAudio.play().then(() => {
       state.isPlaying = true;
       btnPlayPause.textContent = '⏸';
-      const phaseNames = { linear: '線性相位', minimum: '最小相位', intermediate: '混和緩衰減', 'gauss-long': '高斯長脈衝FIR', 'gauss-min': '高斯最小相位FIR', 'poly-ext2': 'EXT2近似FIR' };
+      const phaseNames = { linear: '線性相位', minimum: '最小相位', intermediate: '混和緩衰減', 'gauss-long': '高斯長脈衝FIR', 'gauss-min': '高斯最小相位FIR', 'poly-ext2': 'EXT2近似FIR', 'hqp-ps-ext2': 'PS-EXT2直譯FIR' };
       const phaseText = phaseNames[filterPhase] || '線性相位';
       if (isDsd) {
         const mhz = getDsdMhz(state.dsp.rateMode);
@@ -5495,7 +5495,8 @@ function updateSignalPathUI(track = null) {
       intermediate: '混和/緩衰減 (溫潤類比)',
       'gauss-long': '高斯長脈衝 FIR (極低鈴振)',
       'gauss-min': '高斯最小相位 FIR (零預響鈴)',
-      'poly-ext2': 'HQ EXT2 近似 FIR (超寬過渡帶)'
+      'poly-ext2': 'HQ EXT2 近似 FIR (超寬過渡帶)',
+      'hqp-ps-ext2': 'HQ PS-EXT2 直譯 FIR (陡峭滾降・極深止帶)'
     };
     const phaseDesc = phaseNames[curPhase] || '線性相位';
 
