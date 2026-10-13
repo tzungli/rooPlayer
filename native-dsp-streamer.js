@@ -11,7 +11,7 @@ const stream = require('stream');
 const EventEmitter = require('events');
 const { Worker } = require('worker_threads');
 const nativeAudioEngine = require('./native-audio-engine');
-const { interpolateSample } = require('./dsp-kernel');
+const { interpolateSample, buildGaussFilter, firSample } = require('./dsp-kernel');
 
 // Progressive Streaming Reader with Backpressure Flow Control
 // Prevents downstream DLNA/UPnP renderers from reading unwritten / zero-padded blocks
@@ -220,6 +220,12 @@ class NativeDspStreamer {
     const ratio = targetSampleRate / srcRate;
     const outFrames = Math.floor(inLen * ratio);
 
+    // 'gauss-long' 濾波相位：Poly-Sinc-Gauss Long FIR 升頻（設計見 dsp-kernel.js）
+    let gaussFilter = null;
+    if (filterPhase === 'gauss-long') {
+      try { gaussFilter = buildGaussFilter(targetSampleRate, srcRate); } catch (e) { gaussFilter = null; }
+    }
+
     const bytesPerSample = 3; // 24-bit PCM
     const channels = 2;
     const blockAlign = channels * bytesPerSample;
@@ -274,6 +280,11 @@ class NativeDspStreamer {
       let bufOff = 0;
 
       for (let i = startF; i < endF; i++) {
+        let sL, sR;
+        if (gaussFilter) {
+          sL = firSample(inL, inLen, i, ratio, gaussFilter);
+          sR = firSample(inR, inLen, i, ratio, gaussFilter);
+        } else {
         const srcPos = i / ratio;
         const idx = srcPos | 0;
         const t = srcPos - idx;
@@ -282,13 +293,14 @@ class NativeDspStreamer {
         const p1L = inL[idx];
         const p2L = idx < inLen - 1 ? inL[idx + 1] : p1L;
         const p3L = idx < inLen - 2 ? inL[idx + 2] : p2L;
-        const sL = interpolateSample(p0L, p1L, p2L, p3L, t, filterPhase);
+        sL = interpolateSample(p0L, p1L, p2L, p3L, t, filterPhase);
 
         const p0R = idx > 0 ? inR[idx - 1] : inR[0];
         const p1R = inR[idx];
         const p2R = idx < inLen - 1 ? inR[idx + 1] : p1R;
         const p3R = idx < inLen - 2 ? inR[idx + 2] : p2R;
-        const sR = interpolateSample(p0R, p1R, p2R, p3R, t, filterPhase);
+        sR = interpolateSample(p0R, p1R, p2R, p3R, t, filterPhase);
+        }
 
         // 24-bit PCM clamp and pack (Little-Endian)
         const iL = Math.max(-8388608, Math.min(8388607, Math.floor(sL * 8388607)));

@@ -49,7 +49,7 @@ const state = {
         enabled: saved.enabled === true,
         rateMode: saved.rateMode || '4x',
         dsdOrder: [2, 5, 7].includes(parseInt(saved.dsdOrder, 10)) ? parseInt(saved.dsdOrder, 10) : 5,
-        filterPhase: ['linear', 'minimum', 'intermediate'].includes(saved.filterPhase) ? saved.filterPhase : 'linear'
+        filterPhase: ['linear', 'minimum', 'intermediate', 'gauss-long'].includes(saved.filterPhase) ? saved.filterPhase : 'linear'
       };
     } catch (e) {
       return { enabled: false, rateMode: '4x', dsdOrder: 5, filterPhase: 'linear' };
@@ -5340,7 +5340,7 @@ async function playSoxTrack(track, startSec = 0) {
     nativeAudio.play().then(() => {
       state.isPlaying = true;
       btnPlayPause.textContent = '⏸';
-      const phaseNames = { linear: '線性相位', minimum: '最小相位', intermediate: '混和緩衰減' };
+      const phaseNames = { linear: '線性相位', minimum: '最小相位', intermediate: '混和緩衰減', 'gauss-long': '高斯長脈衝FIR' };
       const phaseText = phaseNames[filterPhase] || '線性相位';
       if (isDsd) {
         const mhz = getDsdMhz(state.dsp.rateMode);
@@ -5492,7 +5492,8 @@ function updateSignalPathUI(track = null) {
     const phaseNames = {
       linear: '線性相位 (零相位失真)',
       minimum: '最小相位 (零預響鈴)',
-      intermediate: '混和/緩衰減 (溫潤類比)'
+      intermediate: '混和/緩衰減 (溫潤類比)',
+      'gauss-long': '高斯長脈衝 FIR (極低鈴振)'
     };
     const phaseDesc = phaseNames[curPhase] || '線性相位';
 

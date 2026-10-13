@@ -2,6 +2,7 @@
 // rooPlayer - DSD Modulator Worker Thread
 // Dedicated High-Speed Noise-Shaping 1-bit Delta-Sigma Modulator
 // Supports 2nd, 5th, and 7th Order SDM with Linear/Minimum/Intermediate Phase
+// Hermite interpolation or the 'gauss-long' Poly-Sinc-Gauss FIR upsampling filter.
 // Completely offloaded from Electron UI / Main Process
 //
 // All DSP math (interpolation kernel + modulator) comes from dsp-kernel.js,
@@ -13,6 +14,7 @@ const { parentPort, workerData } = require('worker_threads');
 const {
   getDsdRate,
   buildDsfHeader,
+  buildGaussFilter,
   DsdModulator,
   DSD_BLOCK_SIZE,
   DSD_SAMPLES_PER_BLOCK
@@ -60,7 +62,14 @@ function run() {
 
   // Stateful modulator: integrator state carries across every batch,
   // producing bit-identical output to a single whole-file modulation pass.
-  const modulator = new DsdModulator(dsdOrder, filterPhase);
+  // 'gauss-long' filter phase: build the Poly-Sinc-Gauss FIR coefficients for this
+  // exact (dsdRate, sampleRate) pair once; the kernel then uses the FIR instead of
+  // Hermite interpolation.
+  let gaussFilter = null;
+  if (filterPhase === 'gauss-long') {
+    try { gaussFilter = buildGaussFilter(dsdRate, sampleRate); } catch (e) { gaussFilter = null; }
+  }
+  const modulator = new DsdModulator(dsdOrder, filterPhase, gaussFilter);
 
   let blocksWritten = 0;
   let bytesWritten = 92;

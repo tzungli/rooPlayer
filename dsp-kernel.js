@@ -89,6 +89,80 @@ CIFFR_7.g2 = CIFFR_7.th2 * CIFFR_7.th2 / CIFFR_7.c5;
 CIFFR_7.g3 = CIFFR_7.th3 * CIFFR_7.th3 / CIFFR_7.c7;
 const CIFFR_CLAMP = 8.0; // anti-windup safety limit (normal operation stays well below)
 
+// ---------------------------------------------------------------------------
+// Poly-Sinc-Gauss Long FIR Upsampling Filter（HQPlayer poly-sinc-gauss 風格）
+//
+// 閉式設計：h(t) = sinc(2·fc·t/fs) · exp(-(t/σ)²)
+//   sinc 基準 × 高斯窗 ⇔ 頻域「高斯形過渡帶」：極低的預/後鈴振、
+//   通帶平坦至源 Nyquist、鏡像（源取樣率的倍頻）抑制約 -110 dB。線性相位。
+//
+// 類比規格由 DSD64/44.1k 參考點縮放：
+//   fc = 1.27 × 源 Nyquist（上限 0.45·fsOut）
+//   σ  = 180 samples @ fsOut=2.8224M, src=44.1k（隨 srcRate 與 fsOut 線性縮放）
+//   截斷 L = 4.5σ（窗值 exp(-20)≈1.6e-9，再長的尾巴對音訊無意義）；
+//   為限制 CPU 成本，必要時收短到 ≥2.5σ（保留 ≥-50dB 旁瓣底），成本上限約
+//   150 MMAC/s/聲道。多相實作的成本 = 每「輸入」樣本 2L+1 次 MAC，與 OSR 無關。
+//
+// 非整數 ratio（例如 48k 源 → DSD64）用 S=8 子樣本网格 + 線性插值取樣 h(t)。
+// ---------------------------------------------------------------------------
+function buildGaussFilter(fsOut, srcRate) {
+  // 操作點（DSD64/44.1k 實測掃描）：通帶至 21k 平坦 -0.2dB、22.05k -0.4dB、
+  // 下側鏡像（源取樣率-信号頻，如 19k→25.1k）-2dB、44.1k 鏡像 -112dB、30k -11dB。
+  const fc = Math.min(1.27 * srcRate / 2, 0.45 * fsOut);
+  let sigma = 180 * (srcRate / 44100) * (fsOut / 2822400);
+  if (sigma < 3) sigma = 3;
+  const Lcap = Math.floor(150e6 / srcRate / 2);
+  let L = Math.min(Math.ceil(4.5 * sigma), Math.max(Lcap, Math.ceil(2.5 * sigma)));
+  if (L < 8) L = 8;
+
+  const ratio = fsOut / srcRate;
+  const integerRatio = Math.abs(ratio - Math.round(ratio)) < 1e-9;
+  const S = integerRatio ? 1 : 8;
+  const half = L * S;
+  const n = 2 * half + 2; // +1 guard tap for sub-sample interpolation edge
+  const h = new Float64Array(n);
+  const norm = 2 * fc / fsOut;
+  for (let j = -half; j <= half; j++) {
+    const t = j / S;
+    const x = 2 * fc * t / fsOut;
+    const s = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+    h[j + half] = norm * s * Math.exp(-(t / sigma) * (t / sigma));
+  }
+  let sum = 0;
+  for (let i = 0; i < n - 1; i++) sum += h[i];
+  // 升頻增益補償：零插補（zero-stuffing）後濾波，各多相分支的和必須為 1，
+  // 即 Σh = ratio（否則輸出 DC/低頻增益會差 ratio 倍）。
+  const g = ratio / sum;
+  for (let i = 0; i < n; i++) h[i] *= g;
+  return { h, S, L, half, ratio, integerRatio, fsOut, srcRate, taps: 2 * half + 1 };
+}
+
+// Evaluate the Gauss FIR at output index outIdx for a zero-stuffed input grid
+// (input sample k lands at output position k·ratio). out = Σ_k input[k]·h(outIdx - k·ratio)
+function firSample(input, inLen, outIdx, ratio, gf) {
+  const h = gf.h, L = gf.L, half = gf.half;
+  let kStart = Math.ceil((outIdx - L) / ratio);
+  let kEnd = Math.floor((outIdx + L) / ratio);
+  if (kStart < 0) kStart = 0;
+  if (kEnd > inLen - 1) kEnd = inLen - 1;
+  let acc = 0;
+  if (gf.integerRatio) {
+    const r = Math.round(gf.ratio);
+    let m = outIdx - kStart * r + half;
+    for (let k = kStart; k <= kEnd; k++, m -= r) acc += input[k] * h[m];
+  } else {
+    const S = gf.S;
+    let t = outIdx - kStart * ratio;
+    for (let k = kStart; k <= kEnd; k++, t -= ratio) {
+      const j = t * S + half;
+      const j0 = Math.floor(j);
+      const frac = j - j0;
+      acc += input[k] * (h[j0] + frac * (h[j0 + 1] - h[j0]));
+    }
+  }
+  return acc;
+}
+
 // 92-byte standard Sony DSF container header
 function buildDsfHeader(totalFileBytes, dsdRate, totalSamplesPerChannel, blockSize = DSD_BLOCK_SIZE) {
   const header = Buffer.alloc(92);
@@ -124,15 +198,21 @@ function buildDsfHeader(totalFileBytes, dsdRate, totalSamplesPerChannel, blockSi
 // 2nd order: classic Boser-Wooley CIFB (unchanged, proven good).
 // 5th / 7th order: synthesized CIFFR (cascade of integrators + feedforward taps +
 // ultrasonic resonator pairs, see CIFFR_5 / CIFFR_7 coefficient tables above).
-// with Linear / Minimum / Intermediate phase input interpolation.
+// Input upsampling: Linear / Minimum / Intermediate phase Hermite interpolation,
+// or 'gauss-long' = Poly-Sinc-Gauss Long FIR (requires a gaussFilter built by
+// buildGaussFilter(); falls back to linear Hermite when absent).
 //
 // Stateful: internal integrator state persists across processBlocks() calls,
 // so one instance can drive both whole-file encoding and progressive batch encoding
 // with bit-identical output.
 class DsdModulator {
-  constructor(dsdOrder = 5, filterPhase = 'linear') {
+  constructor(dsdOrder = 5, filterPhase = 'linear', gaussFilter = null) {
     this.order = [2, 5, 7].includes(parseInt(dsdOrder, 10)) ? parseInt(dsdOrder, 10) : 5;
-    this.phase = ['linear', 'minimum', 'intermediate'].includes(filterPhase) ? filterPhase : 'linear';
+    let phase = ['linear', 'minimum', 'intermediate', 'gauss-long'].includes(filterPhase) ? filterPhase : 'linear';
+    // 'gauss-long' 需要 buildGaussFilter() 產生的係數；缺少時退回線性 Hermite
+    if (phase === 'gauss-long' && !gaussFilter) phase = 'linear';
+    this.phase = phase;
+    this.gf = gaussFilter || null;
 
     // Modulator integrator states (per channel)
     this.s1L = 0; this.s2L = 0; this.s3L = 0; this.s4L = 0; this.s5L = 0; this.s6L = 0; this.s7L = 0;
@@ -153,6 +233,9 @@ class DsdModulator {
     const out = Buffer.allocUnsafe(numBlocks * 2 * blockSize);
     const order = this.order;
     const phase = this.phase;
+    const useGauss = phase === 'gauss-long';
+    const ratio = 1 / invRatio;
+    const gf = this.gf;
 
     // Load persistent state into hot locals
     let s1_L = this.s1L, s2_L = this.s2L, s3_L = this.s3L, s4_L = this.s4L, s5_L = this.s5L, s6_L = this.s6L, s7_L = this.s7L, y_L = this.yL;
@@ -170,21 +253,28 @@ class DsdModulator {
 
         for (let bit = 0; bit < 8; bit++) {
           const outIdx = baseSample + bit;
-          const pos = outIdx * invRatio;
-          const idx = pos | 0;
-          const t = pos - idx;
+          let rawL, rawR;
+          if (useGauss) {
+            // Poly-Sinc-Gauss Long FIR（見 buildGaussFilter 設計註解）
+            rawL = firSample(left, inLen, outIdx, ratio, gf);
+            rawR = firSample(right, inLen, outIdx, ratio, gf);
+          } else {
+            const pos = outIdx * invRatio;
+            const idx = pos | 0;
+            const t = pos - idx;
 
-          const p0L = idx > 0 ? left[idx - 1] : left[0];
-          const p1L = idx < inLen ? left[idx] : 0;
-          const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
-          const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
-          const rawL = interpolateSample(p0L, p1L, p2L, p3L, t, phase);
+            const p0L = idx > 0 ? left[idx - 1] : left[0];
+            const p1L = idx < inLen ? left[idx] : 0;
+            const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
+            const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
+            rawL = interpolateSample(p0L, p1L, p2L, p3L, t, phase);
 
-          const p0R = idx > 0 ? right[idx - 1] : right[0];
-          const p1R = idx < inLen ? right[idx] : 0;
-          const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
-          const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
-          const rawR = interpolateSample(p0R, p1R, p2R, p3R, t, phase);
+            const p0R = idx > 0 ? right[idx - 1] : right[0];
+            const p1R = idx < inLen ? right[idx] : 0;
+            const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
+            const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
+            rawR = interpolateSample(p0R, p1R, p2R, p3R, t, phase);
+          }
 
           if (order === 2) {
             // 2nd-Order Boser-Wooley SDM with Anti-Windup Clamping
@@ -291,6 +381,8 @@ class DsdModulator {
 
 module.exports = {
   interpolateSample,
+  buildGaussFilter,
+  firSample,
   getDsdRate,
   buildDsfHeader,
   DsdModulator,
