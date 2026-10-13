@@ -1489,14 +1489,6 @@ function renderDailyRecommendations() {
 
   if (section) section.style.display = 'block';
 
-  const dateBadge = document.getElementById('dailyRecommendDateBadge');
-  if (dateBadge) {
-    const today = new Date();
-    const m = today.getMonth() + 1;
-    const d = today.getDate();
-    dateBadge.textContent = `📅 ${m}月${d}日 今日推薦 (依聆聽歷史精選)`;
-  }
-
   dailyAlbums.forEach(alb => {
     dailyRecommendGrid.appendChild(createAlbumCard(alb));
   });
