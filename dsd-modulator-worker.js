@@ -11,11 +11,11 @@
 // CIFFR on a single thread can run slower than real time (DSD128+ or FIR phases), which
 // starved the progressive DSF file and cut off DLNA playback after a few seconds. The track
 // is split into contiguous block segments modulated by independent worker threads.
-// This worker generates view-relative output bits [genStartBit, genEndBit); the first
-// warmupBits of generated output are DISCARDED (they only converge the integrator state to
+// This worker generates view-relative output bits [0, genEndBit): the first warmupBits blocks are
+// the segment's true PRECEDING audio (warm-up, DISCARDED - they converge the integrator state to
 // the continuous-run state at the segment boundary), the rest is written at
-// 92 + (writeStartBlock + n) * 2 * DSD_BLOCK_SIZE. The DSF header is written by the main
-// thread. The first segment (writeStartBlock 0, warmupBits 0, view from sample 0) is
+// 92 + (writeStartBlock + n) * 2 * DSD_BLOCK_SIZE with no shift. The DSF header is written by the
+// main thread. The first segment (writeStartBlock 0, warmupBits 0, view from sample 0) is
 // bit-identical to the old single-worker whole-file pass.
 //
 // All DSP math (interpolation kernel + modulator) comes from dsp-kernel.js,

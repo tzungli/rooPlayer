@@ -178,7 +178,9 @@ class NativeDspStreamer {
     const guardSamples = Math.ceil(150e6 / dsdRate) + 4;
     const guardBits = Math.ceil((guardSamples * dsdRate / srcRate) / stepBits) * stepBits;
     const warmupLcm = (samplesPerBlock * stepBits) / gcd(samplesPerBlock, stepBits);
-    const warmupBitsFull = Math.ceil((1.5 * dsdRate) / warmupLcm) * warmupLcm; // ~1.5 s modulator warm-up
+    // Pre-roll = ~1.5 s of the segment's PRECEDING audio (true modulator warm-up) + FIR guard,
+    // rounded up to whole blocks so generation and file mapping stay block-aligned.
+    const preRollBitsFull = Math.ceil(((1.5 * dsdRate) + guardBits) / warmupLcm) * warmupLcm;
 
     // Segment sizes: first ~5 s, then geometrically x1.5, so the contiguous prefix crosses segment
     // boundaries before a slower-than-real-time frontier worker runs out of lead.
@@ -204,15 +206,17 @@ class NativeDspStreamer {
       let startBlock = 0;
       for (let i = 0; i < segSizes.length; i++) {
         const endBlock = startBlock + segSizes[i];
-        const warmupBits = startBlock === 0 ? 0 : Math.min(warmupBitsFull, startBlock * samplesPerBlock);
-        // The view starts guardBits + warmupBits output-bits before the segment (exact integer input
-        // offset). The first segment starts at 0 exactly like the old single-worker whole-file pass
-        // (bit-identical output for the first segment).
-        const viewStartInput = Math.max(0, Math.round(((startBlock * samplesPerBlock - warmupBits - guardBits) * srcRate) / dsdRate));
-        const genStartBit = startBlock === 0 ? 0 : warmupBits + guardBits;
-        const genEndBit = genStartBit + (endBlock - startBlock) * samplesPerBlock;
+        // The view starts preRollBits output-bits before the segment (exact integer input offset).
+        // Generation starts AT the view start: it modulates the segment's true preceding audio
+        // (warm-up) so the integrator state at the segment boundary matches a continuous run,
+        // then writes the segment itself at its exact file position (no shift). The first
+        // segment starts at 0 exactly like the old single-worker whole-file pass.
+        const preRollBits = startBlock === 0 ? 0 : Math.min(preRollBitsFull, startBlock * samplesPerBlock);
+        const viewStartInput = Math.max(0, Math.round(((startBlock * samplesPerBlock - preRollBits) * srcRate) / dsdRate));
+        const genStartBit = 0;
+        const genEndBit = preRollBits + (endBlock - startBlock) * samplesPerBlock;
         const viewLen = Math.min(inLen - viewStartInput, Math.ceil((genEndBit * srcRate) / dsdRate) + guardSamples);
-        segs.push({ startBlock, endBlock, viewStartInput, viewLen, genStartBit, genEndBit, warmupBits });
+        segs.push({ startBlock, endBlock, viewStartInput, viewLen, genStartBit, genEndBit, warmupBits: preRollBits });
         startBlock = endBlock;
       }
     }
