@@ -1923,16 +1923,203 @@ function renderOverview() {
     overviewGrid.appendChild(createAlbumCard(alb));
   });
 
-  // 5. Featured Artists in Overview
-  if (overviewArtistsGrid) {
-    overviewArtistsGrid.innerHTML = '';
-    const curArtistSize = state.artistCardSize || 'medium';
-    overviewArtistsGrid.classList.remove('artist-size-small', 'artist-size-medium', 'artist-size-large');
-    overviewArtistsGrid.classList.add(`artist-size-${curArtistSize}`);
-    const featuredArtists = state.artists.slice(0, 6);
-    featuredArtists.forEach(art => {
-      overviewArtistsGrid.appendChild(createArtistCard(art));
+  // 5. 探索演出者: metadata-driven discovery (TIDAL-related artists first when logged in)
+  renderDiscoverArtists();
+}
+
+// ----------------- Overview: 探索演出者 (metadata-driven artist discovery) -----------------
+let discoverArtistsOpId = 0;
+
+// Build a listening profile from local metadata: playback history, recently played albums,
+// play counts. Produces weighted seed artists and seed genres.
+function buildListeningProfile() {
+  const history = getPlaybackHistory();
+  const recentAlbums = getRecentlyPlayedAlbums(10);
+  const stats = getPlayStats();
+
+  // Library lookup maps so history/stats entries can be resolved to artist + canonical genre
+  const trackByKey = new Map();
+  const trackByPath = new Map();
+  state.albums.forEach(alb => {
+    (alb.tracks || []).forEach(t => {
+      const key = t.id || `${t.title}___${t.artist}`;
+      const meta = { artist: t.artist, genre: canonicalizeGenre(t.genre, t) };
+      trackByKey.set(key, meta);
+      if (t.filePath) trackByPath.set(t.filePath, meta);
     });
+  });
+
+  const artistScore = new Map();
+  const genreScore = new Map();
+
+  const addArtist = (name, w) => {
+    if (!name || isUnknownArtist(name)) return;
+    const norm = String(name).toLowerCase().trim();
+    if (!norm) return;
+    const cur = artistScore.get(norm) || { name, score: 0 };
+    cur.score += w;
+    artistScore.set(norm, cur);
+  };
+  const addGenre = (g, w, contextTrack) => {
+    const cg = canonicalizeGenre(g, contextTrack || {});
+    if (!cg || cg === 'Various' || cg === 'Unknown') return;
+    genreScore.set(cg, (genreScore.get(cg) || 0) + w);
+  };
+
+  // 1) Playback history (recently listened artists, weight 3)
+  history.forEach(h => {
+    addArtist(h.artist, 3);
+    const meta = (h.filePath && trackByPath.get(h.filePath)) || trackByKey.get(h.id) || trackByKey.get(`${h.title}___${h.artist}`);
+    if (meta) addGenre(meta.genre, 3);
+    else addGenre(h.genre, 3, { album: h.album, artist: h.artist, title: h.title });
+  });
+
+  // 2) Recently played albums (weight 2)
+  recentAlbums.forEach(alb => {
+    addArtist(alb.artist, 2);
+    addGenre(alb.genre, 2, alb);
+  });
+
+  // 3) Play counts (frequently listened, weight 1 per play)
+  Object.entries(stats.tracks || {}).forEach(([key, count]) => {
+    const meta = trackByKey.get(key);
+    if (meta) {
+      addArtist(meta.artist, count);
+      addGenre(meta.genre, count);
+    } else {
+      const parts = String(key).split('___');
+      if (parts.length >= 2) addArtist(parts.slice(1).join('___'), count);
+    }
+  });
+  Object.entries(stats.albums || {}).forEach(([key, count]) => {
+    const alb = state.albums.find(a => (a.id || `${a.title}___${a.artist}`) === key);
+    if (alb) {
+      addArtist(alb.artist, count);
+      addGenre(alb.genre, count, alb);
+    }
+  });
+
+  const topArtists = [...artistScore.values()].sort((a, b) => b.score - a.score);
+  const topGenres = [...genreScore.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]);
+  const seedNames = new Set(topArtists.slice(0, 6).map(a => a.name.toLowerCase().trim()));
+  return { topArtists, topGenres, seedNames };
+}
+
+// Local library artists related to the profile: sharing seed genres or seed artists' genres.
+function getLocalRelatedArtists(profile, excludeNorm, limit) {
+  const seedGenres = new Set(profile.topGenres.slice(0, 4));
+  profile.topArtists.slice(0, 6).forEach(seed => {
+    const seedArt = state.artists.find(a => (a.name || '').toLowerCase().trim() === seed.name.toLowerCase().trim());
+    if (!seedArt) return;
+    (seedArt.tracks || []).forEach(t => {
+      const g = canonicalizeGenre(t.genre, t);
+      if (g && g !== 'Various' && g !== 'Unknown') seedGenres.add(g);
+    });
+  });
+
+  const scored = [];
+  state.artists.forEach(art => {
+    const norm = (art.name || '').toLowerCase().trim();
+    if (!norm || excludeNorm.has(norm) || isUnknownArtist(art.name)) return;
+    let score = 0;
+    const counted = new Set();
+    (art.tracks || []).forEach(t => {
+      const g = canonicalizeGenre(t.genre, t);
+      if (g && seedGenres.has(g) && !counted.has(g)) {
+        counted.add(g);
+        score += 5;
+      }
+    });
+    if (score > 0) {
+      score += ((art.albums && art.albums.size) || 0) * 0.1;
+      scored.push({ art, score });
+    }
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map(s => s.art);
+}
+
+// TIDAL-related artists: similar artists of seed artists + artists tied to seed genres.
+async function fetchTidalDiscoverArtists(profile, excludeNorm, limit) {
+  const svc = window.tidalService;
+  if (!svc || !svc.isLoggedIn) return [];
+
+  const tasks = [];
+  profile.topArtists.slice(0, 4).forEach(seed => {
+    tasks.push(
+      svc.searchArtist(seed.name)
+        .then(a => (a && a.id) ? svc.getSimilarArtists(a.id, 6) : [])
+        .catch(() => [])
+    );
+  });
+  profile.topGenres.slice(0, 2).forEach(g => {
+    tasks.push(svc.search(g, 8).then(res => (res && res.artists) || []).catch(() => []));
+  });
+
+  const results = (await Promise.all(tasks)).flat();
+  const seen = new Set(excludeNorm);
+  const out = [];
+  results.forEach(ta => {
+    if (!ta || !ta.name) return;
+    const norm = String(ta.name).toLowerCase().trim();
+    if (!norm || seen.has(norm) || isUnknownArtist(ta.name)) return;
+    seen.add(norm);
+    out.push({ name: ta.name, picture: ta.picture, isTidal: true });
+    if (out.length >= limit) return;
+  });
+  return out;
+}
+
+function renderDiscoverArtists() {
+  if (!overviewArtistsGrid) return;
+  const opId = ++discoverArtistsOpId;
+
+  const curArtistSize = state.artistCardSize || 'medium';
+  overviewArtistsGrid.classList.remove('artist-size-small', 'artist-size-medium', 'artist-size-large');
+  overviewArtistsGrid.classList.add(`artist-size-${curArtistSize}`);
+
+  const profile = buildListeningProfile();
+
+  // Local related artists (rendered immediately, then re-rendered with TIDAL results in front)
+  let localArtists = getLocalRelatedArtists(profile, profile.seedNames, 10);
+  if (localArtists.length < 10) {
+    // Not enough related artists: fill remaining slots with the most-listened artists themselves
+    profile.topArtists.forEach(seed => {
+      if (localArtists.length >= 10) return;
+      const art = state.artists.find(a => (a.name || '').toLowerCase().trim() === seed.name.toLowerCase().trim());
+      if (art && !localArtists.includes(art)) localArtists.push(art);
+    });
+  }
+  if (localArtists.length === 0) {
+    // No listening profile yet: fall back to artists with the largest local discography
+    localArtists = [...state.artists]
+      .filter(a => !isUnknownArtist(a.name))
+      .sort((a, b) => ((b.albums && b.albums.size) || 0) - ((a.albums && a.albums.size) || 0))
+      .slice(0, 10);
+  }
+
+  const paint = (tidalArtists, localList) => {
+    if (opId !== discoverArtistsOpId) return; // stale async result guard
+    overviewArtistsGrid.innerHTML = '';
+    const seen = new Set();
+    [...tidalArtists, ...localList].forEach(a => {
+      if (overviewArtistsGrid.children.length >= 10) return;
+      const norm = (a.name || '').toLowerCase().trim();
+      if (!norm || seen.has(norm)) return;
+      seen.add(norm);
+      overviewArtistsGrid.appendChild(createArtistCard(a));
+    });
+  };
+
+  paint([], localArtists);
+
+  // Enrich with TIDAL-related artists (placed in front) when logged in
+  if (window.tidalService && window.tidalService.isLoggedIn) {
+    fetchTidalDiscoverArtists(profile, profile.seedNames, 10)
+      .then(tidalArtists => {
+        paint(tidalArtists, localArtists.slice(0, Math.max(0, 10 - tidalArtists.length)));
+      })
+      .catch(() => {});
   }
 }
 
