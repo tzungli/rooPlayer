@@ -2112,24 +2112,6 @@ body.table-col-resizing * {
   box-shadow: 0 0 10px rgba(245, 158, 11, 0.8);
 }
 
-.dsp-info-footer {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.dsp-info-tag {
-  font-size: 10px;
-  color: var(--text-muted);
-  font-weight: 500;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
 /* Light Theme Overrides */
 [data-theme="light"] .dsp-sox-card {
   background: rgba(0, 0, 0, 0.03);
