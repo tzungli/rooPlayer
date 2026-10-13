@@ -52,14 +52,14 @@ function run() {
     warmupBits,
     writeStartBlock,
     isPrimary,
-    paceSAB,
-    paceSlot
+    capSAB,
+    capSlot
   } = workerData;
 
-  // Adaptive pacing signal (see createDsdSession): paceView[paceSlot] = target generation
-  // rate as a multiple of real time x 100; 0 = full speed. Read between batches; the
-  // Atomics.wait nap wakes early when the session controller changes the factor.
-  const paceView = paceSAB ? new Int32Array(paceSAB) : null;
+  // Sliding-window cap signal (see createDsdSession): capView[capSlot] = absolute block index
+  // this worker may generate up to (frontier + CAP_AHEAD_SEC). The worker naps whenever it is
+  // ahead of the sliding window; Atomics.wait wakes early when the main thread advances the cap.
+  const capView = capSAB ? new Int32Array(capSAB) : null;
 
   // The main thread hands an exact input-sample view (segment range + warm-up + FIR guard).
   const left = new Float32Array(leftBuffer, leftByteOffset || 0, leftLength !== undefined ? leftLength : leftBuffer.byteLength / 4);
@@ -123,9 +123,11 @@ function run() {
   };
 
   // 1. Initial burst for instant playback start (< 250ms): first ~3 seconds of this segment.
-  //    The primary (first) segment's initial write gates the session start.
+  //    The primary (first) segment's initial write gates the session start. Segments far ahead
+  //    of the sliding window skip their initial burst (it would only burn CPU for later).
   const initialBlocks = Math.min(genBlocks, Math.ceil(3 * dsdRate / samplesPerBlock));
-  writeBatch(initialBlocks);
+  const skipInitial = capView && !isPrimary && writeStartBlock > Atomics.load(capView, capSlot);
+  if (!skipInitial) writeBatch(initialBlocks);
   if (isPrimary) {
     parentPort.postMessage({
       type: 'initial',
@@ -133,33 +135,19 @@ function run() {
     });
   }
 
-  // 2. High-speed progressive modulation in background (~100 blocks per batch), throttled
-  //    by the session pacing signal once the frontier lead is comfortable.
+  // 2. Progressive modulation in background (~100 blocks per batch), held to the sliding
+  //    window: nap until the frontier comes within CAP_AHEAD_SEC of this segment.
   while (genDone < genBlocks) {
-    const batchStart = performance.now();
-    const batchBlocks = Math.min(100, genBlocks - genDone);
-    const n = writeBatch(batchBlocks);
-
-    if (paceView && n > 0) {
-      let targetF = Atomics.load(paceView, paceSlot) / 100;
-      if (targetF > 0) {
-        if (process.env.DSD_PACE_DEBUG) console.log(`[pace] worker slot=${paceSlot} napping at f=${targetF.toFixed(3)}`);
-        const audioMs = (n * samplesPerBlock * 1000) / dsdRate;
-        let deadline = batchStart + audioMs / targetF;
-        let napMs = deadline - performance.now();
-        while (napMs > 1) {
-          // Block until the factor changes (main thread Atomics.stores) or the capped slice ends.
-          Atomics.wait(paceView, paceSlot, Atomics.load(paceView, paceSlot), Math.min(napMs, 1000));
-          const f2 = Atomics.load(paceView, paceSlot) / 100;
-          if (f2 === 0) break; // full speed requested again
-          if (f2 !== targetF) {
-            targetF = f2;
-            deadline = batchStart + audioMs / targetF;
-          }
-          napMs = deadline - performance.now();
-        }
+    if (capView) {
+      const myAbs = writeStartBlock + Math.max(0, genDone - warmupBlocks);
+      let cap = Atomics.load(capView, capSlot);
+      while (myAbs > cap) {
+        Atomics.wait(capView, capSlot, cap, 1000);
+        const c2 = Atomics.load(capView, capSlot);
+        if (c2 > cap) cap = c2;
       }
     }
+    writeBatch(Math.min(100, genBlocks - genDone));
   }
 
   try { fs.closeSync(fd); } catch (e) {}

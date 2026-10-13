@@ -255,43 +255,24 @@ class NativeDspStreamer {
       currentPrefixBlocks = prefix;
       session.bytesWritten = 92 + prefix * bytesPerBlockPair;
       session.emit('progress', session.bytesWritten);
-      updatePace();
+      updateCaps();
     };
 
-    // Adaptive pacing: unthrottled workers pin every core for the first third of the track,
-    // which starves the Electron UI and the DLNA HTTP serving (audible stutter on the player
-    // side). As soon as the contiguous frontier has a safe lead over the renderer's 1x
-    // consumption, the aggregate target steps down 2.0x -> 1.4x -> 1.15x real time; full
-    // speed resumes whenever the lead runs low. Factors are delivered per worker through a
-    // SharedArrayBuffer slot (factor x 100, 0 = full speed) so napping workers pick changes
-    // up immediately (Atomics.wait wakes on store).
+    // Sliding-window cap pacing: a worker may generate at most CAP_AHEAD_SEC of audio beyond
+    // the contiguous frontier; beyond that it naps until the frontier approaches. The frontier
+    // worker is never capped (always full speed -> the renderer can never starve), while
+    // far-ahead workers idle instead of pinning all cores for the whole track - CPU contention
+    // had been starving the HTTP serving / Electron and caused periodic pops.
     const blocksPerSec = dsdRate / samplesPerBlock;
-    const LEAD_ESCAPE_SEC = 30;
-    const LEAD_BANDS = [[180, 1.15], [120, 1.3], [60, 1.6]]; // [minLeadSec, aggregate target rate]
-    const paceSAB = new SharedArrayBuffer(K * 4);
-    const paceView = new Int32Array(paceSAB);
-    let paceStartMs = 0; // set when the renderer can start consuming (initial burst ready)
-    let pacingActive = false;
-    let currentPaceFactor = -1;
-    const updatePace = () => {
-      if (!pacingActive || session.isCompleted || session.isCancelled) return;
-      const active = K - completedCount;
-      if (active <= 0) return;
-      const leadSec = currentPrefixBlocks / blocksPerSec - (Date.now() - paceStartMs) / 1000;
-      let f = currentPaceFactor;
-      if (leadSec < LEAD_ESCAPE_SEC) {
-        f = 0;
-      } else {
-        for (const [minLead, rate] of LEAD_BANDS) {
-          if (leadSec > minLead) { f = rate / active; break; }
-        }
-      }
-      if (f !== currentPaceFactor) {
-        currentPaceFactor = f;
-        if (process.env.DSD_PACE_DEBUG) console.log(`[pace] lead=${leadSec.toFixed(0)}s active=${active} f=${f.toFixed(3)}`);
-        const encoded = Math.max(0, Math.round(f * 100));
-        for (let i = 0; i < K; i++) Atomics.store(paceView, i, encoded);
-      }
+    const CAP_AHEAD_SEC = 25;
+    const capBlocks = Math.max(1, Math.round(CAP_AHEAD_SEC * blocksPerSec));
+    const capSAB = new SharedArrayBuffer(K * 4);
+    const capView = new Int32Array(capSAB);
+    capView.fill(capBlocks); // initial window: prefix = 0
+    const updateCaps = () => {
+      if (session.isCompleted || session.isCancelled) return;
+      const cap = currentPrefixBlocks + capBlocks;
+      for (let i = 0; i < K; i++) Atomics.store(capView, i, cap);
     };
 
     if (K === 0) {
@@ -321,8 +302,8 @@ class NativeDspStreamer {
           warmupBits: s.warmupBits,
           writeStartBlock: s.startBlock,
           isPrimary: i === 0,
-          paceSAB,
-          paceSlot: i
+          capSAB,
+          capSlot: i
         }
       });
       workers.push(worker);
@@ -367,9 +348,6 @@ class NativeDspStreamer {
       try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
       throw initError || err;
     }
-    // The renderer can start consuming now: start the pacing reference clock.
-    paceStartMs = Date.now();
-    pacingActive = true;
 
     session.cancel = () => {
       session.isCancelled = true;
