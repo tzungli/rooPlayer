@@ -1919,21 +1919,47 @@ body.table-col-resizing * {
   color: var(--accent-purple);
   border: none;
   letter-spacing: 0.8px;
-  animation: dsp-glow-pulse 2.6s ease-in-out infinite;
+  position: relative;
+  isolation: isolate;
+  display: inline-block;
+  animation: dsp-text-glow 2.2s ease-in-out infinite;
 }
 
-/* DSP ACTIVE 字體光暈發散動態：光暈由字體向外擴散再收回，循環脈動 */
-@keyframes dsp-glow-pulse {
+/* 光暈由文字向外發散擴開的光環脈動（真實擴散動態） */
+.stage-badge-dsp::after {
+  content: '';
+  position: absolute;
+  inset: -3px -7px;
+  border-radius: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(167, 139, 250, 0.85) 0%, rgba(139, 92, 246, 0.45) 40%, rgba(139, 92, 246, 0) 75%);
+  animation: dsp-halo-expand 2.2s ease-out infinite;
+}
+
+/* 文字本體光暈呼吸：亮度與光暈同步脈動 */
+@keyframes dsp-text-glow {
   0%, 100% {
-    text-shadow: 0 0 4px rgba(139, 92, 246, 0.55), 0 0 10px rgba(139, 92, 246, 0.22);
+    color: var(--accent-purple);
+    text-shadow: 0 0 6px rgba(139, 92, 246, 0.7), 0 0 16px rgba(139, 92, 246, 0.35);
+    transform: scale(1);
   }
-  50% {
-    text-shadow: 0 0 8px rgba(139, 92, 246, 0.95), 0 0 20px rgba(139, 92, 246, 0.55), 0 0 36px rgba(139, 92, 246, 0.28);
+  45% {
+    color: #d6c8ff;
+    text-shadow: 0 0 10px rgba(196, 181, 253, 1), 0 0 26px rgba(167, 139, 250, 0.8), 0 0 48px rgba(139, 92, 246, 0.45);
+    transform: scale(1.06);
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .stage-badge-dsp { animation: none; }
+@keyframes dsp-halo-expand {
+  0% {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  60%, 100% {
+    transform: scale(3.2);
+    opacity: 0;
+  }
 }
 
 /* Completely clean stage without borders, background, or box-shadow */
