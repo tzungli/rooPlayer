@@ -1905,7 +1905,7 @@ function renderOverview() {
   // 3. Render 最近聆聽 Recent Played Albums (最多 5 張專輯)
   renderRecentPlayedAlbums();
 
-  // 4. Render 精選與最近新增 (最多呈現 5 張專輯，包含新增進資料庫的 TIDAL 專輯)
+  // 4. Render 最近新增專輯 (最多呈現 5 張專輯，包含新增進資料庫的 TIDAL 專輯)
   overviewGrid.innerHTML = '';
   const curSize = state.albumCoverSize || 'medium';
   overviewGrid.classList.remove('cover-size-small', 'cover-size-medium', 'cover-size-large');
