@@ -51,8 +51,15 @@ function run() {
     genEndBit,
     warmupBits,
     writeStartBlock,
-    isPrimary
+    isPrimary,
+    paceSAB,
+    paceSlot
   } = workerData;
+
+  // Adaptive pacing signal (see createDsdSession): paceView[paceSlot] = target generation
+  // rate as a multiple of real time x 100; 0 = full speed. Read between batches; the
+  // Atomics.wait nap wakes early when the session controller changes the factor.
+  const paceView = paceSAB ? new Int32Array(paceSAB) : null;
 
   // The main thread hands an exact input-sample view (segment range + warm-up + FIR guard).
   const left = new Float32Array(leftBuffer, leftByteOffset || 0, leftLength !== undefined ? leftLength : leftBuffer.byteLength / 4);
@@ -126,9 +133,33 @@ function run() {
     });
   }
 
-  // 2. High-speed progressive modulation in background (~100 blocks = ~1.1s audio per batch)
+  // 2. High-speed progressive modulation in background (~100 blocks per batch), throttled
+  //    by the session pacing signal once the frontier lead is comfortable.
   while (genDone < genBlocks) {
-    writeBatch(100);
+    const batchStart = performance.now();
+    const batchBlocks = Math.min(100, genBlocks - genDone);
+    const n = writeBatch(batchBlocks);
+
+    if (paceView && n > 0) {
+      let targetF = Atomics.load(paceView, paceSlot) / 100;
+      if (targetF > 0) {
+        if (process.env.DSD_PACE_DEBUG) console.log(`[pace] worker slot=${paceSlot} napping at f=${targetF.toFixed(3)}`);
+        const audioMs = (n * samplesPerBlock * 1000) / dsdRate;
+        let deadline = batchStart + audioMs / targetF;
+        let napMs = deadline - performance.now();
+        while (napMs > 1) {
+          // Block until the factor changes (main thread Atomics.stores) or the capped slice ends.
+          Atomics.wait(paceView, paceSlot, Atomics.load(paceView, paceSlot), Math.min(napMs, 1000));
+          const f2 = Atomics.load(paceView, paceSlot) / 100;
+          if (f2 === 0) break; // full speed requested again
+          if (f2 !== targetF) {
+            targetF = f2;
+            deadline = batchStart + audioMs / targetF;
+          }
+          napMs = deadline - performance.now();
+        }
+      }
+    }
   }
 
   try { fs.closeSync(fd); } catch (e) {}
