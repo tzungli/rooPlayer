@@ -320,10 +320,68 @@ function buildHqpPsExt2Filter(fsOut, srcRate) {
   return { h, S, lo: -L, hi: L, ratio, integerRatio, fsOut, srcRate, minimumPhase: false, taps: 2 * half + 1 };
 }
 
+// ---- Polyphase phase tables (integer AND rational upsampling ratios) ----
+// With ratio = P/Q in lowest terms, the FIR tap pattern for output index o depends
+// only on phi = o mod P: the contributing inputs are k = k0(phi) + m·Q + j and the
+// h-samples are h(t0(phi) - j·P/Q), where m = floor(o/P). Precomputing the
+// interpolated coefficient sequence G_phi[j] per phase turns the hot loop into two
+// contiguous linear scans (no per-tap float index math, no strided h access).
+// All index math here is exact integer arithmetic (num = (t_j - lo)·S·Q), which is
+// strictly more accurate than the legacy iterative float subtraction.
+// buildFirPhases returns null for extreme P; firSample then keeps the generic path.
+function buildFirPhases(gf) {
+  const fsOut = Math.round(gf.fsOut), srcRate = Math.round(gf.srcRate);
+  if (!Number.isInteger(fsOut) || !Number.isInteger(srcRate) || srcRate <= 0) return null;
+  const gcdI = (a, b) => (b ? gcdI(b, a % b) : a);
+  const g = gcdI(fsOut, srcRate);
+  const P = fsOut / g, Q = srcRate / g;
+  if (P < 1 || P > 4096) return null;
+  const h = gf.h, S = gf.S, lo = gf.lo, hi = gf.hi;
+  const maxJ = (hi - lo) * S;
+  const phases = new Array(P);
+  for (let phi = 0; phi < P; phi++) {
+    const k0 = Math.ceil((phi - hi) * Q / P);
+    const A = phi * Q - k0 * P - lo * Q; // = (t0 - lo)·Q, exact integer
+    const T = Math.floor(A / P) + 1; // tap count for interior outputs of this phase
+    if (T < 1 || T > 8192) { phases[phi] = null; continue; }
+    const N0 = S * A;
+    const SP = S * P;
+    const G = new Float64Array(T);
+    for (let j = 0; j < T; j++) {
+      const num = N0 - j * SP; // = (t_j - lo)·S·Q, exact integer in [0, maxJ·Q]
+      let j0 = Math.floor(num / Q);
+      if (j0 < 0) j0 = 0; else if (j0 > maxJ) j0 = maxJ; // safety net (exact math: never fires)
+      const rem = num - j0 * Q;
+      G[j] = rem <= 0 ? h[j0] : h[j0] + (rem / Q) * (h[j0 + 1] - h[j0]);
+    }
+    phases[phi] = { k0, T, G };
+  }
+  return { P, Q, phases };
+}
+
 // Evaluate the Gauss FIR at output index outIdx for a zero-stuffed input grid
 // (input sample k lands at output position k·ratio). out = Σ_k input[k]·h(outIdx - k·ratio)
 // h support is [gf.lo, gf.hi] in output-sample units, stored on the S grid.
 function firSample(input, inLen, outIdx, ratio, gf) {
+  // Fast path: contiguous polyphase scan with precomputed coefficients (built once per filter).
+  let ph = gf.phases;
+  if (ph === undefined) ph = gf.phases = buildFirPhases(gf);
+  if (ph) {
+    const P = ph.P, Q = ph.Q;
+    const phi = outIdx % P;
+    const entry = ph.phases[phi];
+    if (entry) {
+      const kBase = entry.k0 + Math.floor(outIdx / P) * Q;
+      const T = entry.T;
+      if (kBase >= 0 && kBase + T <= inLen) {
+        const G = entry.G;
+        let acc = 0;
+        for (let j = 0; j < T; j++) acc += input[kBase + j] * G[j];
+        return acc;
+      }
+    }
+  }
+
   const h = gf.h, S = gf.S, lo = gf.lo, hi = gf.hi;
   let kStart = Math.ceil((outIdx - hi) / ratio);
   let kEnd = Math.floor((outIdx - lo) / ratio);

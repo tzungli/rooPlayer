@@ -134,8 +134,8 @@ class NativeDspStreamer {
   // Parallel segment modulation (fix for DLNA playback dropouts with 5th/7th-order modulators):
   // a single worker thread modulating 5th/7th-order CIFFR (especially with FIR filter phases or
   // at DSD128+) can run SLOWER than real time; the progressive DSF file then starves and the
-  // DLNA renderer stops after its buffer drains. The track is split into up to 4 contiguous block
-  // segments modulated by parallel worker threads. The FIRST segment is deliberately short (~8 s):
+  // DLNA renderer stops after its buffer drains. The track is split into up to 8 contiguous block
+  // segments modulated by parallel worker threads. The FIRST segment is deliberately short (~5 s):
   // the contiguous prefix the renderer consumes is gated by the frontier worker's rate, so a short
   // first segment bounds any stall, and every later segment is pre-generated well before the
   // renderer reaches it (segment sizes grow geometrically x1.5). Each non-first segment additionally
@@ -180,15 +180,17 @@ class NativeDspStreamer {
     const warmupLcm = (samplesPerBlock * stepBits) / gcd(samplesPerBlock, stepBits);
     const warmupBitsFull = Math.ceil((1.5 * dsdRate) / warmupLcm) * warmupLcm; // ~1.5 s modulator warm-up
 
-    // Segment sizes: first ~8 s, then geometrically x1.5, so the contiguous prefix crosses segment
+    // Segment sizes: first ~5 s, then geometrically x1.5, so the contiguous prefix crosses segment
     // boundaries before a slower-than-real-time frontier worker runs out of lead.
     const segSizes = [];
     {
       let remaining = totalBlocks;
-      const maxWorkers = Math.max(1, Math.min(4, os.cpus().length - 1));
+      // Up to 8 parallel workers: modern audiophile machines have 8+ physical cores; the
+      // contiguous-prefix frontier gains every worker's output once the first segment lands.
+      const maxWorkers = Math.max(1, Math.min(8, os.cpus().length - 1));
       const minSegBlocks = Math.max(segAlignBlocks, Math.round(6 * dsdRate / samplesPerBlock));
       while (remaining > 0 && segSizes.length < maxWorkers) {
-        const wantSec = segSizes.length === 0 ? 8 : 8 * Math.pow(1.5, segSizes.length);
+        const wantSec = segSizes.length === 0 ? 5 : 5 * Math.pow(1.5, segSizes.length);
         let sizeBlocks = Math.max(segAlignBlocks, Math.round((wantSec * dsdRate / samplesPerBlock) / segAlignBlocks) * segAlignBlocks);
         if (segSizes.length > 0 && remaining - sizeBlocks < minSegBlocks) sizeBlocks = remaining; // merge short tail
         if (sizeBlocks > remaining) sizeBlocks = remaining;
