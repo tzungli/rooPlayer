@@ -93,19 +93,51 @@ const CIFFR_CLAMP = 8.0; // anti-windup safety limit (normal operation stays wel
 // Poly-Sinc-Gauss Long FIR Upsampling Filter（HQPlayer poly-sinc-gauss 風格）
 //
 // 閉式設計：h(t) = sinc(2·fc·t/fs) · exp(-(t/σ)²)
-//   sinc 基準 × 高斯窗 ⇔ 頻域「高斯形過渡帶」：極低的預/後鈴振、
-//   通帶平坦至源 Nyquist、鏡像（源取樣率的倍頻）抑制約 -110 dB。線性相位。
+//   sinc 基準 × 高斯窗 ⇔ 頻域「高斯形過渡帶」：極低的鈴振、通帶平坦至源
+//   Nyquist、鏡像（源取樣率的倍頻）抑制約 -100..-125 dB。線性相位。
+//
+// minimumPhase=true（'gauss-min'）：以複倒數譜（complex cepstrum）折疊把上述
+//   線性相位設計轉換為最小相位因果濾波器：預響鈴嚴格為零，代價是階躍有約 30%
+//   的快速衰減後衝（post-kick，約 180µs 內收斂）——即 HQPlayer 最小相位 gauss
+//   家族的「凌厲打擊」性格。最小相位脈衝有長尾（sinc 零點造成的冪律衰減），
+//   但長尾對音訊無貢獻：截斷至 ~430µs × fsOut（上限 2500 taps）與全長規格相同
+//   （DSD64 1200 taps 與 8944 taps 實測完全等效：鏡像 -99/-122dB、階躍零誤差）。
 //
 // 類比規格由 DSD64/44.1k 參考點縮放：
 //   fc = 1.27 × 源 Nyquist（上限 0.45·fsOut）
 //   σ  = 180 samples @ fsOut=2.8224M, src=44.1k（隨 srcRate 與 fsOut 線性縮放）
 //   截斷 L = 4.5σ（窗值 exp(-20)≈1.6e-9，再長的尾巴對音訊無意義）；
 //   為限制 CPU 成本，必要時收短到 ≥2.5σ（保留 ≥-50dB 旁瓣底），成本上限約
-//   150 MMAC/s/聲道。多相實作的成本 = 每「輸入」樣本 2L+1 次 MAC，與 OSR 無關。
+//   150 MMAC/s/聲道。多相實作的成本 = 每輸出樣本約 26 次 MAC（∝ fsOut）。
 //
 // 非整數 ratio（例如 48k 源 → DSD64）用 S=8 子樣本网格 + 線性插值取樣 h(t)。
 // ---------------------------------------------------------------------------
-function buildGaussFilter(fsOut, srcRate) {
+function fftRun(re, im, inv) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { const tr = re[i]; re[i] = re[j]; re[j] = tr; const ti = im[i]; im[i] = im[j]; im[j] = ti; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (inv ? 2 : -2) * Math.PI / len;
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let ar = 1, ai = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const r1 = re[i + k], i1 = im[i + k], r2 = re[i + k + len / 2], i2 = im[i + k + len / 2];
+        const vr = r2 * ar - i2 * ai, vi = r2 * ai + i2 * ar;
+        re[i + k] = r1 + vr; im[i + k] = i1 + vi;
+        re[i + k + len / 2] = r1 - vr; im[i + k + len / 2] = i1 - vi;
+        const nr = ar * wr - ai * wi; ai = ar * wi + ai * wr; ar = nr;
+      }
+    }
+  }
+  if (inv) { for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; } }
+}
+
+function buildGaussFilter(fsOut, srcRate, minimumPhase = false) {
   // 操作點（DSD64/44.1k 實測掃描）：通帶至 21k 平坦 -0.2dB、22.05k -0.4dB、
   // 下側鏡像（源取樣率-信号頻，如 19k→25.1k）-2dB、44.1k 鏡像 -112dB、30k -11dB。
   const fc = Math.min(1.27 * srcRate / 2, 0.45 * fsOut);
@@ -118,43 +150,79 @@ function buildGaussFilter(fsOut, srcRate) {
   const ratio = fsOut / srcRate;
   const integerRatio = Math.abs(ratio - Math.round(ratio)) < 1e-9;
   const S = integerRatio ? 1 : 8;
-  const half = L * S;
-  const n = 2 * half + 2; // +1 guard tap for sub-sample interpolation edge
-  const h = new Float64Array(n);
-  const norm = 2 * fc / fsOut;
-  for (let j = -half; j <= half; j++) {
-    const t = j / S;
+  const gaussTap = (t) => {
     const x = 2 * fc * t / fsOut;
     const s = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
-    h[j + half] = norm * s * Math.exp(-(t / sigma) * (t / sigma));
-  }
-  let sum = 0;
-  for (let i = 0; i < n - 1; i++) sum += h[i];
+    return (2 * fc / fsOut) * s * Math.exp(-(t / sigma) * (t / sigma));
+  };
   // 升頻增益補償：零插補（zero-stuffing）後濾波，各多相分支的和必須為 1，
   // 即 Σh = ratio（否則輸出 DC/低頻增益會差 ratio 倍）。
+
+  if (!minimumPhase) {
+    const half = L * S;
+    const n = 2 * half + 2; // +1 guard tap for sub-sample interpolation edge
+    const h = new Float64Array(n);
+    for (let j = -half; j <= half; j++) h[j + half] = gaussTap(j / S);
+    let sum = 0;
+    for (let i = 0; i < n - 1; i++) sum += h[i];
+    const g = ratio / sum;
+    for (let i = 0; i < n; i++) h[i] *= g;
+    return { h, S, lo: -L, hi: L, ratio, integerRatio, fsOut, srcRate, minimumPhase: false, taps: 2 * half + 1 };
+  }
+
+  // --- 最小相位轉換（單位輸出樣本网格上的複倒數譜折疊）---
+  // 截斷 budget：長尾對音訊無貢獻（DSD64 實測 1200 taps 與全長規格相同）。
+  // 但 FFT 工作長度 M 必須容納「真實」最小相位尾巴（~3.5ms × fsOut 的冪律長尾，
+  // 約為 budget 的 8 倍）：若 M 太小，尾部繞回負時間會污染折疊，產生延遲濾波器。
+  const budget = Math.min(2500, Math.max(64, Math.round(fsOut * 4.3e-4)));
+  let M = 4096;
+  while (M < 2.2 * fsOut * 3.5e-3 || M < 4 * (2 * L + 1)) M *= 2;
+  if (M > 65536) M = 65536; // 繞回污染於此深度約 -115dB，對音訊無影響
+  const re = new Float64Array(M), im = new Float64Array(M);
+  for (let t = -L; t <= L; t++) { const v = gaussTap(t); if (t < 0) re[M + t] = v; else re[t] = v; }
+  fftRun(re, im, false);
+  for (let k = 0; k < M; k++) {
+    const mag = Math.hypot(re[k], im[k]);
+    const ph = Math.atan2(im[k], re[k]);
+    re[k] = Math.log(Math.max(mag, 1e-14)); im[k] = ph;
+  }
+  fftRun(re, im, true); // 倒數譜
+  for (let t = 1; t < M / 2; t++) { re[t] *= 2; im[t] *= 2; re[M - t] = 0; im[M - t] = 0; } // 折疊 => 最小相位
+  fftRun(re, im, false);
+  for (let k = 0; k < M; k++) { const lm = Math.min(re[k], 40), ph = im[k]; re[k] = Math.exp(lm) * Math.cos(ph); im[k] = Math.exp(lm) * Math.sin(ph); }
+  fftRun(re, im, true); // 因果最小相位脈衝
+  let sum = 0;
+  for (let i = 0; i < budget; i++) sum += re[i];
   const g = ratio / sum;
-  for (let i = 0; i < n; i++) h[i] *= g;
-  return { h, S, L, half, ratio, integerRatio, fsOut, srcRate, taps: 2 * half + 1 };
+  const half = (budget - 1) * S;
+  const h = new Float64Array(half + 2);
+  for (let j = 0; j <= half; j++) {
+    const t = j / S;
+    const t0 = Math.floor(t);
+    const fr = t - t0;
+    h[j] = (re[t0] + fr * (re[Math.min(t0 + 1, budget - 1)] - re[t0])) * g;
+  }
+  return { h, S, lo: 0, hi: budget - 1, ratio, integerRatio, fsOut, srcRate, minimumPhase: true, taps: budget };
 }
 
 // Evaluate the Gauss FIR at output index outIdx for a zero-stuffed input grid
 // (input sample k lands at output position k·ratio). out = Σ_k input[k]·h(outIdx - k·ratio)
+// h support is [gf.lo, gf.hi] in output-sample units, stored on the S grid.
 function firSample(input, inLen, outIdx, ratio, gf) {
-  const h = gf.h, L = gf.L, half = gf.half;
-  let kStart = Math.ceil((outIdx - L) / ratio);
-  let kEnd = Math.floor((outIdx + L) / ratio);
+  const h = gf.h, S = gf.S, lo = gf.lo, hi = gf.hi;
+  let kStart = Math.ceil((outIdx - hi) / ratio);
+  let kEnd = Math.floor((outIdx - lo) / ratio);
   if (kStart < 0) kStart = 0;
   if (kEnd > inLen - 1) kEnd = inLen - 1;
   let acc = 0;
   if (gf.integerRatio) {
     const r = Math.round(gf.ratio);
-    let m = outIdx - kStart * r + half;
+    let m = outIdx - kStart * r - lo;
     for (let k = kStart; k <= kEnd; k++, m -= r) acc += input[k] * h[m];
   } else {
-    const S = gf.S;
     let t = outIdx - kStart * ratio;
     for (let k = kStart; k <= kEnd; k++, t -= ratio) {
-      const j = t * S + half;
+      const j = (t - lo) * S;
       const j0 = Math.floor(j);
       const frac = j - j0;
       acc += input[k] * (h[j0] + frac * (h[j0 + 1] - h[j0]));
@@ -199,8 +267,9 @@ function buildDsfHeader(totalFileBytes, dsdRate, totalSamplesPerChannel, blockSi
 // 5th / 7th order: synthesized CIFFR (cascade of integrators + feedforward taps +
 // ultrasonic resonator pairs, see CIFFR_5 / CIFFR_7 coefficient tables above).
 // Input upsampling: Linear / Minimum / Intermediate phase Hermite interpolation,
-// or 'gauss-long' = Poly-Sinc-Gauss Long FIR (requires a gaussFilter built by
-// buildGaussFilter(); falls back to linear Hermite when absent).
+// 'gauss-long' = Poly-Sinc-Gauss Long FIR (linear phase), or 'gauss-min' = the
+// minimum-phase variant of the same design (zero pre-ringing). Both require a
+// gaussFilter built by buildGaussFilter(); falls back to linear Hermite when absent.
 //
 // Stateful: internal integrator state persists across processBlocks() calls,
 // so one instance can drive both whole-file encoding and progressive batch encoding
@@ -208,9 +277,9 @@ function buildDsfHeader(totalFileBytes, dsdRate, totalSamplesPerChannel, blockSi
 class DsdModulator {
   constructor(dsdOrder = 5, filterPhase = 'linear', gaussFilter = null) {
     this.order = [2, 5, 7].includes(parseInt(dsdOrder, 10)) ? parseInt(dsdOrder, 10) : 5;
-    let phase = ['linear', 'minimum', 'intermediate', 'gauss-long'].includes(filterPhase) ? filterPhase : 'linear';
-    // 'gauss-long' 需要 buildGaussFilter() 產生的係數；缺少時退回線性 Hermite
-    if (phase === 'gauss-long' && !gaussFilter) phase = 'linear';
+    let phase = ['linear', 'minimum', 'intermediate', 'gauss-long', 'gauss-min'].includes(filterPhase) ? filterPhase : 'linear';
+    // 'gauss-long' / 'gauss-min' 需要 buildGaussFilter() 產生的係數；缺少時退回線性 Hermite
+    if ((phase === 'gauss-long' || phase === 'gauss-min') && !gaussFilter) phase = 'linear';
     this.phase = phase;
     this.gf = gaussFilter || null;
 
@@ -233,7 +302,7 @@ class DsdModulator {
     const out = Buffer.allocUnsafe(numBlocks * 2 * blockSize);
     const order = this.order;
     const phase = this.phase;
-    const useGauss = phase === 'gauss-long';
+    const useGauss = phase === 'gauss-long' || phase === 'gauss-min';
     const ratio = 1 / invRatio;
     const gf = this.gf;
 

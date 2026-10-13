@@ -220,10 +220,10 @@ class NativeDspStreamer {
     const ratio = targetSampleRate / srcRate;
     const outFrames = Math.floor(inLen * ratio);
 
-    // 'gauss-long' 濾波相位：Poly-Sinc-Gauss Long FIR 升頻（設計見 dsp-kernel.js）
+    // 'gauss-long' / 'gauss-min' 濾波相位：Poly-Sinc-Gauss Long FIR 升頻（線性或最小相位，設計見 dsp-kernel.js）
     let gaussFilter = null;
-    if (filterPhase === 'gauss-long') {
-      try { gaussFilter = buildGaussFilter(targetSampleRate, srcRate); } catch (e) { gaussFilter = null; }
+    if (filterPhase === 'gauss-long' || filterPhase === 'gauss-min') {
+      try { gaussFilter = buildGaussFilter(targetSampleRate, srcRate, filterPhase === 'gauss-min'); } catch (e) { gaussFilter = null; }
     }
 
     const bytesPerSample = 3; // 24-bit PCM
