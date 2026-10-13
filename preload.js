@@ -6,7 +6,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximizeToggle: () => ipcRenderer.invoke('window:maximizeToggle'),
   close: () => ipcRenderer.invoke('window:close'),
-  isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
   onMaximizedChange: (callback) => {
     ipcRenderer.on('window:maximizedChange', (_event, isMax) => callback(isMax));
   },

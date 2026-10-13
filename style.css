@@ -95,14 +95,6 @@ body {
   margin-right: 20px;
 }
 
-.brand-dot {
-  width: 9px;
-  height: 9px;
-  background-color: var(--accent-purple);
-  border-radius: 50%;
-  box-shadow: 0 0 8px var(--accent-purple);
-}
-
 .brand-text {
   font-size: 16px;
   color: #fff;
@@ -326,41 +318,8 @@ body {
   border-radius: 10px;
 }
 
-.sidebar-footer {
-  margin-top: auto;
-  padding-top: 8px;
-}
-
-.zone-card {
-  background-color: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 8px 9px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.zone-card:hover {
-  background-color: rgba(255, 255, 255, 0.07);
-  border-color: var(--border-highlight);
-}
-
 .zone-icon {
   font-size: 20px;
-}
-
-.zone-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #fff;
-}
-
-.zone-sub {
-  font-size: 10px;
-  color: var(--accent-purple);
 }
 
 /* Main Content */
@@ -493,11 +452,6 @@ body {
 .stat-pill.highlight span {
   color: #4338ca !important;
   font-weight: 800;
-}
-
-.hero-actions {
-  display: flex;
-  gap: 10px;
 }
 
 /* Buttons */
@@ -3346,16 +3300,6 @@ body.table-col-resizing * {
   border-color: rgba(124, 58, 237, 0.6);
 }
 
-.dlna-empty-hint {
-  padding: 24px;
-  text-align: center;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px dashed var(--border-color);
-  border-radius: 10px;
-  color: var(--text-muted);
-  font-size: 12.5px;
-}
-
 [data-theme="light"] .zone-btn {
   background: rgba(0, 0, 0, 0.04);
 }
@@ -3404,12 +3348,6 @@ body.table-col-resizing * {
 
 .direct-ip-input::placeholder {
   color: var(--text-muted);
-}
-
-.device-badge-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .device-tag {
@@ -4393,175 +4331,6 @@ body.table-col-resizing * {
   font-size: 14px;
 }
 
-/* Streaming Platform Direct Portals Grid */
-.streaming-portals-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 16px;
-  margin-bottom: 28px;
-}
-
-.streaming-portal-card {
-  background-color: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 14px;
-  padding: 18px;
-  cursor: pointer;
-  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  position: relative;
-  overflow: hidden;
-}
-
-.streaming-portal-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 4px;
-  height: 100%;
-  border-radius: 14px 0 0 14px;
-  transition: width 0.2s ease;
-}
-
-.streaming-portal-card:hover::before {
-  width: 6px;
-}
-
-/* Specific Platform Styling */
-.streaming-portal-card.kkbox {
-  background: linear-gradient(145deg, rgba(0, 192, 243, 0.09), var(--bg-card));
-  border-color: rgba(0, 192, 243, 0.25);
-}
-.streaming-portal-card.kkbox::before { background-color: #00c0f3; }
-.streaming-portal-card.kkbox:hover {
-  border-color: #00c0f3;
-  box-shadow: 0 8px 24px rgba(0, 192, 243, 0.18);
-  transform: translateY(-2px);
-}
-
-.streaming-portal-card.tidal {
-  background: linear-gradient(145deg, rgba(0, 255, 255, 0.08), var(--bg-card));
-  border-color: rgba(0, 255, 255, 0.25);
-}
-.streaming-portal-card.tidal::before { background-color: #00ffff; }
-.streaming-portal-card.tidal:hover {
-  border-color: #00ffff;
-  box-shadow: 0 8px 24px rgba(0, 255, 255, 0.16);
-  transform: translateY(-2px);
-}
-
-.streaming-portal-card.qobuz {
-  background: linear-gradient(145deg, rgba(37, 99, 235, 0.12), var(--bg-card));
-  border-color: rgba(37, 99, 235, 0.28);
-}
-.streaming-portal-card.qobuz::before { background-color: #2563eb; }
-.streaming-portal-card.qobuz:hover {
-  border-color: #3b82f6;
-  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.2);
-  transform: translateY(-2px);
-}
-
-.streaming-portal-card.spotify {
-  background: linear-gradient(145deg, rgba(29, 185, 84, 0.09), var(--bg-card));
-  border-color: rgba(29, 185, 84, 0.25);
-}
-.streaming-portal-card.spotify::before { background-color: #1db954; }
-.streaming-portal-card.spotify:hover {
-  border-color: #1db954;
-  box-shadow: 0 8px 24px rgba(29, 185, 84, 0.18);
-  transform: translateY(-2px);
-}
-
-.portal-top-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.portal-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.portal-icon {
-  font-size: 24px;
-  line-height: 1;
-}
-
-.portal-name {
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: 0.5px;
-  color: var(--text-main);
-}
-
-.portal-tag {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 6px;
-}
-
-.streaming-portal-card.kkbox .portal-tag { background: rgba(0, 192, 243, 0.18); color: #00c0f3; }
-.streaming-portal-card.tidal .portal-tag { background: rgba(0, 255, 255, 0.18); color: #00ffff; }
-.streaming-portal-card.qobuz .portal-tag { background: rgba(37, 99, 235, 0.2); color: #60a5fa; }
-.streaming-portal-card.spotify .portal-tag { background: rgba(29, 185, 84, 0.18); color: #22c55e; }
-
-.portal-desc {
-  font-size: 13px;
-  color: var(--text-sub);
-  margin-bottom: 16px;
-  line-height: 1.4;
-}
-
-.portal-action-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 14px;
-  font-size: 12px;
-  font-weight: 700;
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-main);
-  transition: all 0.15s;
-  width: 100%;
-}
-
-.streaming-portal-card:hover .portal-action-btn {
-  background-color: var(--accent-purple);
-  border-color: var(--accent-purple);
-  color: #fff;
-}
-
-.streaming-portal-card.kkbox:hover .portal-action-btn {
-  background-color: #00a4d1;
-  border-color: #00a4d1;
-}
-
-.streaming-portal-card.tidal:hover .portal-action-btn {
-  background-color: #000;
-  border-color: #00ffff;
-  color: #00ffff;
-}
-
-.streaming-portal-card.qobuz:hover .portal-action-btn {
-  background-color: #1d4ed8;
-  border-color: #1d4ed8;
-}
-
-.streaming-portal-card.spotify:hover .portal-action-btn {
-  background-color: #16a34a;
-  border-color: #16a34a;
-}
-
 /* Streaming Catalog Block */
 .streaming-catalog-block {
   margin-top: 24px;
@@ -4618,43 +4387,6 @@ body.table-col-resizing * {
   background-color: #ffffff;
   border-color: rgba(0, 0, 0, 0.12);
   color: #64748b;
-}
-
-[data-theme="light"] .streaming-portal-card {
-  background-color: #ffffff;
-  border-color: rgba(0, 0, 0, 0.09);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-}
-
-[data-theme="light"] .streaming-portal-card.kkbox {
-  background: linear-gradient(145deg, #f0f9ff, #ffffff);
-  border-color: #bae6fd;
-}
-[data-theme="light"] .streaming-portal-card.tidal {
-  background: linear-gradient(145deg, #f8fafc, #ffffff);
-  border-color: #cbd5e1;
-}
-[data-theme="light"] .streaming-portal-card.qobuz {
-  background: linear-gradient(145deg, #eff6ff, #ffffff);
-  border-color: #bfdbfe;
-}
-[data-theme="light"] .streaming-portal-card.spotify {
-  background: linear-gradient(145deg, #f0fdf4, #ffffff);
-  border-color: #bbf7d0;
-}
-
-[data-theme="light"] .portal-name {
-  color: #0f172a;
-}
-
-[data-theme="light"] .portal-desc {
-  color: #475569;
-}
-
-[data-theme="light"] .portal-action-btn {
-  background-color: #f8fafc;
-  border-color: rgba(0, 0, 0, 0.1);
-  color: #0f172a;
 }
 
 [data-theme="light"] .streaming-loading-box {
@@ -4961,15 +4693,6 @@ body.table-col-resizing * {
   box-shadow: 0 2px 8px rgba(37, 213, 255, 0.12);
 }
 
-.kkbox-view-switcher {
-  display: inline-flex;
-  gap: 4px;
-  background: rgba(255, 255, 255, 0.05);
-  padding: 3px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
 .kkbox-switch-btn {
   border: none;
   background: transparent;
@@ -5019,33 +4742,6 @@ body.table-col-resizing * {
   background: rgba(46, 204, 113, 0.15);
   color: #2ecc71;
   border-color: rgba(46, 204, 113, 0.4);
-}
-
-.kkbox-nav-arrows {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.kkbox-icon-btn {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-muted);
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  transition: all 0.2s;
-}
-
-.kkbox-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.18);
 }
 
 /* Info Banner */
@@ -5109,31 +4805,6 @@ body.table-col-resizing * {
   min-height: 0;
   height: 100%;
   overflow: hidden;
-}
-
-.kkbox-webview-wrapper {
-  width: 100%;
-  height: 100%;
-  flex: 1;
-  min-height: 0;
-  background: #0f1013;
-  overflow: hidden;
-  position: relative;
-}
-
-.kkbox-webview-loading-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: #0f1013;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  z-index: 5;
-  transition: opacity 0.3s ease;
 }
 
 /* KKBOX Open API Views */
@@ -5620,11 +5291,6 @@ body.table-col-resizing * {
   color: #0284c7;
   border-bottom-color: #0284c7;
   background: rgba(2, 132, 199, 0.08);
-}
-
-[data-theme="light"] .kkbox-view-switcher {
-  background: rgba(0, 0, 0, 0.05);
-  border-color: rgba(0, 0, 0, 0.08);
 }
 
 [data-theme="light"] .kkbox-switch-btn {
@@ -6241,20 +5907,6 @@ body.table-col-resizing * {
   color: var(--text-main);
 }
 
-.tidal-album-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: rgba(0, 229, 255, 0.15);
-  color: #00e5ff;
-  border: 1px solid rgba(0, 229, 255, 0.3);
-  font-size: 10px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
-  letter-spacing: 0.5px;
-}
-
 .nav-item[data-view="tidal"]:hover .nav-icon {
   filter: drop-shadow(0 0 6px #00e5ff);
 }
@@ -6451,11 +6103,6 @@ body.table-col-resizing * {
   color: #ef4444;
 }
 
-.tidal-card-status {
-  color: #00e5ff;
-  font-weight: 600;
-}
-
 /* ============================================================
    TIDAL Hi-Res Streaming Explorer View Styles
    ============================================================ */
@@ -6595,43 +6242,6 @@ body.table-col-resizing * {
   background: rgba(0, 229, 255, 0.08);
   font-weight: 700;
   box-shadow: 0 2px 8px rgba(0, 229, 255, 0.12);
-}
-
-/* View Switcher (legacy fallback) */
-.tidal-view-switcher {
-  display: flex;
-  background: rgba(255, 255, 255, 0.04);
-  padding: 3px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  gap: 4px;
-}
-
-.tidal-switch-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 6px 14px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.tidal-switch-btn:hover {
-  color: var(--text-main);
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.tidal-switch-btn.active {
-  background: rgba(0, 229, 255, 0.15);
-  color: #00e5ff;
-  box-shadow: 0 0 12px rgba(0, 229, 255, 0.2);
-  border: 1px solid rgba(0, 229, 255, 0.3);
 }
 
 /* Search Box */
@@ -7152,10 +6762,6 @@ body.table-col-resizing * {
   color: var(--text-sub);
 }
 
-[data-theme="light"] .tidal-card-status {
-  color: var(--accent-cyan);
-}
-
 [data-theme="light"] .tidal-header-bar {
   background: rgba(255, 255, 255, 0.85);
   border-bottom-color: rgba(0, 0, 0, 0.08);
@@ -7179,27 +6785,6 @@ body.table-col-resizing * {
   color: #0097a7;
   border-bottom-color: #0097a7;
   background: rgba(0, 151, 167, 0.08);
-}
-
-[data-theme="light"] .tidal-view-switcher {
-  background: rgba(0, 0, 0, 0.04);
-  border-color: rgba(0, 0, 0, 0.08);
-}
-
-[data-theme="light"] .tidal-switch-btn {
-  color: var(--text-sub);
-}
-
-[data-theme="light"] .tidal-switch-btn:hover {
-  color: var(--text-main);
-  background: rgba(0, 0, 0, 0.05);
-}
-
-[data-theme="light"] .tidal-switch-btn.active {
-  background: rgba(8, 145, 178, 0.12);
-  color: var(--accent-cyan);
-  border-color: rgba(8, 145, 178, 0.3);
-  box-shadow: 0 0 10px rgba(8, 145, 178, 0.15);
 }
 
 [data-theme="light"] .tidal-search-box {
@@ -7346,12 +6931,7 @@ body.table-col-resizing * {
 
 [data-theme="light"] .tidal-login-modal-card .modal-footer {
   border-top-color: rgba(0, 0, 0, 0.08) !important;
-}
-
-[data-theme="light"] .tidal-tier-badge,
-[data-theme="light"] .tidal-album-badge,
-[data-theme="light"] .tidal-detail-badge,
-[data-theme="light"] .versions-count-badge {
+}[data-theme="light"] .tidal-tier-badge, [data-theme="light"] .tidal-detail-badge, [data-theme="light"] .versions-count-badge{
   color: var(--accent-cyan);
   background: rgba(8, 145, 178, 0.12);
   border-color: rgba(8, 145, 178, 0.35);
