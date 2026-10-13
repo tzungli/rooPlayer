@@ -157,10 +157,24 @@
           </div>
         </div>
 
-        <!-- 最近新增專輯 (依加入時間排序的本機最新匯入與 TIDAL 線上專輯) -->
-        <div class="section-block" style="margin-bottom: 32px;">
+        <!-- 最近聆聽 Recent Played (顯示最近聽的 5 張專輯) -->
+        <div class="section-block" id="recentAlbumsSection" style="margin-bottom: 32px;">
           <div class="section-header">
-            <h2>最近新增專輯</h2>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <h2>🕒 最近聆聽 Recent Played</h2>
+              <span class="recommend-reason-badge" id="recentAlbumsBadge" style="background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 600;">播放歷史記錄</span>
+            </div>
+            <button class="btn-text" id="btnSeeAllHistory">檢視完整播放紀錄 ➔</button>
+          </div>
+          <div class="album-grid" id="recentAlbumsGrid">
+            <!-- Injected via JS -->
+          </div>
+        </div>
+
+        <!-- 最近新增專輯 (依加入時間排序的本機最新匯入與 TIDAL 線上專輯) -->
+        <div class="section-block" style="margin-top: 32px; margin-bottom: 32px;">
+          <div class="section-header">
+            <h2>🆕 最近新增專輯</h2>
             <button class="btn-text" id="btnSeeAllAlbums">瀏覽全部專輯 ➔</button>
           </div>
           <div class="album-grid featured-grid" id="overviewGrid">
@@ -220,20 +234,6 @@
                 <!-- Injected via JS -->
               </div>
             </div>
-          </div>
-        </div>
-
-        <!-- 最近聆聽 Recent Played (顯示最近聽的 5 張專輯) -->
-        <div class="section-block" id="recentAlbumsSection" style="margin-top: 32px; margin-bottom: 32px;">
-          <div class="section-header">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <h2>🕒 最近聆聽 Recent Played</h2>
-              <span class="recommend-reason-badge" id="recentAlbumsBadge" style="background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 600;">播放歷史記錄</span>
-            </div>
-            <button class="btn-text" id="btnSeeAllHistory">檢視完整播放紀錄 ➔</button>
-          </div>
-          <div class="album-grid" id="recentAlbumsGrid">
-            <!-- Injected via JS -->
           </div>
         </div>
 
@@ -1326,7 +1326,8 @@
                 <div class="manual-item-body">
                   <p>音樂殿堂的儀表板。集中呈現目前音樂庫的<strong>專輯總數、曲目數量與 Hi-Res 高解析無損音樂統計</strong>，深度整合本機與線上串流：</p>
                   <ul>
-                    <li><strong>最近新增專輯</strong>：自動同步本機最新匯入與已加入曲庫之 TIDAL 線上專輯。</li>
+                    <li><strong>🕒 最近聆聽 (Recent Played)</strong>：自動列出最近聽過的 5 張專輯與完整播放紀錄。</li>
+                    <li><strong>🆕 最近新增專輯</strong>：自動同步本機最新匯入與已加入曲庫之 TIDAL 線上專輯。</li>
                     <li><strong>🌟 每日推薦 (Daily Picks)</strong>：依聆聽紀錄自動精選 5 張發燒代表作，每日自動更新。</li>
                     <li><strong>📖 藝人生活誌 (Artist Spotlight)</strong>：隨機探索音樂大師生平歷程、代表作與關聯發燒名盤。</li>
                     <li><strong>快速掃描與隨機播放</strong>：一鍵快速匯入音樂資料夾或由曲庫隨機抽樣連續播放。</li>
