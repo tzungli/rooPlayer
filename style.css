@@ -1919,6 +1919,21 @@ body.table-col-resizing * {
   color: var(--accent-purple);
   border: none;
   letter-spacing: 0.8px;
+  animation: dsp-glow-pulse 2.6s ease-in-out infinite;
+}
+
+/* DSP ACTIVE 字體光暈發散動態：光暈由字體向外擴散再收回，循環脈動 */
+@keyframes dsp-glow-pulse {
+  0%, 100% {
+    text-shadow: 0 0 4px rgba(139, 92, 246, 0.55), 0 0 10px rgba(139, 92, 246, 0.22);
+  }
+  50% {
+    text-shadow: 0 0 8px rgba(139, 92, 246, 0.95), 0 0 20px rgba(139, 92, 246, 0.55), 0 0 36px rgba(139, 92, 246, 0.28);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-badge-dsp { animation: none; }
 }
 
 /* Completely clean stage without borders, background, or box-shadow */
