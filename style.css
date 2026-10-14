@@ -2075,12 +2075,11 @@ body.table-col-resizing * {
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
-  transition: opacity 0.25s, max-height 0.3s;
 }
 
+/* Collapsed like the PEQ editor: detailed settings only appear when the engine is on */
 .dsp-sox-card:not(.active) .dsp-sox-body {
-  opacity: 0.45;
-  pointer-events: none;
+  display: none;
 }
 
 .dsp-option-group {
