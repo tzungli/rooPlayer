@@ -2,6 +2,112 @@
 // rooPlayer - Audiophile Music Media Manager
 // ==========================================
 
+// ============================================================
+// Parametric Equalizer (PEQ) data model (DSP settings modal)
+// Audio processing itself lives in dsp-kernel.js (single source of truth);
+// this block only manages the settings model, presets and the preview curve.
+// ============================================================
+const PEQ_BAND_COUNT = 6;
+const PEQ_TYPES = ['lowshelf', 'peaking', 'highshelf', 'lowpass', 'highpass', 'notch'];
+const PEQ_TYPE_LABELS = {
+  lowshelf: '低架 Low Shelf',
+  peaking: '峰值 Peaking',
+  highshelf: '高架 High Shelf',
+  lowpass: '低通 Low Pass',
+  highpass: '高通 High Pass',
+  notch: '陷波 Notch'
+};
+const PEQ_GAIN_TYPES = ['lowshelf', 'peaking', 'highshelf']; // types that add gain (headroom applies)
+
+function defaultPeqBand(i) {
+  const presets = [
+    { type: 'lowshelf', freq: 100, gain: 3, q: 0.707 },
+    { type: 'peaking', freq: 1000, gain: 2, q: 1.0 },
+    { type: 'highshelf', freq: 6000, gain: -2, q: 0.707 },
+    { type: 'peaking', freq: 300, gain: -2, q: 1.0 },
+    { type: 'peaking', freq: 3000, gain: 2, q: 1.2 },
+    { type: 'highpass', freq: 40, gain: 0, q: 0.707 }
+  ];
+  const p = presets[i] || presets[1];
+  return { on: false, type: p.type, freq: p.freq, gain: p.gain, q: p.q };
+}
+
+const PEQ_PRESETS = {
+  flat: [],
+  warm: [
+    { on: true, type: 'lowshelf', freq: 110, gain: 3, q: 0.707 },
+    { on: true, type: 'peaking', freq: 300, gain: -2, q: 1.0 },
+    { on: true, type: 'highshelf', freq: 8000, gain: -2.5, q: 0.707 }
+  ],
+  bright: [
+    { on: true, type: 'lowshelf', freq: 150, gain: -2.5, q: 0.707 },
+    { on: true, type: 'peaking', freq: 3200, gain: 2, q: 1.2 },
+    { on: true, type: 'highshelf', freq: 7000, gain: 3.5, q: 0.707 }
+  ],
+  vocal: [
+    { on: true, type: 'peaking', freq: 400, gain: -3, q: 1.0 },
+    { on: true, type: 'peaking', freq: 2500, gain: 3.5, q: 1.2 },
+    { on: true, type: 'peaking', freq: 8000, gain: -1.5, q: 1.5 }
+  ],
+  bass: [
+    { on: true, type: 'lowshelf', freq: 80, gain: 4.5, q: 0.707 },
+    { on: true, type: 'peaking', freq: 160, gain: 2, q: 1.0 },
+    { on: true, type: 'peaking', freq: 2500, gain: 0.5, q: 1.5 }
+  ]
+};
+
+function normalizePeqSettings(raw) {
+  const bands = [];
+  if (raw && Array.isArray(raw.bands)) {
+    for (let i = 0; i < PEQ_BAND_COUNT; i++) {
+      const b = raw.bands[i];
+      if (!b) break;
+      bands.push({
+        on: b.on === true,
+        type: PEQ_TYPES.includes(b.type) ? b.type : 'peaking',
+        freq: Math.min(Math.max(Number(b.freq) || 1000, 20), 20000),
+        gain: Math.min(Math.max(Number(b.gain) || 0, -12), 12),
+        q: Math.min(Math.max(Number(b.q) || 0.707, 0.3), 8)
+      });
+    }
+  }
+  while (bands.length < PEQ_BAND_COUNT) bands.push(defaultPeqBand(bands.length));
+  const preset = raw && typeof raw.preset === 'string' && PEQ_PRESETS[raw.preset] ? raw.preset : 'custom';
+  return { enabled: !!(raw && raw.enabled), preset, bands };
+}
+
+function countActivePeqBands() {
+  const peq = state.dsp && state.dsp.peq;
+  if (!peq || !peq.enabled) return 0;
+  return peq.bands.filter(b => b.on).length;
+}
+
+// Headroom exactly as dsp-kernel.createPeqChain computes it: pre-gain = -(maxBoost + 0.5 dB)
+function peqHeadroomDb() {
+  const peq = state.dsp && state.dsp.peq;
+  if (!peq || !peq.enabled) return 0;
+  let maxBoost = 0;
+  for (const b of peq.bands) {
+    if (b.on && PEQ_GAIN_TYPES.includes(b.type)) maxBoost = Math.max(maxBoost, b.gain);
+  }
+  return Math.max(0, maxBoost) + 0.5;
+}
+
+// Compact payload sent to the engine (DLNA dspOptions.peq / local stream ?peq= JSON).
+// PEQ is part of the DSP path: with the upsampling engine off it stays inactive.
+function buildPeqPayload() {
+  const peq = state.dsp && state.dsp.peq;
+  if (!state.dsp || !state.dsp.enabled || !peq || !peq.enabled) return null;
+  const bands = peq.bands.filter(b => b.on).map(b => ({ on: true, type: b.type, freq: Math.round(b.freq), gain: b.gain, q: b.q }));
+  if (!bands.length) return null;
+  return { enabled: true, bands };
+}
+
+function peqPayloadJson() {
+  const p = buildPeqPayload();
+  return p ? JSON.stringify(p) : '';
+}
+
 // Global State
 const state = {
   tracks: [],
@@ -50,10 +156,11 @@ const state = {
         enabled: saved.enabled === true,
         rateMode: saved.rateMode || '4x',
         dsdOrder: [2, 5, 7].includes(parseInt(saved.dsdOrder, 10)) ? parseInt(saved.dsdOrder, 10) : 5,
-        filterPhase: ['linear', 'minimum', 'intermediate', 'gauss-long', 'gauss-min', 'poly-ext2', 'hqp-ps-ext2'].includes(saved.filterPhase) ? saved.filterPhase : 'linear'
+        filterPhase: ['linear', 'minimum', 'intermediate', 'gauss-long', 'gauss-min', 'poly-ext2', 'hqp-ps-ext2'].includes(saved.filterPhase) ? saved.filterPhase : 'linear',
+        peq: normalizePeqSettings(saved.peq)
       };
     } catch (e) {
-      return { enabled: false, rateMode: '4x', dsdOrder: 5, filterPhase: 'linear' };
+      return { enabled: false, rateMode: '4x', dsdOrder: 5, filterPhase: 'linear', peq: normalizePeqSettings(null) };
     }
   })()
 };
@@ -5127,7 +5234,8 @@ async function playCurrentTrack() {
         sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
         dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
         dsdOrder: state.dsp.dsdOrder || 5,
-        filterPhase: state.dsp.filterPhase || 'linear'
+        filterPhase: state.dsp.filterPhase || 'linear',
+        peq: buildPeqPayload()
       } : null;
 
       const enrichedTrack = getEnrichedTrack(track);
@@ -5382,7 +5490,7 @@ async function playDsdTrack(track, startSec = 0) {
       }).catch(() => {});
     }
 
-    const streamUrl = await window.electronAPI.getDsdStreamUrl(track.filePath, startSec);
+    const streamUrl = await window.electronAPI.getDsdStreamUrl(track.filePath, startSec, peqPayloadJson());
     if (!streamUrl) {
       playerArtist.textContent = '無法建立 DSD 串流服務';
       return;
@@ -5477,7 +5585,7 @@ async function playSoxTrack(track, startSec = 0) {
     const dsdOrder = state.dsp.dsdOrder || 5;
     const filterPhase = state.dsp.filterPhase || 'linear';
 
-    const streamUrl = await window.electronAPI.getSoxStreamUrl(track.filePath, startSec, targetRate, dsdMode, dsdOrder, filterPhase);
+    const streamUrl = await window.electronAPI.getSoxStreamUrl(track.filePath, startSec, targetRate, dsdMode, dsdOrder, filterPhase, peqPayloadJson());
     if (!streamUrl) {
       playerArtist.textContent = '無法建立 SoX 升頻串流服務';
       return;
@@ -5596,6 +5704,9 @@ function updateSignalPathUI(track = null) {
     if (dspActivePhaseHint) dspActivePhaseHint.textContent = phasePill.textContent;
   }
 
+  // PEQ editor state (modal open / live sync)
+  syncPeqModalUI();
+
   if (!track) {
     if (state.queue && state.queue.length > 0) {
       track = state.queue[0];
@@ -5680,6 +5791,12 @@ function updateSignalPathUI(track = null) {
       if (engineDesc) engineDesc.textContent = `64-bit 浮點即時超取樣升頻核心 (${phaseDesc}) ➔ 輸出至 24-bit ${targetKhz}`;
       if (signalPathDot) signalPathDot.className = 'signal-dot purple';
     }
+
+    // PEQ stage annotation on the active DSP path
+    const peqActiveCount = countActivePeqBands();
+    if (peqActiveCount > 0 && signalSoxDesc) {
+      signalSoxDesc.textContent += ` ＋ 參數化等化器 PEQ (${peqActiveCount} 段作用中)`;
+    }
   } else if (isNativeDsd) {
     const dsdRate = track.sampleRate ? `${(track.sampleRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
     const isDlna = state.activeAudioZone !== 'local' && state.activeDlnaDevice;
@@ -5727,6 +5844,338 @@ function updateSignalPathUI(track = null) {
   }
 }
 
+// ========================================================
+// PEQ editor UI (DSP settings modal): band editor, presets, response curve.
+// The preview curve mirrors dsp-kernel.js biquad math for display only;
+// the audible signal is always processed by the engine itself.
+// ========================================================
+let peqReapplyTimer = null;
+
+function peqFreqFromSlider(v) { return 20 * Math.pow(10, 3 * v / 1000); }
+function peqFreqToSlider(f) { return Math.max(0, Math.min(1000, Math.round(1000 * (Math.log10(Math.min(Math.max(f, 20), 20000)) - Math.log10(20)) / 3))); }
+function peqQFromSlider(v) { return 0.3 * Math.pow(8 / 0.3, v / 100); }
+function peqQToSlider(q) { return Math.max(0, Math.min(100, Math.round(100 * Math.log(Math.min(Math.max(q, 0.3), 8) / 0.3) / Math.log(8 / 0.3)))); }
+function peqFormatFreq(f) { return f >= 10000 ? (f / 1000).toFixed(1) + ' kHz' : (f >= 1000 ? (f / 1000).toFixed(2) + ' kHz' : Math.round(f) + ' Hz'); }
+function peqFormatGain(g) { return (g > 0 ? '+' : '') + g.toFixed(1) + ' dB'; }
+
+// Seamless live re-apply: restart the active stream from the current position with the new EQ
+function peqScheduleReapply() {
+  localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+  updatePeqHint();
+  if (peqReapplyTimer) clearTimeout(peqReapplyTimer);
+  peqReapplyTimer = setTimeout(() => {
+    peqReapplyTimer = null;
+    if (!(state.dsp.enabled && state.isPlaying)) return;
+    const track = state.queue[state.currentTrackIndex];
+    if (!track || track.isDemo || !track.filePath) return;
+    const curSec = getCurrentPlaybackTime();
+    if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+      const dspOptions = {
+        enabled: true,
+        sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
+        dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
+        dsdOrder: state.dsp.dsdOrder || 5,
+        filterPhase: state.dsp.filterPhase || 'linear',
+        peq: buildPeqPayload()
+      };
+      window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), dspOptions);
+    } else {
+      playSoxTrack(track, Math.floor(curSec));
+    }
+  }, 450);
+}
+
+// Preview biquad coefficients - identical formulas to dsp-kernel.js biquadCoeffs
+function peqUiBiquad(type, fs, f0, gainDb, Q) {
+  const w0 = 2 * Math.PI * f0 / fs;
+  const c = Math.cos(w0), s = Math.sin(w0);
+  if (!(s > 0)) return null;
+  const alpha = s / (2 * Q);
+  let b0, b1, b2, a0, a1, a2;
+  if (type === 'lowpass') {
+    b0 = (1 - c) / 2; b1 = 1 - c; b2 = (1 - c) / 2; a0 = 1 + alpha; a1 = -2 * c; a2 = 1 - alpha;
+  } else if (type === 'highpass') {
+    b0 = (1 + c) / 2; b1 = -(1 + c); b2 = (1 + c) / 2; a0 = 1 + alpha; a1 = -2 * c; a2 = 1 - alpha;
+  } else if (type === 'notch') {
+    b0 = 1; b1 = -2 * c; b2 = 1; a0 = 1 + alpha; a1 = -2 * c; a2 = 1 - alpha;
+  } else if (type === 'peaking') {
+    const A = Math.pow(10, gainDb / 20);
+    b0 = 1 + alpha * A; b1 = -2 * c; b2 = 1 - alpha * A; a0 = 1 + alpha; a1 = -2 * c; a2 = 1 - alpha;
+  } else if (type === 'lowshelf' || type === 'highshelf') {
+    const G = Math.pow(10, gainDb / 20);
+    const K = 1 / Math.tan(Math.PI * f0 / fs);
+    if (!(K > 0) || !isFinite(K)) return null;
+    const den0 = K * K + K / Q + 1;
+    const sqG = Math.sqrt(G);
+    if (type === 'lowshelf') {
+      b0 = K * K + K * sqG / Q + G; b1 = 2 * (G - K * K); b2 = K * K - K * sqG / Q + G;
+      a0 = den0; a1 = 2 * (1 - K * K); a2 = K * K - K / Q + 1;
+    } else {
+      b0 = G * K * K + K * sqG / Q + 1; b1 = 2 * (1 - G * K * K); b2 = G * K * K - K * sqG / Q + 1;
+      a0 = den0; a1 = 2 * (1 - K * K); a2 = K * K - K / Q + 1;
+    }
+  } else {
+    return null;
+  }
+  return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 };
+}
+
+function peqUiMagDb(bands, f, fs) {
+  const w = 2 * Math.PI * f / fs;
+  const cw = Math.cos(w), sw = Math.sin(w), c2w = Math.cos(2 * w), s2w = Math.sin(2 * w);
+  let reN = 1, imN = 0;
+  for (const b of bands) {
+    const rn = b.b0 + b.b1 * cw + b.b2 * c2w, in_ = -(b.b1 * sw + b.b2 * s2w);
+    const rd = 1 + b.a1 * cw + b.a2 * c2w, id = -(b.a1 * sw + b.a2 * s2w);
+    const on = reN * rn - imN * in_, oi = reN * in_ + imN * rn;
+    const od = rd * rd + id * id;
+    reN = (on * rd + oi * id) / od;
+    imN = (oi * rd - on * id) / od;
+  }
+  return 20 * Math.log10(Math.hypot(reN, imN) + 1e-15);
+}
+
+function drawPeqCurve() {
+  const canvas = document.getElementById('peqCurveCanvas');
+  if (!canvas || !canvas.getContext) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth || 560, H = 128;
+  const pw = Math.max(1, Math.round(W * dpr)), ph = Math.round(H * dpr);
+  if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const fs = 48000, fMin = 20, fMax = 20000, dbMax = 15;
+  const xOf = f => Math.log(f / fMin) / Math.log(fMax / fMin) * W;
+  const yOf = db => H / 2 - Math.max(-dbMax, Math.min(dbMax, db)) / dbMax * (H / 2 - 8);
+
+  // Frequency grid
+  ctx.font = '9px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  for (const [f, label] of [[50, '50'], [100, '100'], [500, '500'], [1000, '1k'], [5000, '5k'], [10000, '10k']]) {
+    const x = xOf(f);
+    ctx.strokeStyle = 'rgba(148,163,184,0.16)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, 4); ctx.lineTo(x, H - 12); ctx.stroke();
+    ctx.fillStyle = 'rgba(148,163,184,0.55)';
+    ctx.fillText(label, x, H - 3);
+  }
+  // dB grid
+  for (const db of [-12, -6, 0, 6, 12]) {
+    const y = yOf(db);
+    ctx.strokeStyle = db === 0 ? 'rgba(148,163,184,0.45)' : 'rgba(148,163,184,0.14)';
+    ctx.lineWidth = db === 0 ? 1.2 : 1;
+    ctx.setLineDash(db === 0 ? [] : [4, 4]);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(148,163,184,0.55)';
+    ctx.fillText(`${db > 0 ? '+' : ''}${db}`, 3, y - 2);
+  }
+
+  const peq = state.dsp.peq;
+  const activeBands = peq.enabled ? peq.bands.filter(b => b.on) : [];
+  const coeffs = activeBands.map(b => peqUiBiquad(b.type, fs, b.freq, b.gain, b.q)).filter(Boolean);
+
+  const N = 256;
+  const pts = [];
+  for (let i = 0; i <= N; i++) {
+    const f = fMin * Math.pow(fMax / fMin, i / N);
+    const db = coeffs.length ? peqUiMagDb(coeffs, f, fs) : 0;
+    pts.push([xOf(f), yOf(db)]);
+  }
+
+  if (coeffs.length) {
+    const grad = ctx.createLinearGradient(0, 0, W, 0);
+    grad.addColorStop(0, '#22d3ee');
+    grad.addColorStop(0.5, '#a78bfa');
+    grad.addColorStop(1, '#f472b6');
+    // soft fill under the curve
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], yOf(0));
+    for (const [x, y] of pts) ctx.lineTo(x, y);
+    ctx.lineTo(pts[pts.length - 1][0], yOf(0));
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(139,92,246,0.14)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (const [x, y] of pts) ctx.lineTo(x, y);
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(0, yOf(0));
+    ctx.lineTo(W, yOf(0));
+    ctx.strokeStyle = 'rgba(148,163,184,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
+function updatePeqHeadroomNote() {
+  const note = document.getElementById('peqHeadroomNote');
+  if (!note) return;
+  const hr = peqHeadroomDb();
+  note.textContent = `自動預降 -${hr.toFixed(1)} dB（保護電路不削頂）`;
+}
+
+function updatePeqHint() {
+  const hint = document.getElementById('dspActivePeqHint');
+  if (!hint) return;
+  const peq = state.dsp.peq;
+  if (!peq.enabled) { hint.textContent = '關閉'; return; }
+  const n = peq.bands.filter(b => b.on).length;
+  if (!state.dsp.enabled) { hint.textContent = `已設定 ${n} 段（需啟用升頻引擎）`; return; }
+  if (!n) { hint.textContent = '尚無作用頻段'; return; }
+  hint.textContent = `${n} 段作用中 (預降 ${peqHeadroomDb().toFixed(1)} dB)`;
+}
+
+function peqUpdateGainCell(row, band) {
+  const gainS = row.querySelector('.peq-gain-slider');
+  const gainV = row.querySelector('.peq-gain-val');
+  if (!gainS || !gainV) return;
+  const usable = PEQ_GAIN_TYPES.includes(band.type);
+  gainS.disabled = !usable;
+  const cell = gainS.closest('.peq-slider-cell');
+  if (cell) cell.style.opacity = usable ? '1' : '0.35';
+  gainV.textContent = usable ? peqFormatGain(band.gain) : '—';
+}
+
+function buildPeqBandRows() {
+  const list = document.getElementById('peqBandList');
+  if (!list) return;
+  list.innerHTML = '';
+  state.dsp.peq.bands.forEach((band, idx) => {
+    const row = document.createElement('div');
+    row.className = 'peq-band-row' + (band.on ? ' band-on' : '');
+    const typeOpts = PEQ_TYPES.map(t => `<option value="${t}"${t === band.type ? ' selected' : ''}>${PEQ_TYPE_LABELS[t]}</option>`).join('');
+    row.innerHTML = `
+      <label title="啟用此頻段"><input type="checkbox" class="peq-band-on" ${band.on ? 'checked' : ''}></label>
+      <select class="peq-band-type" title="頻段類型">${typeOpts}</select>
+      <div class="peq-slider-cell">
+        <input type="range" class="peq-freq-slider" min="0" max="1000" value="${peqFreqToSlider(band.freq)}" title="頻率 (20 Hz - 20 kHz)">
+        <span class="peq-val peq-freq-val">${peqFormatFreq(band.freq)}</span>
+      </div>
+      <div class="peq-slider-cell">
+        <input type="range" class="peq-gain-slider" min="-24" max="24" step="1" value="${Math.round(band.gain * 2)}" title="增益 (-12 ~ +12 dB)">
+        <span class="peq-val peq-gain-val"></span>
+      </div>
+      <div class="peq-slider-cell">
+        <input type="range" class="peq-q-slider" min="0" max="100" value="${peqQToSlider(band.q)}" title="Q 值（頻寬；越大越窄）">
+        <span class="peq-val peq-q-val">Q ${band.q.toFixed(2)}</span>
+      </div>`;
+
+    const onCb = row.querySelector('.peq-band-on');
+    onCb.addEventListener('change', () => {
+      band.on = onCb.checked;
+      row.classList.toggle('band-on', band.on);
+      state.dsp.peq.preset = 'custom';
+      drawPeqCurve(); updatePeqHeadroomNote(); peqScheduleReapply();
+    });
+    const typeSel = row.querySelector('.peq-band-type');
+    typeSel.addEventListener('change', () => {
+      band.type = PEQ_TYPES.includes(typeSel.value) ? typeSel.value : 'peaking';
+      peqUpdateGainCell(row, band);
+      state.dsp.peq.preset = 'custom';
+      drawPeqCurve(); updatePeqHeadroomNote(); peqScheduleReapply();
+    });
+    const freqS = row.querySelector('.peq-freq-slider');
+    const freqV = row.querySelector('.peq-freq-val');
+    freqS.addEventListener('input', () => {
+      band.freq = peqFreqFromSlider(parseInt(freqS.value, 10));
+      freqV.textContent = peqFormatFreq(band.freq);
+      drawPeqCurve();
+    });
+    freqS.addEventListener('change', () => { state.dsp.peq.preset = 'custom'; peqScheduleReapply(); });
+    const gainS = row.querySelector('.peq-gain-slider');
+    const gainV = row.querySelector('.peq-gain-val');
+    gainS.addEventListener('input', () => {
+      band.gain = parseInt(gainS.value, 10) / 2;
+      gainV.textContent = peqFormatGain(band.gain);
+      drawPeqCurve(); updatePeqHeadroomNote();
+    });
+    gainS.addEventListener('change', () => { state.dsp.peq.preset = 'custom'; peqScheduleReapply(); });
+    const qS = row.querySelector('.peq-q-slider');
+    const qV = row.querySelector('.peq-q-val');
+    qS.addEventListener('input', () => {
+      band.q = peqQFromSlider(parseInt(qS.value, 10));
+      qV.textContent = `Q ${band.q.toFixed(2)}`;
+      drawPeqCurve();
+    });
+    qS.addEventListener('change', () => { state.dsp.peq.preset = 'custom'; peqScheduleReapply(); });
+
+    peqUpdateGainCell(row, band);
+    list.appendChild(row);
+  });
+}
+
+function syncPeqModalUI() {
+  const peq = state.dsp.peq;
+  const cb = document.getElementById('togglePeq');
+  const editor = document.getElementById('peqEditor');
+  if (cb) cb.checked = peq.enabled;
+  if (editor) editor.style.display = peq.enabled ? 'block' : 'none';
+  document.querySelectorAll('#peqPresetSelector .dsp-pill').forEach(p =>
+    p.classList.toggle('active', peq.enabled && peq.preset !== 'custom' && p.getAttribute('data-peq-preset') === peq.preset));
+  if (peq.enabled) { buildPeqBandRows(); drawPeqCurve(); }
+  updatePeqHeadroomNote();
+  updatePeqHint();
+}
+
+function initPeqControls() {
+  const togglePeq = document.getElementById('togglePeq');
+  const peqEditor = document.getElementById('peqEditor');
+  const presetSelector = document.getElementById('peqPresetSelector');
+
+  if (togglePeq) {
+    togglePeq.addEventListener('change', () => {
+      state.dsp.peq.enabled = togglePeq.checked;
+      if (togglePeq.checked && !state.dsp.enabled) {
+        state.dsp.enabled = true;
+        const t = document.getElementById('toggleSoxDsp');
+        if (t) t.checked = true;
+        const card = document.querySelector('.dsp-sox-card');
+        if (card) card.classList.add('active');
+        showToast('⚡ PEQ 需經升頻路徑處理：已同時啟用升頻引擎');
+      }
+      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+      if (peqEditor) peqEditor.style.display = togglePeq.checked ? 'block' : 'none';
+      if (togglePeq.checked) { buildPeqBandRows(); drawPeqCurve(); }
+      updatePeqHeadroomNote();
+      updatePeqHint();
+      updateSignalPathUI();
+      peqScheduleReapply();
+    });
+  }
+
+  if (presetSelector) {
+    presetSelector.addEventListener('click', (e) => {
+      const btn = e.target.closest('.dsp-pill');
+      if (!btn) return;
+      const key = btn.getAttribute('data-peq-preset');
+      if (!key || !PEQ_PRESETS[key]) return;
+      presetSelector.querySelectorAll('.dsp-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      const peq = state.dsp.peq;
+      peq.preset = key;
+      peq.bands = [];
+      for (let i = 0; i < PEQ_BAND_COUNT; i++) {
+        const src = PEQ_PRESETS[key][i];
+        peq.bands.push(src ? { ...src } : defaultPeqBand(i));
+      }
+      buildPeqBandRows();
+      drawPeqCurve();
+      updatePeqHeadroomNote();
+      peqScheduleReapply();
+    });
+  }
+
+  syncPeqModalUI();
+}
+
 function initDspControls() {
   const toggleSoxDsp = document.getElementById('toggleSoxDsp');
   const dspSoxCard = document.querySelector('.dsp-sox-card');
@@ -5751,7 +6200,8 @@ function initDspControls() {
             sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
             dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
             dsdOrder: state.dsp.dsdOrder || 5,
-            filterPhase: state.dsp.filterPhase || 'linear'
+            filterPhase: state.dsp.filterPhase || 'linear',
+            peq: buildPeqPayload()
           };
           window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), dspOptions);
         } else {
@@ -5781,7 +6231,8 @@ function initDspControls() {
             sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
             dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
             dsdOrder: state.dsp.dsdOrder || 5,
-            filterPhase: state.dsp.filterPhase || 'linear'
+            filterPhase: state.dsp.filterPhase || 'linear',
+            peq: buildPeqPayload()
           } : null;
           window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), dspOptions);
         } else {
@@ -5880,6 +6331,9 @@ function initDspControls() {
       triggerLiveDspUpdate();
     });
   }
+
+  // Parametric Equalizer (PEQ) controls
+  initPeqControls();
 }
 
 // ========================================================

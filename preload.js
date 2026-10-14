@@ -23,8 +23,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   removeFolder: (folderPath) => ipcRenderer.invoke('library:removeFolder', folderPath),
   updateAlbumArtist: (albumTitle, artistName) => ipcRenderer.invoke('library:updateAlbumArtist', albumTitle, artistName),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
-  getDsdStreamUrl: (filePath, startSec = 0) => ipcRenderer.invoke('audio:getDsdStreamUrl', filePath, startSec),
-  getSoxStreamUrl: (filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear') => ipcRenderer.invoke('audio:getSoxStreamUrl', filePath, startSec, sampleRate, dsdMode, dsdOrder, filterPhase),
+  getDsdStreamUrl: (filePath, startSec = 0, peqJson = '') => ipcRenderer.invoke('audio:getDsdStreamUrl', filePath, startSec, peqJson),
+  getSoxStreamUrl: (filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear', peqJson = '') => ipcRenderer.invoke('audio:getSoxStreamUrl', filePath, startSec, sampleRate, dsdMode, dsdOrder, filterPhase, peqJson),
   getAudioDuration: (filePath) => ipcRenderer.invoke('audio:getAudioDuration', filePath),
   translateToZhTw: (text) => ipcRenderer.invoke('util:translateToZhTw', text),
 

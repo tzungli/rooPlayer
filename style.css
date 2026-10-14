@@ -2095,6 +2095,137 @@ body.table-col-resizing * {
   color: #fbbf24 !important;
 }
 
+/* ===== Parametric Equalizer (PEQ) editor ===== */
+.peq-editor {
+  margin-top: 8px;
+}
+
+.peq-curve {
+  width: 100%;
+  height: 128px;
+  display: block;
+  margin-top: 10px;
+  background: rgba(15, 18, 26, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+
+.peq-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 10px;
+}
+
+.peq-headroom-note {
+  color: #fbbf24;
+  font-weight: 700;
+}
+
+.peq-live-note {
+  color: var(--text-sub);
+}
+
+.peq-band-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.peq-band-row {
+  display: grid;
+  grid-template-columns: 28px 92px 1fr 1fr 0.72fr;
+  gap: 6px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 6px 8px;
+  opacity: 0.45;
+  transition: opacity 0.2s, border-color 0.2s;
+}
+
+.peq-band-row.band-on {
+  opacity: 1;
+  border-color: rgba(139, 92, 246, 0.35);
+  background: rgba(139, 92, 246, 0.07);
+}
+
+.peq-band-row input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent-purple);
+  cursor: pointer;
+}
+
+.peq-band-type {
+  background: #333846;
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 5px 4px;
+  outline: none;
+  cursor: pointer;
+}
+
+.peq-slider-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.peq-slider-cell input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent-purple);
+  cursor: pointer;
+}
+
+.peq-val {
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.peq-band-row.band-on .peq-val {
+  color: #d8b4fe;
+}
+
+[data-theme="light"] .peq-curve {
+  background: rgba(241, 245, 249, 0.8);
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+[data-theme="light"] .peq-band-row {
+  background: rgba(15, 23, 42, 0.03);
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
+[data-theme="light"] .peq-band-row.band-on {
+  background: rgba(139, 92, 246, 0.08);
+  border-color: rgba(139, 92, 246, 0.4);
+}
+
+[data-theme="light"] .peq-band-type {
+  background: #fff;
+  color: #1e293b;
+  border-color: rgba(15, 23, 42, 0.2);
+}
+
+[data-theme="light"] .peq-val {
+  color: #64748b;
+}
+
+[data-theme="light"] .peq-band-row.band-on .peq-val {
+  color: #7c3aed;
+}
+
 .signal-dot.dsd-gold {
   background: #f59e0b;
   box-shadow: 0 0 10px rgba(245, 158, 11, 0.8);

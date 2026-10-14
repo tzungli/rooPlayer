@@ -1927,6 +1927,33 @@
                   <button class="dsp-pill" data-phase="hqp-ps-ext2" title="PS-EXT2 直譯 FIR (poly-sinc-ext2)：依 poly-sinc-ext2 公開規格直譯：線性相位多相正弦、過渡帶自源 Nyquist 精確起始並延伸至 1.27×（ext2 延伸）、通帶 [0,源Nyquist] 完全平坦、止帶約 -180dB（極高衰減）、任意倍率。源Nyquist..1.27×源Nyquist 間為滾降帶，鏡像於此帶部分泄漏（超聲頻不可聽，同 EXT2 家族的取捨）。16× 兩階段架構之複合響應等價於此單級 FIR。閉式直譯，非官方原廠係數">PS-EXT2 直譯 FIR (陡峭滾降+極深止帶)</button>
                 </div>
               </div>
+
+              <!-- Parametric Equalizer (PEQ) -->
+              <div class="dsp-option-group" id="dspPeqGroup">
+                <div class="dsp-option-label">
+                  <span>參數化等化器 (Parametric EQ)</span>
+                  <span class="dsp-hint-badge" id="dspActivePeqHint">關閉</span>
+                  <label class="switch-toggle" title="啟用參數化等化器：於升頻/調變前調整音色（最多 6 段；自動預降增益保護電路不削頂）">
+                    <input type="checkbox" id="togglePeq">
+                    <span class="slider-round"></span>
+                  </label>
+                </div>
+                <div id="peqEditor" class="peq-editor" style="display: none;">
+                  <div class="dsp-pill-selector" id="peqPresetSelector">
+                    <button class="dsp-pill active" data-peq-preset="flat" title="不改變原始音色（全部頻段關閉）">平直</button>
+                    <button class="dsp-pill" data-peq-preset="warm" title="低頻飽和、中低頻厚實、柔化高頻毛刺">溫暖厚實</button>
+                    <button class="dsp-pill" data-peq-preset="bright" title="高頻通透與空氣感、收束渾濁低頻">明亮通透</button>
+                    <button class="dsp-pill" data-peq-preset="vocal" title="人聲存在感與咬字清晰度提升">人聲突出</button>
+                    <button class="dsp-pill" data-peq-preset="bass" title="低頻下潛與飽和增加、中頻保持乾淨">低頻飽和</button>
+                  </div>
+                  <canvas id="peqCurveCanvas" class="peq-curve" width="560" height="128"></canvas>
+                  <div class="peq-meta-row">
+                    <span class="peq-headroom-note" id="peqHeadroomNote">自動預降 0.0 dB（保護電路不削頂）</span>
+                    <span class="peq-live-note">設定即時套用到播放中的曲目</span>
+                  </div>
+                  <div class="peq-band-list" id="peqBandList"></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

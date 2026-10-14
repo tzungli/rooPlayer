@@ -11,7 +11,7 @@ const stream = require('stream');
 const EventEmitter = require('events');
 const { Worker } = require('worker_threads');
 const nativeAudioEngine = require('./native-audio-engine');
-const { interpolateSample, buildGaussFilter, buildPolyExt2Filter, buildHqpPsExt2Filter, firSample, getDsdRate, buildDsfHeader, DSD_BLOCK_SIZE, DSD_SAMPLES_PER_BLOCK } = require('./dsp-kernel');
+const { interpolateSample, buildGaussFilter, buildPolyExt2Filter, buildHqpPsExt2Filter, firSample, getDsdRate, buildDsfHeader, DSD_BLOCK_SIZE, DSD_SAMPLES_PER_BLOCK, createPeqChain, createPeqState, processPeqPair, applyPeqArrays } = require('./dsp-kernel');
 
 // Progressive Streaming Reader with Backpressure Flow Control
 // Prevents downstream DLNA/UPnP renderers from reading unwritten / zero-padded blocks
@@ -143,7 +143,7 @@ class NativeDspStreamer {
   // segment boundary has converged to the continuous-run state (no audible discontinuity).
   // Segment/view boundaries are chosen so the input<->output sample mapping stays exact
   // (required for non-integer ratios such as 48k -> DSD).
-  async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear') {
+  async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear', peqOptions = null) {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.dsf`);
@@ -241,6 +241,9 @@ class NativeDspStreamer {
     // SharedArrayBuffers the modulation workers already read).
     session.startSec = startSec;
     session.spectrum = { rate: srcRate, left: new Float32Array(leftSAB), right: new Float32Array(rightSAB) };
+    // PEQ (applied by every worker on its own view at srcRate before modulation; the raw
+    // source PCM above stays untouched - the spectrum window applies PEQ separately).
+    session.peqOptions = peqOptions && peqOptions.enabled ? peqOptions : null;
 
     const workerPath = path.join(__dirname, 'dsd-modulator-worker.js');
     const workers = [];
@@ -305,6 +308,7 @@ class NativeDspStreamer {
           dsdMode,
           dsdOrder,
           filterPhase,
+          peqOptions: session.peqOptions,
           genStartBit: s.genStartBit,
           genEndBit: s.genEndBit,
           warmupBits: s.warmupBits,
@@ -369,7 +373,7 @@ class NativeDspStreamer {
   }
 
   // Create progressive streaming session for High-Res PCM Upsampling (WAV format)
-  async createPcmSession(token, filePath, startSec = 0, targetSampleRate = 192000, track = null, filterPhase = 'linear') {
+  async createPcmSession(token, filePath, startSec = 0, targetSampleRate = 192000, track = null, filterPhase = 'linear', peqOptions = null) {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.wav`);
@@ -394,6 +398,12 @@ class NativeDspStreamer {
     } else if (filterPhase === 'hqp-ps-ext2') {
       try { gaussFilter = buildHqpPsExt2Filter(targetSampleRate, srcRate); } catch (e) { gaussFilter = null; }
     }
+
+    // PEQ at the output rate (applied after interpolation, before 24-bit packing). The biquad
+    // state persists across chunks, so the EQ response is continuous over the whole stream.
+    let peqChain = null, peqState = null;
+    try { peqChain = createPeqChain(targetSampleRate, peqOptions); } catch (e) { peqChain = null; }
+    if (peqChain) peqState = createPeqState(peqChain);
 
     const bytesPerSample = 3; // 24-bit PCM
     const channels = 2;
@@ -438,6 +448,7 @@ class NativeDspStreamer {
     // Source PCM for the NOW PLAYING real-time spectrum (same arrays the upsampler reads).
     session.startSec = startSec;
     session.spectrum = { rate: srcRate, left: inL, right: inR };
+    session.peqOptions = peqChain ? peqOptions : null;
 
     // 3. Encoder state & chunk writer using selected filter phase interpolation
     let framesWritten = 0;
@@ -472,6 +483,12 @@ class NativeDspStreamer {
         const p2R = idx < inLen - 1 ? inR[idx + 1] : p1R;
         const p3R = idx < inLen - 2 ? inR[idx + 2] : p2R;
         sR = interpolateSample(p0R, p1R, p2R, p3R, t, filterPhase);
+        }
+
+        if (peqChain) {
+          const po = processPeqPair(peqChain, peqState, sL, sR);
+          sL = po[0];
+          sR = po[1];
         }
 
         // 24-bit PCM clamp and pack (Little-Endian)
@@ -530,12 +547,34 @@ class NativeDspStreamer {
   }
 
   // Create streaming session for Native DSF/DFF Decimation to 24-bit / 88.2 kHz WAV
-  async createDsdDecimateSession(token, filePath, startSec = 0, track = null) {
+  async createDsdDecimateSession(token, filePath, startSec = 0, track = null, peqOptions = null) {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.wav`);
     const wavBuf = nativeAudioEngine.decimateDsfToWav(filePath, startSec);
     if (!wavBuf) throw new Error('Native DSD decimation failed');
+
+    // PEQ on the decimated 24-bit PCM (88.2 kHz), applied in place before writing the file.
+    let peqApplied = null;
+    try { peqApplied = createPeqChain(wavBuf.readUInt32LE(24), peqOptions); } catch (e) { peqApplied = null; }
+    if (peqApplied) {
+      const st = createPeqState(peqApplied);
+      const totalFrames = (wavBuf.length - 44) / 6;
+      for (let f = 0; f < totalFrames; f++) {
+        const p = 44 + f * 6;
+        let vL = wavBuf[p] | (wavBuf[p + 1] << 8) | (wavBuf[p + 2] << 16);
+        if (vL & 0x800000) vL -= 0x1000000;
+        let vR = wavBuf[p + 3] | (wavBuf[p + 4] << 8) | (wavBuf[p + 5] << 16);
+        if (vR & 0x800000) vR -= 0x1000000;
+        const o = processPeqPair(peqApplied, st, vL / 8388608, vR / 8388608);
+        let iL = Math.max(-8388608, Math.min(8388607, Math.floor(o[0] * 8388607)));
+        let iR = Math.max(-8388608, Math.min(8388607, Math.floor(o[1] * 8388607)));
+        if (iL < 0) iL += 16777216;
+        if (iR < 0) iR += 16777216;
+        wavBuf[p] = iL & 0xFF; wavBuf[p + 1] = (iL >> 8) & 0xFF; wavBuf[p + 2] = (iL >> 16) & 0xFF;
+        wavBuf[p + 3] = iR & 0xFF; wavBuf[p + 4] = (iR >> 8) & 0xFF; wavBuf[p + 5] = (iR >> 16) & 0xFF;
+      }
+    }
 
     fs.writeFileSync(tmpFile, wavBuf);
 
@@ -549,7 +588,8 @@ class NativeDspStreamer {
     session.durationSec = (track && track.duration > 0) ? track.duration : (wavBuf.length / (88200 * 6));
     // Decimated 24-bit PCM WAV is fully in memory: windows are read straight from it.
     session.startSec = startSec;
-    session.spectrum = { rate: wavBuf.readUInt32LE(24), wav24: wavBuf.subarray(44) };
+    session.spectrum = { rate: wavBuf.readUInt32LE(24), wav24: wavBuf.subarray(44), peqApplied: !!peqApplied };
+    session.peqOptions = peqApplied ? peqOptions : null;
     session.cancel = () => {
       try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
       this.activeSessions.delete(token);
@@ -601,6 +641,15 @@ class NativeDspStreamer {
       outL.set(spec.left.subarray(off, off + n));
       outR.set(spec.right.subarray(off, off + n));
     }
+    // DSD/PCM sessions keep the RAW source PCM for the spectrum; show the EQ the listener
+    // actually hears by running the same PEQ over the window (fresh state per window: the
+    // biquad transient decays in the first half, the FFT uses the settled second half).
+    if (session.peqOptions && !spec.peqApplied) {
+      if (!session._peqSpecChain || session._peqSpecChain.fs !== spec.rate) {
+        try { session._peqSpecChain = createPeqChain(spec.rate, session.peqOptions); } catch (e) { session._peqSpecChain = null; }
+      }
+      if (session._peqSpecChain) applyPeqArrays(session._peqSpecChain, outL, outR, outL, outR, n);
+    }
     return { rate: spec.rate, left: outL, right: outR };
   }
 
@@ -616,5 +665,30 @@ class NativeDspStreamer {
 
 const instance = new NativeDspStreamer();
 instance.ProgressiveFileStream = ProgressiveFileStream;
+
+// Shared helper: apply a PEQ chain to a complete 24-bit WAV buffer in place (used by the
+// local /dsd-stream decimation path in main.js, mirroring createDsdDecimateSession).
+instance.applyPeqToWavBuffer = function (wavBuf, peqOptions) {
+  let chain = null;
+  try { chain = createPeqChain(wavBuf.readUInt32LE(24), peqOptions); } catch (e) { chain = null; }
+  if (!chain) return wavBuf;
+  const st = createPeqState(chain);
+  const totalFrames = (wavBuf.length - 44) / 6;
+  for (let f = 0; f < totalFrames; f++) {
+    const p = 44 + f * 6;
+    let vL = wavBuf[p] | (wavBuf[p + 1] << 8) | (wavBuf[p + 2] << 16);
+    if (vL & 0x800000) vL -= 0x1000000;
+    let vR = wavBuf[p + 3] | (wavBuf[p + 4] << 8) | (wavBuf[p + 5] << 16);
+    if (vR & 0x800000) vR -= 0x1000000;
+    const o = processPeqPair(chain, st, vL / 8388608, vR / 8388608);
+    let iL = Math.max(-8388608, Math.min(8388607, Math.floor(o[0] * 8388607)));
+    let iR = Math.max(-8388608, Math.min(8388607, Math.floor(o[1] * 8388607)));
+    if (iL < 0) iL += 16777216;
+    if (iR < 0) iR += 16777216;
+    wavBuf[p] = iL & 0xFF; wavBuf[p + 1] = (iL >> 8) & 0xFF; wavBuf[p + 2] = (iL >> 16) & 0xFF;
+    wavBuf[p + 3] = iR & 0xFF; wavBuf[p + 4] = (iR >> 8) & 0xFF; wavBuf[p + 5] = (iR >> 16) & 0xFF;
+  }
+  return wavBuf;
+};
 
 module.exports = instance;

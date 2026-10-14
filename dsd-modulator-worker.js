@@ -31,7 +31,9 @@ const {
   buildHqpPsExt2Filter,
   DsdModulator,
   DSD_BLOCK_SIZE,
-  DSD_SAMPLES_PER_BLOCK
+  DSD_SAMPLES_PER_BLOCK,
+  createPeqChain,
+  applyPeqArrays
 } = require('./dsp-kernel');
 
 function run() {
@@ -92,6 +94,22 @@ function run() {
   }
   const modulator = new DsdModulator(dsdOrder, filterPhase, gaussFilter);
 
+  // PEQ (PCM domain, at source rate): applied once to this worker's view slice before
+  // modulation. The view includes the segment's true preceding audio (warm-up), so the
+  // biquad state at the segment boundary is converged exactly like the modulator's -
+  // segment joins stay seamless. Fresh chain per worker (identical coefficients).
+  let peqL = left, peqR = right;
+  if (workerData.peqOptions && workerData.peqOptions.enabled) {
+    try {
+      const peqChain = createPeqChain(sampleRate, workerData.peqOptions);
+      if (peqChain) {
+        peqL = new Float32Array(inLen);
+        peqR = new Float32Array(inLen);
+        applyPeqArrays(peqChain, left, right, peqL, peqR, inLen);
+      }
+    } catch (e) { /* PEQ failure must never break playback: fall through unprocessed */ }
+  }
+
   let genDone = 0; // generated blocks so far, INCLUDING warm-up blocks
 
   const writeBatch = (count) => {
@@ -100,8 +118,8 @@ function run() {
     if (startB >= endB) return 0;
 
     const chunk = modulator.processBlocks(
-      left,
-      right,
+      peqL,
+      peqR,
       inLen,
       genStartBit + startB * samplesPerBlock,
       genStartBit + endB * samplesPerBlock,

@@ -639,6 +639,133 @@ class DsdModulator {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Parametric Equalizer (PEQ) - cascaded biquad IIR filters (RBJ cookbook form)
+//
+// Applied in the PCM domain BEFORE upsampling/modulation output packing, at the
+// processing sample rate of each path (source rate in DSD workers, target rate
+// in PCM sessions, 88.2k in decimate sessions). Biquads are minimum-phase IIR
+// (no pre-ringing) - the standard parametric-EQ behaviour.
+//
+// Headroom: any positive band gain lowers the whole chain by (maxBoost + 0.5 dB)
+// pre-gain so boosted material can never clip the 24-bit / ±1 modulator path.
+// ---------------------------------------------------------------------------
+function biquadCoeffs(type, fs, f0, gainDb, Q) {
+  const w0 = 2 * Math.PI * f0 / fs;
+  const c = Math.cos(w0), s = Math.sin(w0);
+  if (!(s > 0)) return null; // f0 must be strictly inside (0, Nyquist)
+  const alpha = s / (2 * Q);
+  let b0, b1, b2, a0, a1, a2;
+  if (type === 'lowpass') {
+    b0 = (1 - c) / 2; b1 = 1 - c; b2 = (1 - c) / 2;
+    a0 = 1 + alpha; a1 = -2 * c; a2 = 1 - alpha;
+  } else if (type === 'highpass') {
+    b0 = (1 + c) / 2; b1 = -(1 + c); b2 = (1 + c) / 2;
+    a0 = 1 + alpha; a1 = -2 * c; a2 = 1 - alpha;
+  } else if (type === 'notch') {
+    b0 = 1; b1 = -2 * c; b2 = 1;
+    a0 = 1 + alpha; a1 = -2 * c; a2 = 1 - alpha;
+  } else if (type === 'peaking') {
+    const A = Math.pow(10, gainDb / 20); // peak gain at f0 = A (verified numerically)
+    b0 = 1 + alpha * A; b1 = -2 * c; b2 = 1 - alpha * A;
+    a0 = 1 + alpha; a1 = -2 * c; a2 = 1 - alpha;
+  } else if (type === 'lowshelf' || type === 'highshelf') {
+    // Second-order shelves derived here: analog Butterworth-shelf prototype
+    //   lowshelf:  H(s) = (s^2 + (sqrt(G)/Q)s + G) / (s^2 + (1/Q)s + 1)   (omega0 normalized to 1)
+    //   highshelf: H(s) = (G*s^2 + (sqrt(G)/Q)s + 1) / (s^2 + (1/Q)s + 1)
+    // bilinear-transformed with prewarp K = 1/tan(pi*f0/fs) (bilinear maps analog corner 1 to
+    // exactly f0 with this choice). Asymptotic gains are EXACT:
+    // lowshelf DC gain = G = 10^(dB/20) with 0 dB at HF; highshelf the mirror. Q controls
+    // the transition sharpness (Q = 0.707 gives the maximally-flat Butterworth slope).
+    const G = Math.pow(10, gainDb / 20);
+    const K = 1 / Math.tan(Math.PI * f0 / fs);
+    if (!(K > 0) || !isFinite(K)) return null;
+    const den0 = K * K + K / Q + 1;
+    const sqG = Math.sqrt(G);
+    if (type === 'lowshelf') {
+      b0 = K * K + K * sqG / Q + G;
+      b1 = 2 * (G - K * K);
+      b2 = K * K - K * sqG / Q + G;
+      a0 = den0;
+      a1 = 2 * (1 - K * K);
+      a2 = K * K - K / Q + 1;
+    } else {
+      b0 = G * K * K + K * sqG / Q + 1;
+      b1 = 2 * (1 - G * K * K);
+      b2 = G * K * K - K * sqG / Q + 1;
+      a0 = den0;
+      a1 = 2 * (1 - K * K);
+      a2 = K * K - K / Q + 1;
+    }
+  } else {
+    return null;
+  }
+  return { type, f0, b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 };
+}
+
+// Build a PEQ chain from renderer options: { enabled, bands: [{on,type,freq,gain,q}] }.
+// Returns null when nothing is active (callers then skip the stage entirely - bit-perfect).
+function createPeqChain(fs, peqOptions) {
+  if (!peqOptions || !peqOptions.enabled || !Array.isArray(peqOptions.bands)) return null;
+  const bands = [];
+  let maxBoost = 0;
+  for (const b of peqOptions.bands) {
+    if (!b || !b.on) continue;
+    const type = String(b.type || 'peaking');
+    const f0 = Math.min(Math.max(Number(b.freq) || 100, 20), Math.min(20000, fs * 0.45));
+    const Q = Math.min(Math.max(Number(b.q) || 0.7, 0.3), 8);
+    const gainDb = Math.min(Math.max(Number(b.gain) || 0, -18), 18);
+    const coeffs = biquadCoeffs(type, fs, f0, gainDb, Q);
+    if (!coeffs) continue;
+    bands.push(coeffs);
+    if (type === 'peaking' || type === 'lowshelf' || type === 'highshelf') maxBoost = Math.max(maxBoost, gainDb);
+  }
+  if (!bands.length) return null;
+  const headroomDb = Math.max(0, maxBoost) + 0.5;
+  return { fs, bands, preGain: Math.pow(10, -headroomDb / 20), headroomDb };
+}
+
+// Transposed Direct-Form II state (numerically stable, per channel per band).
+function createPeqState(chain) {
+  const n = chain.bands.length;
+  return { l1: new Float64Array(n), l2: new Float64Array(n), r1: new Float64Array(n), r2: new Float64Array(n), out: new Float64Array(2) };
+}
+
+// Process one stereo sample pair through the chain. Returns chain-independent scratch [L, R].
+function processPeqPair(chain, st, xL, xR) {
+  let l = xL * chain.preGain;
+  let r = xR * chain.preGain;
+  const bands = chain.bands;
+  for (let i = 0; i < bands.length; i++) {
+    const b = bands[i];
+    let y = b.b0 * l + st.l1[i];
+    st.l1[i] = b.b1 * l - b.a1 * y + st.l2[i];
+    st.l2[i] = b.b2 * l - b.a2 * y;
+    l = y;
+    y = b.b0 * r + st.r1[i];
+    st.r1[i] = b.b1 * r - b.a1 * y + st.r2[i];
+    st.r2[i] = b.b2 * r - b.a2 * y;
+    r = y;
+  }
+  st.out[0] = l;
+  st.out[1] = r;
+  return st.out;
+}
+
+// Whole-array convenience pass (used by DSD workers on their view slice, decimate
+// sessions, and the spectrum window). Fresh state: caller-provided warm-up regions
+// cover the (fast-decaying) biquad transients.
+function applyPeqArrays(chain, inL, inR, outL, outR, len) {
+  const n = Math.min(len === undefined ? inL.length : len, inL.length, inR.length, outL.length, outR.length);
+  const st = createPeqState(chain);
+  for (let i = 0; i < n; i++) {
+    const o = processPeqPair(chain, st, inL[i], inR[i]);
+    outL[i] = o[0];
+    outR[i] = o[1];
+  }
+  return n;
+}
+
 module.exports = {
   interpolateSample,
   buildGaussFilter,
@@ -649,5 +776,10 @@ module.exports = {
   buildDsfHeader,
   DsdModulator,
   DSD_BLOCK_SIZE,
-  DSD_SAMPLES_PER_BLOCK
+  DSD_SAMPLES_PER_BLOCK,
+  biquadCoeffs,
+  createPeqChain,
+  createPeqState,
+  processPeqPair,
+  applyPeqArrays
 };

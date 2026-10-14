@@ -337,6 +337,15 @@ function startDsdStreamingServer() {
         const startSec = parseFloat(reqUrl.searchParams.get('start') || '0');
         const sampleRate = parseInt(reqUrl.searchParams.get('rate') || '192000', 10);
         const filterPhase = reqUrl.searchParams.get('phase') || 'linear';
+        // PEQ options arrive as compact JSON (renderer keeps the single source of truth)
+        let peqOptions = null;
+        const peqRaw = reqUrl.searchParams.get('peq');
+        if (peqRaw) {
+          try {
+            const parsed = JSON.parse(peqRaw);
+            if (parsed && parsed.enabled && Array.isArray(parsed.bands)) peqOptions = parsed;
+          } catch (e) { peqOptions = null; }
+        }
 
         if (!filePath || !fs.existsSync(filePath)) {
           res.writeHead(404);
@@ -347,7 +356,7 @@ function startDsdStreamingServer() {
         // Local Chromium playback always receives progressive 24-bit PCM WAV
         // (DSD rate modes are mapped to intermediate PCM rates by the renderer;
         //  dsd/order URL params are accepted for compatibility and ignored here)
-        const sessionKey = crypto.createHash('md5').update(`${filePath}|${startSec}|${sampleRate}|${filterPhase}`).digest('hex');
+        const sessionKey = crypto.createHash('md5').update(`${filePath}|${startSec}|${sampleRate}|${filterPhase}|${peqRaw || ''}`).digest('hex');
 
         try {
           let entryPromise = localDspSessions.get(sessionKey);
@@ -361,7 +370,7 @@ function startDsdStreamingServer() {
             }
             entryPromise = (async () => {
               const token = `local_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-              const session = await nativeDspStreamer.createPcmSession(token, filePath, startSec, sampleRate, null, filterPhase);
+              const session = await nativeDspStreamer.createPcmSession(token, filePath, startSec, sampleRate, null, filterPhase, peqOptions);
               return { token, session };
             })();
             localDspSessions.set(sessionKey, entryPromise);
@@ -410,13 +419,23 @@ function startDsdStreamingServer() {
           res.end('Native DSF decimation failed');
           return;
         }
+        let outWavFinal = outWav;
+        const peqRawDsd = reqUrl.searchParams.get('peq');
+        if (peqRawDsd) {
+          try {
+            const parsedPeq = JSON.parse(peqRawDsd);
+            if (parsedPeq && parsedPeq.enabled && Array.isArray(parsedPeq.bands)) {
+              outWavFinal = nativeDspStreamer.applyPeqToWavBuffer(outWav, parsedPeq);
+            }
+          } catch (e) { /* PEQ failure must never break playback */ }
+        }
 
         res.writeHead(200, {
           'Content-Type': 'audio/wav',
-          'Content-Length': outWav.length,
+          'Content-Length': outWavFinal.length,
           'Access-Control-Allow-Origin': '*'
         });
-        res.end(outWav);
+        res.end(outWavFinal);
         return;
       }
 
@@ -584,16 +603,17 @@ ipcMain.handle('shell:openExternal', (event, url) => {
 });
 
 // DSD Stream URL helper IPC
-ipcMain.handle('audio:getDsdStreamUrl', (event, filePath, startSec = 0) => {
+ipcMain.handle('audio:getDsdStreamUrl', (event, filePath, startSec = 0, peqJson = '') => {
   if (!dsdStreamPort) return '';
   const params = new URLSearchParams();
   params.set('file', filePath);
   if (startSec > 0) params.set('start', startSec.toString());
+  if (peqJson) params.set('peq', peqJson);
   return `http://127.0.0.1:${dsdStreamPort}/dsd-stream?${params.toString()}`;
 });
 
 // Native DSP PCM Upsampling Stream URL helper IPC
-ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear') => {
+ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear', peqJson = '') => {
   if (!dsdStreamPort) return '';
   const params = new URLSearchParams();
   params.set('file', filePath);
@@ -602,6 +622,7 @@ ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRa
   if (dsdMode) params.set('dsd', dsdMode);
   params.set('order', (dsdOrder || 5).toString());
   params.set('phase', filterPhase || 'linear');
+  if (peqJson) params.set('peq', peqJson);
   params.set('local', '1'); // Local Electron Chromium playback needs decoded PCM WAV
   return `http://127.0.0.1:${dsdStreamPort}/sox-stream?${params.toString()}`;
 });
