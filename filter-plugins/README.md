@@ -4,6 +4,10 @@
 升頻設定頁的濾波器按鈕與滑鼠提示由插件描述卡自動生成——新增濾波器只需在此放一個檔案，
 引擎核心、UI、DLNA、播放路徑完全不需要任何修改。
 
+> 不想寫程式？設定頁的「🛠️ 自訂濾波器」工具箱讓你在安全範圍內（窗函數/截止延伸/
+> 濾波長度滑桿＋即時響應預覽）建立專屬濾波器，存進 6 個槽位——它與本目錄的檔案插件
+> 走同一套註冊機制，但只存純參數 JSON，不執行任何使用者程式碼。
+
 ## 描述卡格式
 
 ```js
@@ -28,6 +32,8 @@ module.exports = {
     // 其他工具箱原語：
     //   kernel.kaiserSincFir(fsOut, srcRate, { asDb, fcFactor, transFactor })
     //   kernel.gaussSincFir(fsOut, srcRate, minimumPhase)
+    //   kernel.sincWindowTapFn(fsOut, srcRate, { cutoffRel, L, window, asDb })  // 未正規化 tap 函數
+    //   kernel.minimumPhaseFromTapFn(fsOut, srcRate, L, S, tapFn)               // 線性→最小相位轉換
     //   kernel.besselI0(x), kernel.fftRun(re, im, inv)
   }
 

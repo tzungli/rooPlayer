@@ -16,6 +16,10 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[rooplayer] Unhandled Rejection:', reason);
 });
 
+// 使用者自訂濾波槽儲存路徑：必須在任何 dsp-kernel 載入前設定（主行程與 DSP worker 共用；
+// worker_threads 繼承 process.env，worker 內的 dsp-kernel 啟動時自動載入同一份槽位）。
+process.env.ROOPLAYER_USER_FILTERS = path.join(app.getPath('userData'), 'rooplayer_user_filters.json');
+
 const nativeAudioEngine = require('./native-audio-engine');
 const nativeDspStreamer = require('./native-dsp-streamer');
 const mm = require('music-metadata');
@@ -638,6 +642,63 @@ ipcMain.handle('dsp:listFilterPlugins', () => {
     return require('./dsp-kernel').listFilterPlugins();
   } catch (e) {
     return [];
+  }
+});
+
+// ----------------- 使用者自訂濾波槽（工具箱） -----------------
+// 純參數 JSON 存於 userData；dsp-kernel 做全部驗證/夾限/註冊（不執行使用者程式碼）。
+function readUserFilterSlots() {
+  try {
+    const data = JSON.parse(fs.readFileSync(process.env.ROOPLAYER_USER_FILTERS, 'utf8'));
+    return Array.isArray(data && data.slots) ? data.slots : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function writeUserFilterSlots(slots) {
+  try {
+    fs.writeFileSync(process.env.ROOPLAYER_USER_FILTERS, JSON.stringify({ version: 1, slots }, null, 2));
+    require('./dsp-kernel').reloadUserFilters(); // 主行程註冊表即時重建（新 session/worker 立即採用）
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+ipcMain.handle('filters:listSlots', () => {
+  return { slots: readUserFilterSlots() };
+});
+
+ipcMain.handle('filters:saveSlot', (event, spec) => {
+  const kernel = require('./dsp-kernel');
+  const v = kernel.validateUserFilterSpec(spec);
+  if (!v) return { ok: false, error: '濾波器參數無效' };
+  const slots = readUserFilterSlots().filter(s => !(s && s.id === v.id));
+  slots.push(v);
+  slots.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  if (!writeUserFilterSlots(slots)) return { ok: false, error: '儲存失敗' };
+  return { ok: true, slots };
+});
+
+ipcMain.handle('filters:deleteSlot', (event, slotId) => {
+  if (typeof slotId !== 'string' || !/^uf-[1-6]$/.test(slotId)) return { ok: false, error: '槽位識別碼無效' };
+  const slots = readUserFilterSlots().filter(s => !(s && s.id === slotId));
+  if (!writeUserFilterSlots(slots)) return { ok: false, error: '儲存失敗' };
+  return { ok: true, slots };
+});
+
+// 響應預覽：以目前播放脈絡的 (srcRate → targetRate) 設計並回傳曲線資料（純資料，不動播放路徑）
+ipcMain.handle('filters:preview', (event, spec, srcRate, targetRate) => {
+  try {
+    const kernel = require('./dsp-kernel');
+    const v = kernel.validateUserFilterSpec(spec);
+    if (!v) return null;
+    const sr = Math.max(8000, Math.min(192000, parseInt(srcRate, 10) || 44100));
+    const fo = Math.max(sr, Math.min(2822400 * 4, parseInt(targetRate, 10) || sr * 4));
+    return kernel.previewUserFilterSpec(v, sr, fo);
+  } catch (e) {
+    return null;
   }
 });
 

@@ -6817,6 +6817,353 @@ function initConvControls() {
   syncConvModalUI();
 }
 
+// ========================================================
+// 使用者自訂濾波工具箱（User Filter Toolbox）
+// 純參數 JSON → 主行程槽檔 → 引擎註冊表（安全驗證/夾限全在 dsp-kernel）。
+// ========================================================
+let ufSlots = [];
+let ufEditingId = null;
+let ufPreviewTimer = null;
+
+const UF_WINDOW_LABELS = { hann: 'Hann', hamming: 'Hamming', blackman: 'Blackman', blackmanHarris: 'Blackman-Harris', kaiser: 'Kaiser' };
+
+function ufPreviewContext() {
+  const track = (state.queue && state.queue[0]) || (state.tracks && state.tracks[0]) || null;
+  const srcRate = (track && track.sampleRate) || 44100;
+  const rateMode = state.dsp.rateMode || '4x';
+  let targetRate;
+  if (isDsdRateMode(rateMode)) {
+    targetRate = { dsd64: 2822400, dsd128: 5644800, dsd256: 11289600, dsd512: 22579200 }[rateMode] || 2822400;
+  } else {
+    targetRate = calculateTargetSampleRate(srcRate, rateMode);
+  }
+  return { srcRate, targetRate };
+}
+
+async function refreshUserFilterSlots() {
+  if (!window.electronAPI || typeof window.electronAPI.listFilterSlots !== 'function') return;
+  try {
+    const r = await window.electronAPI.listFilterSlots();
+    if (r && Array.isArray(r.slots)) ufSlots = r.slots;
+  } catch (e) { /* 保持現況 */ }
+  renderUserFilterChips();
+}
+
+function renderUserFilterChips() {
+  const row = document.getElementById('ufChipRow');
+  if (!row) return;
+  row.innerHTML = '';
+  if (!ufSlots.length) {
+    const empty = document.createElement('span');
+    empty.className = 'uf-chips-empty';
+    empty.textContent = '尚無自訂濾波器 — 點「＋ 新建」於安全範圍內設計專屬濾波器';
+    row.appendChild(empty);
+    return;
+  }
+  const curPhase = state.dsp.filterPhase || 'linear';
+  for (const s of ufSlots) {
+    const chip = document.createElement('span');
+    chip.className = 'uf-chip' + (s.id === curPhase ? ' active' : '');
+    chip.setAttribute('data-slot', s.id);
+    const name = document.createElement('span');
+    name.textContent = '🔧 ' + s.name;
+    const edit = document.createElement('span');
+    edit.className = 'uf-chip-edit';
+    edit.textContent = '編輯';
+    chip.appendChild(name);
+    chip.appendChild(edit);
+    row.appendChild(chip);
+  }
+}
+
+function ufSpecFromForm() {
+  const windowBtn = document.querySelector('#ufWindowSeg .uf-seg-btn.active');
+  const phaseBtn = document.querySelector('#ufPhaseSeg .uf-seg-btn.active');
+  const slotSel = document.getElementById('ufSlotSelect');
+  return {
+    id: slotSel && slotSel.value ? slotSel.value : (ufEditingId || 'uf-1'),
+    name: (document.getElementById('ufNameInput').value || '').trim(),
+    sound: (document.getElementById('ufSoundInput').value || '').trim(),
+    window: windowBtn ? windowBtn.getAttribute('data-window') : 'blackmanHarris',
+    phase: phaseBtn ? phaseBtn.getAttribute('data-phase') : 'linear',
+    cutoffRel: (parseInt(document.getElementById('ufCutSlider').value, 10) || 113) / 100,
+    taps: parseInt(document.getElementById('ufTapSlider').value, 10) || 96,
+    asDb: parseInt(document.getElementById('ufAsSlider').value, 10) || 100
+  };
+}
+
+function ufUpdateFormReadouts() {
+  const spec = ufSpecFromForm();
+  document.getElementById('ufAsVal').textContent = spec.asDb + ' dB';
+  document.getElementById('ufCutVal').textContent = spec.cutoffRel.toFixed(2) + ' × 源Nyquist';
+  document.getElementById('ufTapVal').textContent = spec.taps + ' taps';
+  document.getElementById('ufAsRow').style.display = spec.window === 'kaiser' ? '' : 'none';
+  const ctx = ufPreviewContext();
+  const mmac = Math.round(spec.taps * ctx.targetRate * 2 / 1e6);
+  const badge = document.getElementById('ufLoadBadge');
+  const level = mmac < 60 ? '低' : (mmac < 150 ? '中' : '高');
+  badge.textContent = `負荷: ${level} (~${mmac} MMAC/s)`;
+  badge.className = 'uf-load' + (level === '中' ? ' load-mid' : (level === '高' ? ' load-high' : ''));
+}
+
+function ufFillSlotSelect(preferId) {
+  const sel = document.getElementById('ufSlotSelect');
+  sel.innerHTML = '';
+  const byId = {};
+  ufSlots.forEach(s => { byId[s.id] = s; });
+  let firstFree = null;
+  for (let i = 1; i <= 6; i++) {
+    const id = 'uf-' + i;
+    const occupied = byId[id] && id !== preferId;
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = occupied ? `槽 ${i}：${byId[id].name}（將覆寫）` : `槽 ${i}：空`;
+    sel.appendChild(opt);
+    if (!byId[id] && !firstFree) firstFree = id;
+  }
+  sel.value = preferId || firstFree || 'uf-1';
+}
+
+function ufSchedulePreview() {
+  clearTimeout(ufPreviewTimer);
+  ufPreviewTimer = setTimeout(ufDoPreview, 140);
+}
+
+async function ufDoPreview() {
+  const cv = document.getElementById('ufPreviewCanvas');
+  if (!cv || !window.electronAPI || typeof window.electronAPI.previewFilterSpec !== 'function') return;
+  const ctx = ufPreviewContext();
+  const note = document.getElementById('ufPreviewCtxNote');
+  if (note) note.textContent = `${(ctx.srcRate / 1000).toFixed(1)}k → ${ctx.targetRate >= 1e6 ? (ctx.targetRate / 1e6).toFixed(2) + 'M' : (ctx.targetRate / 1000).toFixed(1)}k 脈絡`;
+  let data = null;
+  try { data = await window.electronAPI.previewFilterSpec(ufSpecFromForm(), ctx.srcRate, ctx.targetRate); } catch (e) {}
+  drawUfPreview(cv, data);
+}
+
+function drawUfPreview(cv, data) {
+  const g = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  g.clearRect(0, 0, W, H);
+  const cs = getComputedStyle(document.documentElement);
+  const gridCol = 'rgba(128,128,128,0.18)';
+  const textCol = (cs.getPropertyValue('--text-muted') || '#888').trim() || '#888';
+  const padL = 42, padR = 8, padT = 12, padB = 20;
+  const dbTop = 6, dbBot = -120;
+  const yOf = db => padT + (dbTop - db) / (dbTop - dbBot) * (H - padT - padB);
+  if (!data || !data.xs || !data.xs.length) {
+    g.fillStyle = textCol; g.font = '12px sans-serif';
+    g.fillText('無法產生預覽（請檢查參數）', padL, H / 2);
+    return;
+  }
+  const fMax = data.xs[data.xs.length - 1] || 1;
+  const xOf = f => padL + f / fMax * (W - padL - padR);
+  // dB grid
+  g.strokeStyle = gridCol; g.fillStyle = textCol; g.font = '10px sans-serif'; g.lineWidth = 1;
+  for (const db of [0, -24, -48, -72, -96, -120]) {
+    const y = yOf(db);
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke();
+    g.fillText(db === 0 ? '0dB' : db + 'dB', 4, y + 3);
+  }
+  // frequency grid + labels
+  const srcNyq = data.srcNyq;
+  const marks = [srcNyq, srcNyq * 2].filter(f => f <= fMax);
+  for (const f of [0, ...marks]) {
+    const x = xOf(f);
+    if (f === srcNyq) {
+      g.save();
+      g.strokeStyle = 'rgba(251,146,60,0.65)'; g.setLineDash([5, 4]);
+      g.beginPath(); g.moveTo(x, padT); g.lineTo(x, H - padB); g.stroke();
+      g.restore();
+      g.fillStyle = 'rgba(251,146,60,0.9)';
+      g.fillText('源Nyq', x - 14, H - 8);
+    } else {
+      g.strokeStyle = gridCol;
+      g.beginPath(); g.moveTo(x, padT); g.lineTo(x, H - padB); g.stroke();
+      g.fillStyle = textCol;
+      g.fillText(f === 0 ? '0' : Math.round(f / 1000) + 'k', x - 6, H - 8);
+    }
+  }
+  // response curve
+  g.strokeStyle = '#34d399'; g.lineWidth = 1.8;
+  g.beginPath();
+  for (let i = 0; i < data.xs.length; i++) {
+    const x = xOf(data.xs[i]);
+    const y = yOf(Math.max(dbBot, Math.min(dbTop, data.ysDb[i])));
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+  g.lineWidth = 1;
+}
+
+function openUfEditor(slotId) {
+  const modal = document.getElementById('userFilterModal');
+  if (!modal) return;
+  const slot = slotId ? ufSlots.find(s => s.id === slotId) : null;
+  ufEditingId = slot ? slot.id : null;
+  document.getElementById('ufEditorTitle').textContent = slot ? `編輯濾波器（${slot.id}）` : '新建濾波器';
+  document.getElementById('ufNameInput').value = slot ? slot.name : '';
+  document.getElementById('ufSoundInput').value = slot ? (slot.sound || '') : '';
+  document.getElementById('ufCutSlider').value = slot ? Math.round(slot.cutoffRel * 100) : 113;
+  document.getElementById('ufTapSlider').value = slot ? slot.taps : 96;
+  document.getElementById('ufAsSlider').value = slot ? slot.asDb : 100;
+  const win = slot ? slot.window : 'blackmanHarris';
+  document.querySelectorAll('#ufWindowSeg .uf-seg-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-window') === win));
+  const phase = slot ? slot.phase : 'linear';
+  document.querySelectorAll('#ufPhaseSeg .uf-seg-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-phase') === phase));
+  document.getElementById('ufDeleteBtn').style.display = slot ? '' : 'none';
+  ufFillSlotSelect(slot ? slot.id : null);
+  modal.style.display = 'flex';
+  ufUpdateFormReadouts();
+  ufSchedulePreview();
+}
+
+function closeUfEditor() {
+  const modal = document.getElementById('userFilterModal');
+  if (modal) modal.style.display = 'none';
+  clearTimeout(ufPreviewTimer);
+}
+
+async function ufSaveFlow() {
+  const spec = ufSpecFromForm();
+  if (!spec.name) { showToast('⚠️ 請先為濾波器取名稱'); return; }
+  const r = await window.electronAPI.saveFilterSlot(spec);
+  if (!r || !r.ok) { showToast('⚠️ 儲存失敗：' + ((r && r.error) || '未知錯誤')); return; }
+  ufSlots = r.slots;
+  closeUfEditor();
+  renderUserFilterChips();
+  await loadFilterPluginsUI(); // 重新取得插件清單 → 🔧 濾波器出現在按鈕列
+  state.dsp.filterPhase = spec.id;
+  try { localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp)); } catch (e) {}
+  renderFilterPhaseSelector();
+  renderUserFilterChips();
+  showToast(`🛠️ 已建立自訂濾波器「${spec.name}」並套用`);
+  triggerLiveDspUpdate();
+}
+
+async function ufDeleteFlow(slotId) {
+  const r = await window.electronAPI.deleteFilterSlot(slotId);
+  if (!r || !r.ok) { showToast('⚠️ 刪除失敗'); return; }
+  ufSlots = r.slots;
+  if (state.dsp.filterPhase === slotId) {
+    state.dsp.filterPhase = 'linear';
+    try { localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp)); } catch (e) {}
+    await loadFilterPluginsUI();
+    renderFilterPhaseSelector();
+    triggerLiveDspUpdate();
+  }
+  renderUserFilterChips();
+  closeUfEditor();
+  renderUfManageList();
+  showToast('🗑️ 已刪除自訂濾波器');
+}
+
+function renderUfManageList() {
+  const list = document.getElementById('ufManageList');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!ufSlots.length) {
+    const empty = document.createElement('div');
+    empty.className = 'uf-manage-empty';
+    empty.textContent = '尚無自訂濾波器。';
+    list.appendChild(empty);
+    return;
+  }
+  for (const s of ufSlots) {
+    const row = document.createElement('div');
+    row.className = 'uf-manage-row';
+    row.setAttribute('data-slot', s.id);
+    const info = document.createElement('div');
+    const nm = document.createElement('div');
+    nm.className = 'uf-mr-name';
+    nm.textContent = `🔧 ${s.name}`;
+    const sp = document.createElement('div');
+    sp.className = 'uf-mr-spec';
+    sp.textContent = `${UF_WINDOW_LABELS[s.window] || s.window} 窗・截止 ${s.cutoffRel.toFixed(2)}×・${s.taps} taps・${s.phase === 'minimum' ? '最小相位' : '線性相位'}${s.window === 'kaiser' ? '・止帶 ' + s.asDb + 'dB' : ''}`;
+    info.appendChild(nm);
+    info.appendChild(sp);
+    const acts = document.createElement('div');
+    acts.className = 'uf-mr-actions';
+    for (const [label, cls, action] of [['編輯', '', 'edit'], ['複製', '', 'copy'], ['刪除', 'uf-delete-btn', 'delete']]) {
+      const b = document.createElement('button');
+      b.className = 'uf-mini-btn ' + cls;
+      b.textContent = label;
+      b.setAttribute('data-action', action);
+      acts.appendChild(b);
+    }
+    row.appendChild(info);
+    row.appendChild(acts);
+    list.appendChild(row);
+  }
+}
+
+function ufCopyFlow(slotId) {
+  const src = ufSlots.find(s => s.id === slotId);
+  if (!src) return;
+  const taken = new Set(ufSlots.map(s => s.id));
+  let target = null;
+  for (let i = 1; i <= 6; i++) { if (!taken.has('uf-' + i)) { target = 'uf-' + i; break; } }
+  if (!target) { showToast('⚠️ 儲存槽已滿（6 槽）'); return; }
+  const copy = Object.assign({}, src, { id: target, name: (src.name + ' 複本').slice(0, 40) });
+  window.electronAPI.saveFilterSlot(copy).then(r => {
+    if (r && r.ok) { ufSlots = r.slots; renderUserFilterChips(); renderUfManageList(); loadFilterPluginsUI(); showToast(`已複製到槽 ${target.slice(3)}`); }
+  });
+}
+
+function initUserFilterControls() {
+  const $ = id => document.getElementById(id);
+  if (!$('userFilterStrip')) return;
+
+  $('ufNewBtn').addEventListener('click', () => openUfEditor(null));
+  $('ufManageBtn').addEventListener('click', () => {
+    const m = $('userFilterManageModal');
+    renderUfManageList();
+    m.style.display = 'flex';
+  });
+  $('ufCloseEditor').addEventListener('click', closeUfEditor);
+  $('ufCloseManage').addEventListener('click', () => { $('userFilterManageModal').style.display = 'none'; });
+  $('userFilterModal').addEventListener('click', (e) => { if (e.target === $('userFilterModal')) closeUfEditor(); });
+  $('userFilterManageModal').addEventListener('click', (e) => { if (e.target === $('userFilterManageModal')) $('userFilterManageModal').style.display = 'none'; });
+
+  $('ufWindowSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('.uf-seg-btn');
+    if (!b) return;
+    document.querySelectorAll('#ufWindowSeg .uf-seg-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    ufUpdateFormReadouts();
+    ufSchedulePreview();
+  });
+  $('ufPhaseSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('.uf-seg-btn');
+    if (!b) return;
+    document.querySelectorAll('#ufPhaseSeg .uf-seg-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    ufSchedulePreview();
+  });
+  ['ufAsSlider', 'ufCutSlider', 'ufTapSlider'].forEach(id => {
+    $(id).addEventListener('input', () => { ufUpdateFormReadouts(); ufSchedulePreview(); });
+  });
+  $('ufSaveBtn').addEventListener('click', ufSaveFlow);
+  $('ufDeleteBtn').addEventListener('click', () => { if (ufEditingId) ufDeleteFlow(ufEditingId); });
+
+  $('ufChipRow').addEventListener('click', (e) => {
+    const chip = e.target.closest('.uf-chip');
+    if (chip) openUfEditor(chip.getAttribute('data-slot'));
+  });
+  $('ufManageList').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const row = btn.closest('.uf-manage-row');
+    const slotId = row && row.getAttribute('data-slot');
+    if (!slotId) return;
+    const action = btn.getAttribute('data-action');
+    if (action === 'edit') { $('userFilterManageModal').style.display = 'none'; openUfEditor(slotId); }
+    else if (action === 'copy') ufCopyFlow(slotId);
+    else if (action === 'delete') ufDeleteFlow(slotId);
+  });
+
+  refreshUserFilterSlots();
+}
+
 function initDspControls() {
   const toggleSoxDsp = document.getElementById('toggleSoxDsp');
   const dspSoxCard = document.querySelector('.dsp-sox-card');
@@ -6959,6 +7306,7 @@ function initDspControls() {
       state.dsp.filterPhase = phase;
       localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
       if (dspActivePhaseHint) dspActivePhaseHint.textContent = btn.textContent;
+      renderUserFilterChips();
       triggerLiveDspUpdate();
     });
   }
@@ -6968,6 +7316,9 @@ function initDspControls() {
 
   // Convolution (IR) controls (card below the PEQ card)
   initConvControls();
+
+  // User Filter Toolbox (自訂濾波槽：條列在濾波器按鈕列下方)
+  initUserFilterControls();
 }
 
 // ========================================================

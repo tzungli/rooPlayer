@@ -137,6 +137,48 @@ function fftRun(re, im, inv) {
   if (inv) { for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; } }
 }
 
+// ---------------------------------------------------------------------------
+// 泛用最小相位轉換（複倒數譜折疊）：把由 tapFn(t)（t = 整數輸出樣本）定義的
+// 對稱線性相位 FIR 轉換為因果最小相位濾波器。截斷 budget 與 FFT 工作長度慣例
+// 與 buildGaussFilter 完全相同（gauss-min 即以此實作，輸出逐 bit 不變）。
+// ---------------------------------------------------------------------------
+function minimumPhaseFromTapFn(fsOut, srcRate, L, S, tapFn) {
+  const ratio = fsOut / srcRate;
+  const integerRatio = Math.abs(ratio - Math.round(ratio)) < 1e-9;
+  // 截斷 budget：長尾對音訊無貢獻（DSD64 實測 1200 taps 與全長規格相同）。
+  // 但 FFT 工作長度 M 必須容納「真實」最小相位尾巴（~3.5ms × fsOut 的冪律長尾，
+  // 約為 budget 的 8 倍）：若 M 太小，尾部繞回負時間會污染折疊，產生延遲濾波器。
+  const budget = Math.min(2500, Math.max(64, Math.round(fsOut * 4.3e-4)));
+  let M = 4096;
+  while (M < 2.2 * fsOut * 3.5e-3 || M < 4 * (2 * L + 1)) M *= 2;
+  if (M > 65536) M = 65536; // 繞回污染於此深度約 -115dB，對音訊無影響
+  const re = new Float64Array(M), im = new Float64Array(M);
+  for (let t = -L; t <= L; t++) { const v = tapFn(t); if (t < 0) re[M + t] = v; else re[t] = v; }
+  fftRun(re, im, false);
+  for (let k = 0; k < M; k++) {
+    const mag = Math.hypot(re[k], im[k]);
+    const ph = Math.atan2(im[k], re[k]);
+    re[k] = Math.log(Math.max(mag, 1e-14)); im[k] = ph;
+  }
+  fftRun(re, im, true); // 倒數譜
+  for (let t = 1; t < M / 2; t++) { re[t] *= 2; im[t] *= 2; re[M - t] = 0; im[M - t] = 0; } // 折疊 => 最小相位
+  fftRun(re, im, false);
+  for (let k = 0; k < M; k++) { const lm = Math.min(re[k], 40), ph = im[k]; re[k] = Math.exp(lm) * Math.cos(ph); im[k] = Math.exp(lm) * Math.sin(ph); }
+  fftRun(re, im, true); // 因果最小相位脈衝
+  let sum = 0;
+  for (let i = 0; i < budget; i++) sum += re[i];
+  const g = ratio / sum;
+  const half = (budget - 1) * S;
+  const h = new Float64Array(half + 2);
+  for (let j = 0; j <= half; j++) {
+    const t = j / S;
+    const t0 = Math.floor(t);
+    const fr = t - t0;
+    h[j] = (re[t0] + fr * (re[Math.min(t0 + 1, budget - 1)] - re[t0])) * g;
+  }
+  return { h, S, lo: 0, hi: budget - 1, ratio, integerRatio, fsOut, srcRate, minimumPhase: true, taps: budget };
+}
+
 function buildGaussFilter(fsOut, srcRate, minimumPhase = false) {
   // 操作點（DSD64/44.1k 實測掃描）：通帶至 21k 平坦 -0.2dB、22.05k -0.4dB、
   // 下側鏡像（源取樣率-信号頻，如 19k→25.1k）-2dB、44.1k 鏡像 -112dB、30k -11dB。
@@ -172,39 +214,8 @@ function buildGaussFilter(fsOut, srcRate, minimumPhase = false) {
     return { h, S, lo: -L, hi: L, ratio, integerRatio, fsOut, srcRate, minimumPhase: false, taps: 2 * half + 1 };
   }
 
-  // --- 最小相位轉換（單位輸出樣本网格上的複倒數譜折疊）---
-  // 截斷 budget：長尾對音訊無貢獻（DSD64 實測 1200 taps 與全長規格相同）。
-  // 但 FFT 工作長度 M 必須容納「真實」最小相位尾巴（~3.5ms × fsOut 的冪律長尾，
-  // 約為 budget 的 8 倍）：若 M 太小，尾部繞回負時間會污染折疊，產生延遲濾波器。
-  const budget = Math.min(2500, Math.max(64, Math.round(fsOut * 4.3e-4)));
-  let M = 4096;
-  while (M < 2.2 * fsOut * 3.5e-3 || M < 4 * (2 * L + 1)) M *= 2;
-  if (M > 65536) M = 65536; // 繞回污染於此深度約 -115dB，對音訊無影響
-  const re = new Float64Array(M), im = new Float64Array(M);
-  for (let t = -L; t <= L; t++) { const v = gaussTap(t); if (t < 0) re[M + t] = v; else re[t] = v; }
-  fftRun(re, im, false);
-  for (let k = 0; k < M; k++) {
-    const mag = Math.hypot(re[k], im[k]);
-    const ph = Math.atan2(im[k], re[k]);
-    re[k] = Math.log(Math.max(mag, 1e-14)); im[k] = ph;
-  }
-  fftRun(re, im, true); // 倒數譜
-  for (let t = 1; t < M / 2; t++) { re[t] *= 2; im[t] *= 2; re[M - t] = 0; im[M - t] = 0; } // 折疊 => 最小相位
-  fftRun(re, im, false);
-  for (let k = 0; k < M; k++) { const lm = Math.min(re[k], 40), ph = im[k]; re[k] = Math.exp(lm) * Math.cos(ph); im[k] = Math.exp(lm) * Math.sin(ph); }
-  fftRun(re, im, true); // 因果最小相位脈衝
-  let sum = 0;
-  for (let i = 0; i < budget; i++) sum += re[i];
-  const g = ratio / sum;
-  const half = (budget - 1) * S;
-  const h = new Float64Array(half + 2);
-  for (let j = 0; j <= half; j++) {
-    const t = j / S;
-    const t0 = Math.floor(t);
-    const fr = t - t0;
-    h[j] = (re[t0] + fr * (re[Math.min(t0 + 1, budget - 1)] - re[t0])) * g;
-  }
-  return { h, S, lo: 0, hi: budget - 1, ratio, integerRatio, fsOut, srcRate, minimumPhase: true, taps: budget };
+  // 最小相位變體：複倒數譜折疊轉換（慣例見 minimumPhaseFromTapFn）
+  return minimumPhaseFromTapFn(fsOut, srcRate, L, S, gaussTap);
 }
 
 // ---------------------------------------------------------------------------
@@ -299,24 +310,26 @@ function buildHqpPsExt2Filter(fsOut, srcRate) {
 }
 
 // ---------------------------------------------------------------------------
-// 泛用 windowed-sinc FIR 設計原語（供濾波器插件使用）：
+// 泛用 windowed-sinc FIR 設計原語（供濾波器插件與使用者自訂濾波使用）：
 //   cutoffRel = 截止 / 源Nyquist（可 >1，extended 性格；上限 0.45·fsOut）
 //   taps      = 半寬 L（輸出樣本單位）
 //   window    = 'hann' | 'hamming' | 'blackman' | 'blackmanHarris' | 'kaiser'(需 asDb)
-// 增益正規化與子樣本网格慣例與內建 FIR 完全相同（Σh = ratio·S）。
+// sincWindowTapFn 回傳未正規化的 tap 函數與網格參數（可餵給 minimumPhaseFromTapFn）；
+// windowedSincFir 增益正規化與子樣本网格慣例與內建 FIR 完全相同（Σh = ratio·S）。
 // ---------------------------------------------------------------------------
-function windowedSincFir(fsOut, srcRate, opts) {
+function sincWindowTapFn(fsOut, srcRate, opts) {
   const fc = Math.min((opts.cutoffRel || 1.135) * srcRate / 2, 0.45 * fsOut);
   const L = Math.max(8, Math.round(opts.taps || 64));
   const ratio = fsOut / srcRate;
   const integerRatio = Math.abs(ratio - Math.round(ratio)) < 1e-9;
   const S = integerRatio ? 1 : 8;
 
+  // 餘弦窗以 u = t/L ∈ [-1,1] 定義（半週期衰減，邊界歸零；與 Kaiser 的 u 慣例一致）
   const winFns = {
-    hann: (u) => 0.5 + 0.5 * Math.cos(2 * Math.PI * u),
-    hamming: (u) => 0.54 + 0.46 * Math.cos(2 * Math.PI * u),
-    blackman: (u) => 0.42 + 0.5 * Math.cos(2 * Math.PI * u) + 0.08 * Math.cos(4 * Math.PI * u),
-    blackmanHarris: (u) => 0.35872 + 0.48804 * Math.cos(2 * Math.PI * u) + 0.14124 * Math.cos(4 * Math.PI * u) + 0.010564 * Math.cos(6 * Math.PI * u)
+    hann: (u) => 0.5 + 0.5 * Math.cos(Math.PI * u),
+    hamming: (u) => 0.54 + 0.46 * Math.cos(Math.PI * u),
+    blackman: (u) => 0.42 + 0.5 * Math.cos(Math.PI * u) + 0.08 * Math.cos(2 * Math.PI * u),
+    blackmanHarris: (u) => 0.35872 + 0.48804 * Math.cos(Math.PI * u) + 0.14124 * Math.cos(2 * Math.PI * u) + 0.010564 * Math.cos(3 * Math.PI * u)
   };
   const wName = opts.window || 'blackmanHarris';
   let winFn;
@@ -329,17 +342,23 @@ function windowedSincFir(fsOut, srcRate, opts) {
     winFn = winFns[wName] || winFns.blackmanHarris;
   }
 
-  const wTap = (t) => {
+  const tapFn = (t) => {
     if (Math.abs(t) > L) return 0;
     const x = 2 * fc * t / fsOut;
     const s = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
     return (2 * fc / fsOut) * s * winFn(t / L);
   };
+  return { tapFn, L, S, fc, ratio, integerRatio, window: wName };
+}
+
+function windowedSincFir(fsOut, srcRate, opts) {
+  const w = sincWindowTapFn(fsOut, srcRate, opts);
+  const { tapFn, L, S, ratio, integerRatio } = w;
 
   const half = L * S;
   const n = 2 * half + 2; // +1 guard tap（與內建 FIR 相同慣例）
   const h = new Float64Array(n);
-  for (let j = -half; j <= half; j++) h[j + half] = wTap(j / S);
+  for (let j = -half; j <= half; j++) h[j + half] = tapFn(j / S);
   let sum = 0;
   for (let i = 0; i < n - 1; i++) sum += h[i];
   const g = ratio * S / sum;
@@ -370,6 +389,8 @@ const FILTER_TOOLBOX = {
   gaussSincFir: buildGaussFilter,
   kaiserSincFir,
   windowedSincFir,
+  sincWindowTapFn,
+  minimumPhaseFromTapFn,
   besselI0,
   fftRun
 };
@@ -449,8 +470,111 @@ function registerCoreFallbackFilters() {
   registerFilterPlugin({ id: 'hqp-ps-ext2', label: 'PS-EXT2 直譯 FIR (陡峭滾降+極深止帶)', sound: '陡峭滾降、極深止帶；鏡像泄漏僅在超聲頻（不可聽）', kind: 'fir', design: (fo, sr, k) => k.kaiserSincFir(fo, sr, { asDb: 180, fcFactor: 1.135, transFactor: 0.135 }) });
 }
 
+// ---------------------------------------------------------------------------
+// 使用者自訂濾波槽（User Filter Slots）
+// 工具箱 UI 只產生純參數 JSON（不執行任何使用者程式碼）；這裡做全部驗證與夾限，
+// 任何異常回傳 null → 該槽不註冊 → 選取它的設定自動退回線性相位。
+// 槽 id 固定為 uf-1..uf-6（與 PEQ 儲存槽相同的 6 槽慣例）。
+// ---------------------------------------------------------------------------
+const USER_FILTER_WINDOWS = ['hann', 'hamming', 'blackman', 'blackmanHarris', 'kaiser'];
+const USER_FILTER_LIMITS = { cutoffMin: 0.8, cutoffMax: 1.35, tapsMin: 16, tapsMax: 512, asMin: 40, asMax: 180 };
+
+function validateUserFilterSpec(spec) {
+  if (!spec || typeof spec !== 'object') return null;
+  if (typeof spec.id !== 'string' || !/^uf-[1-6]$/.test(spec.id)) return null;
+  const name = typeof spec.name === 'string' ? spec.name.trim().slice(0, 40) : '';
+  if (!name) return null;
+  const sound = typeof spec.sound === 'string' ? spec.sound.trim().slice(0, 80) : '';
+  const window = USER_FILTER_WINDOWS.includes(spec.window) ? spec.window : null;
+  if (!window) return null;
+  const phase = spec.phase === 'minimum' ? 'minimum' : 'linear';
+  const num = (v, dflt) => (typeof v === 'number' && Number.isFinite(v) ? v : dflt);
+  const cutoffRel = Math.min(USER_FILTER_LIMITS.cutoffMax, Math.max(USER_FILTER_LIMITS.cutoffMin, num(spec.cutoffRel, 1.135)));
+  const taps = Math.round(Math.min(USER_FILTER_LIMITS.tapsMax, Math.max(USER_FILTER_LIMITS.tapsMin, num(spec.taps, 96))));
+  const asDb = Math.round(Math.min(USER_FILTER_LIMITS.asMax, Math.max(USER_FILTER_LIMITS.asMin, num(spec.asDb, 100))));
+  return { id: spec.id, name, sound, window, phase, cutoffRel, taps, asDb };
+}
+
+function userFilterSpecToDescriptor(spec) {
+  const v = validateUserFilterSpec(spec);
+  if (!v) return null;
+  return {
+    id: v.id,
+    label: '🔧 ' + v.name,
+    sound: v.sound || '使用者自訂濾波器',
+    kind: 'fir',
+    builtin: false,
+    design(fsOut, srcRate, kernel) {
+      const Lcap = Math.floor(150e6 / srcRate / 2); // 引擎成本上限（同內建 FIR 慣例）
+      const L = Math.max(8, Math.min(v.taps, Lcap > 0 ? Lcap : v.taps));
+      const w = kernel.sincWindowTapFn(fsOut, srcRate, { cutoffRel: v.cutoffRel, L, window: v.window, asDb: v.asDb });
+      if (!w) return null;
+      if (v.phase === 'minimum') return kernel.minimumPhaseFromTapFn(fsOut, srcRate, L, w.S, w.tapFn);
+      return kernel.windowedSincFir(fsOut, srcRate, { cutoffRel: v.cutoffRel, taps: L, window: v.window, asDb: v.asDb });
+    }
+  };
+}
+
+function unregisterFilterPlugin(id) {
+  if (typeof id === 'string' && FILTER_REGISTRY.has(id)) FILTER_REGISTRY.delete(id);
+}
+
+// 從 JSON 檔載入槽位：{ version: 1, slots: [spec, ...] }；無效條目跳過。
+function loadUserFilterSpecs(filePath) {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch (e) { return { loaded: 0, failed: [] }; }
+  const slots = data && Array.isArray(data.slots) ? data.slots : [];
+  let loaded = 0;
+  const failed = [];
+  for (const s of slots) {
+    const d = userFilterSpecToDescriptor(s);
+    if (d) { registerFilterPlugin(d); loaded++; } else if (s && s.id) failed.push(String(s.id));
+  }
+  return { loaded, failed };
+}
+
+// 槽位存檔後重載：移除全部 uf-* 再從檔案重建（主行程即時生效；新 worker 自行載入）。
+function reloadUserFilters() {
+  for (const id of [...FILTER_REGISTRY.keys()]) {
+    if (id.startsWith('uf-')) FILTER_REGISTRY.delete(id);
+  }
+  if (process.env.ROOPLAYER_USER_FILTERS) return loadUserFilterSpecs(process.env.ROOPLAYER_USER_FILTERS);
+  return { loaded: 0, failed: [] };
+}
+
+// 頻率響應預覽：回傳 { xs(Hz), ysDb }（0..min(fsOut/2, 1.6×源Nyquist)，-120dB 底）。
+function previewUserFilterSpec(spec, srcRate, fsOut) {
+  const d = userFilterSpecToDescriptor(spec);
+  if (!d) return null;
+  let gf;
+  try { gf = d.design(fsOut, srcRate, FILTER_TOOLBOX); } catch (e) { return null; }
+  if (!gf) return null;
+  const N = 512;
+  const fMax = Math.min(fsOut / 2, 1.15 * srcRate); // 完整顯示鏡像帶（源取樣率 ± 截止）
+  const h = gf.h, S = gf.S, norm = gf.ratio * S;
+  const xs = new Array(N), ysDb = new Array(N);
+  for (let i = 0; i < N; i++) {
+    const f = fMax * i / (N - 1);
+    const w = 2 * Math.PI * f / (fsOut * S);
+    let re = 0, im = 0;
+    for (let j = 0; j < h.length; j++) {
+      const a = h[j];
+      if (a === 0) continue;
+      const ang = w * j;
+      re += a * Math.cos(ang);
+      im -= a * Math.sin(ang);
+    }
+    const mag = Math.hypot(re, im) / norm;
+    xs[i] = f;
+    ysDb[i] = Math.max(-120, 20 * Math.log10(Math.max(mag, 1e-7)));
+  }
+  return { xs, ysDb, srcNyq: srcRate / 2, fsOut };
+}
+
 loadFilterPlugins();
 if (!FILTER_REGISTRY.has('linear')) registerCoreFallbackFilters();
+// 使用者自訂濾波槽（工具箱 UI 建立，主行程存檔；worker 經環境變數同一路徑載入）
+if (process.env.ROOPLAYER_USER_FILTERS) loadUserFilterSpecs(process.env.ROOPLAYER_USER_FILTERS);
 
 // ---- Polyphase phase tables (integer AND rational upsampling ratios) ----
 // With ratio = P/Q in lowest terms, the FIR tap pattern for output index o depends
@@ -1044,6 +1168,8 @@ module.exports = {
   buildHqpPsExt2Filter,
   kaiserSincFir,
   windowedSincFir,
+  sincWindowTapFn,
+  minimumPhaseFromTapFn,
   registerFilterPlugin,
   listFilterPlugins,
   getFilterPlugin,
@@ -1051,6 +1177,14 @@ module.exports = {
   buildFilterForPhase,
   resolveInterpFn,
   loadFilterPlugins,
+  unregisterFilterPlugin,
+  validateUserFilterSpec,
+  userFilterSpecToDescriptor,
+  loadUserFilterSpecs,
+  reloadUserFilters,
+  previewUserFilterSpec,
+  USER_FILTER_WINDOWS,
+  USER_FILTER_LIMITS,
   firSample,
   getDsdRate,
   buildDsfHeader,

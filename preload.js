@@ -28,6 +28,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pickIrFile: () => ipcRenderer.invoke('conv:pickIrFile'),
   getIrInfo: (irPath) => ipcRenderer.invoke('conv:getIrInfo', irPath),
   listFilterPlugins: () => ipcRenderer.invoke('dsp:listFilterPlugins'),
+  listFilterSlots: () => ipcRenderer.invoke('filters:listSlots'),
+  saveFilterSlot: (spec) => ipcRenderer.invoke('filters:saveSlot', spec),
+  deleteFilterSlot: (slotId) => ipcRenderer.invoke('filters:deleteSlot', slotId),
+  previewFilterSpec: (spec, srcRate, targetRate) => ipcRenderer.invoke('filters:preview', spec, srcRate, targetRate),
   getAudioDuration: (filePath) => ipcRenderer.invoke('audio:getAudioDuration', filePath),
   translateToZhTw: (text) => ipcRenderer.invoke('util:translateToZhTw', text),
 
