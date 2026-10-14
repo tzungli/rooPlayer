@@ -30,10 +30,6 @@
     </div>
 
     <div class="titlebar-right">
-      <div class="sync-status" id="syncStatus">
-        <span class="status-indicator online"></span>
-        <span id="syncText">資料庫已連線</span>
-      </div>
       <button id="btnThemeToggle" class="icon-btn theme-toggle-btn" title="切換深色 / 淺色主題">
         <span id="themeIcon">🌙</span> <span id="themeLabel">深色</span>
       </button>
@@ -508,10 +504,7 @@
           <!-- 同類型推薦專輯 (由歌曲 meta 資料判斷) -->
           <div class="album-recommendations-section" id="albumRecommendationsSection">
             <div class="section-header" style="margin-bottom: 12px;">
-              <div class="header-with-tag">
-                <h3 style="font-size: 16px;">✨ 同類型推薦專輯 Recommended Albums</h3>
-                <span class="recommend-reason-badge" id="recommendReasonBadge">依曲風與音樂類型推薦</span>
-              </div>
+              <h3 style="font-size: 16px;">✨ 同類型推薦專輯 Recommended Albums</h3>
               <span class="section-count-badge" id="recommendCountBadge">0 張推薦</span>
             </div>
             <p class="section-desc" id="recommendDesc" style="margin-bottom: 16px; font-size: 12px; color: var(--text-muted);">
@@ -525,10 +518,7 @@
           <!-- 推薦演出者 (參考相同流派隨機推薦) -->
           <div class="album-recommendations-section" id="albumArtistsRecommendationsSection" style="margin-top: 36px;">
             <div class="section-header" style="margin-bottom: 12px;">
-              <div class="header-with-tag">
-                <h3 style="font-size: 16px;">🎤 推薦演出者 Recommended Artists</h3>
-                <span class="recommend-reason-badge" id="recommendArtistReasonBadge" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; border-color: rgba(245, 158, 11, 0.3);">相同風格流派推薦</span>
-              </div>
+              <h3 style="font-size: 16px;">🎤 推薦演出者 Recommended Artists</h3>
               <span class="section-count-badge" id="recommendArtistCountBadge">0 位推薦</span>
             </div>
             <p class="section-desc" id="recommendArtistDesc" style="margin-bottom: 16px; font-size: 12px; color: var(--text-muted);">
