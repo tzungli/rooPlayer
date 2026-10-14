@@ -746,6 +746,60 @@ async function initApp() {
         if (window.electronAPI && window.electronAPI.captureStep) window.electronAPI.captureStep(5, 'conv ready');
       } catch (e) { console.warn('[rpCapture] open conv failed:', e); }
     }, 14500);
+    // 步驟 6：TIDAL 與本機曲庫整合展示——示範一筆「已加入曲庫」的 TIDAL Hi-Res 專輯，
+    // 與本機專輯一同出現在首頁「最近新增專輯」（addedAt 排序混合呈現）
+    setTimeout(() => {
+      try {
+        const tidalAlbumId = '100000042';
+        if (!isTidalAlbumInLibrary(tidalAlbumId)) {
+          const coverUrl = createSvgCover('Time Out', 'Dave Brubeck', '#0e7490', '#083344');
+          const now = Date.now();
+          const tidalTracks = [
+            { trackNumber: 1, title: 'Blue Rondo à la Turk', duration: 404 },
+            { trackNumber: 2, title: 'Strange Meadow Lark', duration: 342 },
+            { trackNumber: 3, title: 'Take Five', duration: 195 },
+            { trackNumber: 4, title: 'Three to Claws', duration: 324 },
+            { trackNumber: 5, title: "Everybody's Jumpin'", duration: 223 }
+          ].map((t, i) => ({
+            id: `tidal_${tidalAlbumId}_${i}`,
+            isTidal: true, tidalAlbumId, tidalId: tidalAlbumId,
+            title: t.title, trackNumber: t.trackNumber, duration: t.duration,
+            album: 'Time Out', artist: 'Dave Brubeck', albumArtist: 'Dave Brubeck',
+            year: 1959, genre: 'Jazz', cover: coverUrl,
+            formatName: 'FLAC', sampleRate: 96000, bitsPerSample: 24, isLossless: true,
+            audioQuality: 'HIRES_LOSSLESS', addedAt: now, filePath: null
+          }));
+          state.tracks = [...state.tracks, ...tidalTracks];
+          rebuildLibraryCollections();
+          renderOverview();
+        }
+        const grid = document.getElementById('overviewGrid');
+        if (grid) grid.scrollIntoView({ block: 'center' });
+        if (window.electronAPI && window.electronAPI.captureStep) window.electronAPI.captureStep(6, 'tidal integration ready');
+      } catch (e) { console.warn('[rpCapture] tidal integration failed:', e); }
+    }, 17000);
+    // 步驟 7：藝人生活誌 Artist Spotlight——指定 Miles Davis（demo 曲庫內），
+    // 等生平簡介（維基百科＋自動翻譯）載入完成再回報
+    setTimeout(() => {
+      try {
+        currentSpotlightArtistName = 'Miles Davis';
+        renderArtistSpotlight();
+        const bioEl = document.getElementById('spotlightBio');
+        const nameEl = document.getElementById('spotlightName');
+        let tries = 0;
+        const iv = setInterval(() => {
+          tries++;
+          const ready = nameEl && nameEl.textContent.includes('Miles Davis') &&
+            bioEl && bioEl.textContent.length > 120 && !bioEl.textContent.includes('正在載入');
+          if (ready || tries > 45) {
+            clearInterval(iv);
+            const sec = document.getElementById('artistSpotlightSection');
+            if (sec) sec.scrollIntoView({ block: 'start' });
+            if (window.electronAPI && window.electronAPI.captureStep) window.electronAPI.captureStep(7, 'spotlight ' + (ready ? 'loaded' : 'timeout') + ' bioLen=' + (bioEl ? bioEl.textContent.length : 0));
+          }
+        }, 700);
+      } catch (e) { console.warn('[rpCapture] spotlight failed:', e); }
+    }, 19000);
   }
 }
 

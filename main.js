@@ -212,6 +212,18 @@ function runCaptureSequence() {
       await sleep(1400); // 等 getIrInfo IPC 回傳並渲染
       await captureShot('conv.png');
 
+      // TIDAL 與本機曲庫整合（首頁最近新增專輯混合呈現示範 TIDAL Hi-Res 專輯）
+      console.log('[capture] step 6: tidal (waiting renderer signal)');
+      await waitRenderer(6, 30000);
+      await sleep(1200);
+      await captureShot('tidal.png');
+
+      // 藝人生活誌 Artist Spotlight（生平簡介載入完成後才截）
+      console.log('[capture] step 7: spotlight (waiting renderer signal)');
+      await waitRenderer(7, 45000);
+      await sleep(1800); // 等照片與相關專輯卡片渲染
+      await captureShot('spotlight.png');
+
       console.log('[capture] done');
     } catch (e) {
       console.error('[capture] failed:', e);
