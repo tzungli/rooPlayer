@@ -2158,6 +2158,23 @@ body.table-col-resizing * {
 }
 
 /* ===== Parametric Equalizer (PEQ) editor ===== */
+/* PEQ card: independent card in the right column; cyan identity when active (vs engine purple) */
+.dsp-sox-card.peq-card.active {
+  border-color: rgba(34, 211, 238, 0.4);
+  background: rgba(34, 211, 238, 0.04);
+}
+
+[data-theme="light"] .dsp-sox-card.peq-card.active {
+  border-color: rgba(14, 116, 144, 0.45);
+  background: rgba(14, 116, 144, 0.05);
+}
+
+.peq-card .peq-editor {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 .peq-editor {
   margin-top: 8px;
 }

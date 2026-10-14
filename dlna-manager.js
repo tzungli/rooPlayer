@@ -915,8 +915,9 @@ class DlnaManager extends EventEmitter {
     let protocolInfo = 'http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
 
     if (isNativeDsf) {
-      if (isTv) {
-        // Smart TV: decimate DSF to 24-bit 88.2kHz WAV
+      if (isTv || (dspOptions && dspOptions.peq && !isDsdUpsample)) {
+        // Smart TV (cannot decode DSD) or PEQ-only mode: decimate DSF to 24-bit 88.2kHz WAV (PEQ applied when set).
+        // Engine DSD-modulation mode (isDsdUpsample) keeps the native DSF modulation path below instead.
         const session = await this.nativeDspStreamer.createDsdDecimateSession(streamToken, track.filePath, startSec, track, dspOptions ? dspOptions.peq : null);
         this.currentStreamSession = session;
         activeFilePath = session.filePath;
@@ -958,9 +959,9 @@ class DlnaManager extends EventEmitter {
       streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
       mimeType = 'audio/wav';
       protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
-    } else if (dspOptions && dspOptions.enabled) {
-      // PCM High-Res Progressive Upsampling to 24-bit WAV
-      const targetRate = dspOptions.sampleRate || 192000;
+    } else if (dspOptions && (dspOptions.enabled || dspOptions.peq)) {
+      // PCM Progressive DSP to 24-bit WAV: full upsampling (engine on) or PEQ-only at the native sample rate
+      const targetRate = dspOptions.enabled ? (dspOptions.sampleRate || 192000) : (dspOptions.sampleRate || track.sampleRate || 44100);
       const filterPhase = dspOptions.filterPhase || 'linear';
       const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, targetRate, track, filterPhase, dspOptions ? dspOptions.peq : null);
       this.currentStreamSession = session;
@@ -1015,7 +1016,7 @@ class DlnaManager extends EventEmitter {
 
     // Duration in H:MM:SS.000 format
     const trackDur = (track.duration && track.duration > 0) ? track.duration : 0;
-    const effectiveDur = (startSec > 0 && trackDur > startSec && (isDsdUpsample || (dspOptions && dspOptions.enabled)))
+    const effectiveDur = (startSec > 0 && trackDur > startSec && (isDsdUpsample || (dspOptions && (dspOptions.enabled || dspOptions.peq))))
       ? (trackDur - startSec)
       : trackDur;
     const durationFormatted = effectiveDur > 0 ? formatHmsMs(effectiveDur) : '';
@@ -1059,7 +1060,7 @@ class DlnaManager extends EventEmitter {
       `    <upnp:class>object.item.audioItem.musicTrack</upnp:class>`
     );
 
-    if (isNativeDsf || isDsdUpsample) {
+    if ((isNativeDsf && !(dspOptions && dspOptions.peq)) || isDsdUpsample) {
       let dsdHz = 2822400;
       if (dspOptions && dspOptions.dsdMode) {
         const m = dspOptions.dsdMode.toLowerCase();
@@ -1153,7 +1154,7 @@ class DlnaManager extends EventEmitter {
     }
 
     // 5. If seeking needed on non-DSD/non-DSP file (since DSD & upsample streams bake the start offset directly in the native engine)
-    if (startSec > 0 && !isNativeDsd && !isDsdUpsample && (!dspOptions || !dspOptions.enabled)) {
+    if (startSec > 0 && !isNativeDsd && !isDsdUpsample && (!dspOptions || (!dspOptions.enabled && !dspOptions.peq))) {
       await new Promise(r => setTimeout(r, 300));
       await this.seek(deviceId, startSec).catch(() => {});
     }

@@ -94,10 +94,11 @@ function peqHeadroomDb() {
 }
 
 // Compact payload sent to the engine (DLNA dspOptions.peq / local stream ?peq= JSON).
-// PEQ is part of the DSP path: with the upsampling engine off it stays inactive.
+// PEQ is fully independent of the upsampling engine: it acts whenever its own switch is on.
+// With the engine off the engine applies it at the native sample rate.
 function buildPeqPayload() {
   const peq = state.dsp && state.dsp.peq;
-  if (!state.dsp || !state.dsp.enabled || !peq || !peq.enabled) return null;
+  if (!state.dsp || !peq || !peq.enabled) return null;
   const bands = peq.bands.filter(b => b.on).map(b => ({ on: true, type: b.type, freq: Math.round(b.freq), gain: b.gain, q: b.q }));
   if (!bands.length) return null;
   return { enabled: true, bands };
@@ -106,6 +107,28 @@ function buildPeqPayload() {
 function peqPayloadJson() {
   const p = buildPeqPayload();
   return p ? JSON.stringify(p) : '';
+}
+
+// True when any native-DSP processing must run: upsampling engine on, or PEQ active.
+function localDspActive() {
+  return !!(state.dsp && state.dsp.enabled) || countActivePeqBands() > 0;
+}
+
+// Single builder for the engine dspOptions (DLNA playTrack). When the upsampling engine is
+// off but PEQ is active, sampleRate stays at the track's native rate (PEQ-only processing).
+function buildDspOptions(track) {
+  const engineOn = !!(state.dsp && state.dsp.enabled);
+  const peqPayload = buildPeqPayload();
+  if (!engineOn && !peqPayload) return null;
+  const srcRate = (track && track.sampleRate) || 44100;
+  return {
+    enabled: engineOn,
+    sampleRate: engineOn ? calculateTargetSampleRate(srcRate, state.dsp.rateMode) : srcRate,
+    dsdMode: engineOn && isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
+    dsdOrder: state.dsp.dsdOrder || 5,
+    filterPhase: state.dsp.filterPhase || 'linear',
+    peq: peqPayload
+  };
 }
 
 // Global State
@@ -5047,7 +5070,7 @@ function prefetchNextTidalTracks(count = 2) {
           const cachedFast = await window.electronAPI.tidalCacheTrack(t.tidalId);
           if (cachedFast) { t.filePath = cachedFast; continue; }
           if (!t.streamUrl && window.tidalService) {
-            const quality = (state.dsp && state.dsp.enabled && state.activeAudioZone === 'local') ? 'HI_RES_LOSSLESS' : 'LOSSLESS';
+            const quality = (localDspActive() && state.activeAudioZone === 'local') ? 'HI_RES_LOSSLESS' : 'LOSSLESS';
             const sInfo = await window.tidalService.getTrackStreamUrl(t.tidalId, quality);
             if (sInfo && sInfo.url) {
               t.streamUrl = sInfo.url;
@@ -5154,7 +5177,7 @@ async function playCurrentTrack() {
 
     // Resolve TIDAL streamUrl and cache file for DLNA streaming
     if (track.isTidal) {
-      const tidalQuality = (state.dsp && state.dsp.enabled) ? 'HI_RES_LOSSLESS' : 'LOSSLESS';
+      const tidalQuality = localDspActive() ? 'HI_RES_LOSSLESS' : 'LOSSLESS';
       let streamInfo = null;
 
       // Fast path: file already cached on disk (or manifest already registered in the
@@ -5229,14 +5252,7 @@ async function playCurrentTrack() {
     }
 
     if (window.electronAPI && window.electronAPI.playDlnaTrack) {
-      const dspOptions = state.dsp && state.dsp.enabled ? {
-        enabled: true,
-        sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-        dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
-        dsdOrder: state.dsp.dsdOrder || 5,
-        filterPhase: state.dsp.filterPhase || 'linear',
-        peq: buildPeqPayload()
-      } : null;
+      const dspOptions = buildDspOptions(track);
 
       const enrichedTrack = getEnrichedTrack(track);
       window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, enrichedTrack, 0, dspOptions).then(res => {
@@ -5287,7 +5303,7 @@ async function playCurrentTrack() {
 
     // Fast path for DSP upsampling: a cached local FLAC file needs no stream URL
     // or TIDAL API round-trip — go straight into the progressive DSP session.
-    if (state.dsp && state.dsp.enabled && window.electronAPI && window.electronAPI.getSoxStreamUrl && window.electronAPI.tidalCacheTrack) {
+    if (localDspActive() && window.electronAPI && window.electronAPI.getSoxStreamUrl && window.electronAPI.tidalCacheTrack) {
       if (!track.filePath || !String(track.filePath).endsWith('.flac')) {
         try {
           const cachedFast = await window.electronAPI.tidalCacheTrack(track.tidalId);
@@ -5309,7 +5325,7 @@ async function playCurrentTrack() {
     const getTidalStreamPromise = (track.streamUrl)
       ? Promise.resolve({ url: track.streamUrl, filePath: track.filePath, sampleRate: track.sampleRate, bitDepth: track.bitDepth, audioQuality: track.audioQuality })
       : ((window.tidalService)
-          ? window.tidalService.getTrackStreamUrl(track.tidalId, (state.dsp && state.dsp.enabled) ? 'HI_RES_LOSSLESS' : 'LOSSLESS')
+          ? window.tidalService.getTrackStreamUrl(track.tidalId, localDspActive() ? 'HI_RES_LOSSLESS' : 'LOSSLESS')
           : Promise.reject(new Error('TIDAL 服務模組未初始化'))
         ).then(info => {
           track.streamUrl = info.url;
@@ -5325,8 +5341,10 @@ async function playCurrentTrack() {
       if (!info || !info.url) throw new Error('未取得有效音訊串流');
 
       // If DSP Upsampling (SoX Hermite / DSD 1-bit modulator) is enabled:
-      if (state.dsp && state.dsp.enabled && window.electronAPI && window.electronAPI.getSoxStreamUrl) {
-        playerArtist.textContent = `⚡ 正在透過 DSP 升頻引擎調變 TIDAL 音訊...`;
+      if (localDspActive() && window.electronAPI && window.electronAPI.getSoxStreamUrl) {
+        playerArtist.textContent = localDspActive() && !state.dsp.enabled
+          ? `🎚️ 正在透過參數化等化器處理 TIDAL 音訊 (原生採樣率)...`
+          : `⚡ 正在透過 DSP 升頻引擎調變 TIDAL 音訊...`;
         let cached = track.filePath;
         const buildOptionalInfo = (srcInfo) => (srcInfo && srcInfo.manifest) ? {
           manifest: srcInfo.manifest,
@@ -5436,7 +5454,7 @@ async function playCurrentTrack() {
     stopVirtualProgress();
     stopDemoSynth();
     playDsdTrack(track, 0);
-  } else if (state.dsp && state.dsp.enabled && window.electronAPI && window.electronAPI.getSoxStreamUrl) {
+  } else if (localDspActive() && window.electronAPI && window.electronAPI.getSoxStreamUrl) {
     isCurrentDsd = false;
     currentDsdOffset = 0;
     stopVirtualProgress();
@@ -5579,8 +5597,9 @@ async function playSoxTrack(track, startSec = 0) {
       }).catch(() => {});
     }
 
-    const targetRate = calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode);
-    const isDsd = isDsdRateMode(state.dsp.rateMode);
+    const engineOn = !!(state.dsp && state.dsp.enabled);
+    const targetRate = engineOn ? calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode) : (track.sampleRate || 44100);
+    const isDsd = engineOn && isDsdRateMode(state.dsp.rateMode);
     const dsdMode = isDsd ? state.dsp.rateMode : '';
     const dsdOrder = state.dsp.dsdOrder || 5;
     const filterPhase = state.dsp.filterPhase || 'linear';
@@ -5600,6 +5619,8 @@ async function playSoxTrack(track, startSec = 0) {
       if (isDsd) {
         const mhz = getDsdMhz(state.dsp.rateMode);
         showToast(`⚡ 1-bit DSD 調變: PCM ➔ ${state.dsp.rateMode.toUpperCase()} (${dsdOrder} 階 • ${phaseText} • ${mhz})`);
+      } else if (!engineOn) {
+        showToast(`🎚️ 參數化等化器 (原生採樣率處理): ${formatKhz(targetRate)} 24-bit • ${countActivePeqBands()} 段作用中`);
       } else {
         const trkFmt = getAudioFormatFromPath(track.filePath || track.fileName, track.formatName || 'PCM').toUpperCase();
         showToast(`🎛️ SoX 升頻: ${formatKhz(track.sampleRate || 44100)} ➔ ${formatKhz(targetRate)} (24-bit • ${phaseText} • ${trkFmt})`);
@@ -5791,81 +5812,97 @@ function updateSignalPathUI(track = null) {
       if (engineDesc) engineDesc.textContent = `64-bit 浮點即時超取樣升頻核心 (${phaseDesc}) ➔ 輸出至 24-bit ${targetKhz}`;
       if (signalPathDot) signalPathDot.className = 'signal-dot purple';
     }
-
-    // PEQ stage in the signal flow diagram: JS repositions the stage node to the exact
-    // point of the chain where the engine applies it - before the 1-bit DSD modulation
-    // stage in DSD mode (PEQ runs on the source PCM there), after the PCM upsampler
-    // otherwise (PEQ runs at the output rate there).
-    const peqStage = document.getElementById('signalPeqStage');
-    const peqArrow = document.getElementById('signalPeqArrow');
-    const peqActiveCount = countActivePeqBands();
-    if (peqStage && peqArrow) {
-      if (peqActiveCount > 0) {
-        const stagesEl = peqStage.parentElement;
-        let anchor = isDsdRateMode(state.dsp.rateMode)
-          ? (signalSoxArrow && signalSoxArrow.parentElement === stagesEl ? signalSoxArrow : null)
-          : (() => {
-              let a = signalSoxStage && signalSoxStage.parentElement === stagesEl ? signalSoxStage.nextElementSibling : null;
-              if (a === peqArrow) a = peqStage.nextElementSibling; // already positioned here
-              return a;
-            })();
-        if (anchor && anchor.parentElement === stagesEl) {
-          stagesEl.insertBefore(peqArrow, anchor);
-          stagesEl.insertBefore(peqStage, anchor);
-        }
-        peqArrow.style.display = 'block';
-        peqStage.style.display = 'flex';
-        const peqDesc = document.getElementById('signalPeqDesc');
-        if (peqDesc) peqDesc.textContent = peqStageSummary();
-      } else {
-        peqArrow.style.display = 'none';
-        peqStage.style.display = 'none';
-      }
-    }
   } else if (isNativeDsd) {
     const dsdRate = track.sampleRate ? `${(track.sampleRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
     const isDlna = state.activeAudioZone !== 'local' && state.activeDlnaDevice;
+    const peqOn = countActivePeqBands() > 0;
     if (isDlna) {
-      if (signalPathBadge) signalPathBadge.textContent = `BIT-PERFECT | Native DSD (1-bit / ${dsdRate}) ⚡`;
+      if (peqOn) {
+        if (signalPathBadge) signalPathBadge.textContent = `PEQ + DSD ➔ 24/88.2kHz ⚡`;
+        if (statusPill) statusPill.textContent = 'ENHANCED (DSD ➔ 24/88.2k + PEQ)';
+      } else {
+        if (signalPathBadge) signalPathBadge.textContent = `BIT-PERFECT | Native DSD (1-bit / ${dsdRate}) ⚡`;
+        if (statusPill) statusPill.textContent = 'BIT-PERFECT (DIRECT STREAMING)';
+      }
       if (sourceTitle) sourceTitle.textContent = `DSD (1-bit / ${dsdRate}) — ${track.title}`;
-      if (statusPill) statusPill.textContent = 'BIT-PERFECT (DIRECT STREAMING)';
       if (sourceDesc) sourceDesc.textContent = '原始 DSD 母帶碼流 (Bitstream 1-bit PDM)';
 
       if (signalSoxArrow) signalSoxArrow.style.display = 'none';
       if (signalSoxStage) signalSoxStage.style.display = 'none';
 
-      if (engineTitle) engineTitle.textContent = 'rooPlayer Bit-Perfect DSD Streamer';
-      if (engineDesc) engineDesc.textContent = '原生 1-bit DSD (Sony DSF) 直通傳輸至網路渲染器，無重取樣或轉換';
+      if (engineTitle) engineTitle.textContent = peqOn ? 'rooPlayer DSD-to-PCM + PEQ Streamer' : 'rooPlayer Bit-Perfect DSD Streamer';
+      if (engineDesc) engineDesc.textContent = peqOn
+        ? `原生 DSD 即時降採樣至 24-bit 88.2kHz，並以參數化等化器處理（${countActivePeqBands()} 段作用中）`
+        : '原生 1-bit DSD (Sony DSF) 直通傳輸至網路渲染器，無重取樣或轉換';
       if (signalPathDot) signalPathDot.className = 'signal-dot dsd-gold';
     } else {
-      if (signalPathBadge) signalPathBadge.textContent = `ENHANCED | DSD ➔ 24/88.2kHz PCM`;
+      if (signalPathBadge) signalPathBadge.textContent = peqOn ? `PEQ | DSD ➔ 24/88.2kHz ⚡` : `ENHANCED | DSD ➔ 24/88.2kHz PCM`;
       if (sourceTitle) sourceTitle.textContent = `DSD (1-bit / ${dsdRate}) — ${track.title}`;
-      if (statusPill) statusPill.textContent = 'ENHANCED (HIGH PRECISION TRANSCODE)';
+      if (statusPill) statusPill.textContent = peqOn ? 'ENHANCED (TRANSCODE + PEQ)' : 'ENHANCED (HIGH PRECISION TRANSCODE)';
       if (sourceDesc) sourceDesc.textContent = '原始 DSD 母帶碼流 (Bitstream 1-bit PDM)';
 
       if (signalSoxArrow) signalSoxArrow.style.display = 'none';
       if (signalSoxStage) signalSoxStage.style.display = 'none';
 
       if (engineTitle) engineTitle.textContent = 'rooPlayer DSD-to-PCM Audio Engine';
-      if (engineDesc) engineDesc.textContent = '64-bit 浮點即時降採樣 (Decimation Filter) ➔ 24-bit 88.2kHz PCM';
+      if (engineDesc) engineDesc.textContent = peqOn
+        ? `64-bit 浮點即時降採樣 (Decimation Filter) ＋ 參數化等化器 (${countActivePeqBands()} 段作用中) ➔ 24-bit 88.2kHz PCM`
+        : '64-bit 浮點即時降採樣 (Decimation Filter) ➔ 24-bit 88.2kHz PCM';
       if (signalPathDot) signalPathDot.className = 'signal-dot purple';
     }
   } else {
     const sampleKhz = formatKhz(track.sampleRate || 44100);
     const bitDepth = track.bitDepth || track.bitsPerSample || 16;
     const isLossless = track.isLossless || ['WAV', 'FLAC', 'AIFF', 'ALAC', 'APE'].includes(trkFmt) || track.isTidal;
+    const peqN = countActivePeqBands();
+    const peqOn = peqN > 0;
 
-    if (signalPathBadge) signalPathBadge.textContent = `${isLossless ? 'LOSSLESS' : 'ENHANCED'} | ${trkFmt} ${bitDepth}/${sampleKhz}`;
+    if (signalPathBadge) signalPathBadge.textContent = peqOn
+      ? `PEQ (${peqN}段) ⚡ | ${trkFmt} ${bitDepth}/${sampleKhz}`
+      : `${isLossless ? 'LOSSLESS' : 'ENHANCED'} | ${trkFmt} ${bitDepth}/${sampleKhz}`;
     if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${bitDepth}-bit / ${sampleKhz} (${track.title})`;
-    if (statusPill) statusPill.textContent = isLossless ? 'LOSSLESS BIT-PERFECT' : 'ENHANCED';
+    if (statusPill) statusPill.textContent = peqOn ? 'PEQ ACTIVE (NATIVE-RATE DSP)' : (isLossless ? 'LOSSLESS BIT-PERFECT' : 'ENHANCED');
     if (sourceDesc) sourceDesc.textContent = customSourceDesc;
 
     if (signalSoxArrow) signalSoxArrow.style.display = 'none';
     if (signalSoxStage) signalSoxStage.style.display = 'none';
 
-    if (engineTitle) engineTitle.textContent = 'rooPlayer Core Audio Engine';
-    if (engineDesc) engineDesc.textContent = '64-bit 浮點無損混音核心，零採樣損失處理';
+    if (engineTitle) engineTitle.textContent = peqOn ? 'rooPlayer Native DSP (PEQ 原生率處理)' : 'rooPlayer Core Audio Engine';
+    if (engineDesc) engineDesc.textContent = peqOn
+      ? `參數化等化器即時處理中：原生 ${sampleKhz} 不升頻，${peqN} 段作用中（自動預降 ${peqHeadroomDb().toFixed(1)} dB）`
+      : '64-bit 浮點無損混音核心，零採樣損失處理';
     if (signalPathDot) signalPathDot.className = 'signal-dot purple';
+  }
+
+  // PEQ stage in the signal flow diagram (shown in every mode when PEQ is active). JS
+  // repositions the node to the exact point of the chain where the engine applies it:
+  //  - engine on + PCM upsampling: after the upsampler stage (PEQ runs at the output rate)
+  //  - engine on + DSD modulation: before the modulation stage (PEQ runs on the source PCM)
+  //  - engine off (PEQ-only): right after the source stage (PEQ runs at the native rate)
+  const peqStage = document.getElementById('signalPeqStage');
+  const peqArrow = document.getElementById('signalPeqArrow');
+  const peqActiveCount = countActivePeqBands();
+  if (peqStage && peqArrow) {
+    if (peqActiveCount > 0) {
+      const stagesEl = peqStage.parentElement;
+      let anchor = null;
+      if (isDspActive && !isDsdRateMode(curRateMode)) {
+        anchor = signalSoxStage && signalSoxStage.parentElement === stagesEl ? signalSoxStage.nextElementSibling : null;
+        if (anchor === peqArrow) anchor = peqStage.nextElementSibling; // already positioned here
+      }
+      if (!anchor || anchor.parentElement !== stagesEl) anchor = signalSoxArrow; // DSD mode / PEQ-only
+      if (anchor && anchor.parentElement === stagesEl) {
+        stagesEl.insertBefore(peqArrow, anchor);
+        stagesEl.insertBefore(peqStage, anchor);
+      }
+      peqArrow.style.display = 'block';
+      peqStage.style.display = 'flex';
+      const peqDesc = document.getElementById('signalPeqDesc');
+      if (peqDesc) peqDesc.textContent = peqStageSummary();
+    } else {
+      peqArrow.style.display = 'none';
+      peqStage.style.display = 'none';
+    }
   }
 }
 
@@ -5901,22 +5938,17 @@ function peqScheduleReapply() {
   if (peqReapplyTimer) clearTimeout(peqReapplyTimer);
   peqReapplyTimer = setTimeout(() => {
     peqReapplyTimer = null;
-    if (!(state.dsp.enabled && state.isPlaying)) return;
+    if (!((state.dsp.enabled || countActivePeqBands() > 0) && state.isPlaying)) return;
     const track = state.queue[state.currentTrackIndex];
     if (!track || track.isDemo || !track.filePath) return;
     const curSec = getCurrentPlaybackTime();
     if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
-      const dspOptions = {
-        enabled: true,
-        sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-        dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
-        dsdOrder: state.dsp.dsdOrder || 5,
-        filterPhase: state.dsp.filterPhase || 'linear',
-        peq: buildPeqPayload()
-      };
-      window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), dspOptions);
+      window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), buildDspOptions(track));
     } else {
-      playSoxTrack(track, Math.floor(curSec));
+      const ext = (track.formatName || '').toUpperCase();
+      const isDsd = ext === 'DSF' || ext === 'DFF' || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
+      if (isDsd) playDsdTrack(track, Math.floor(curSec));
+      else playSoxTrack(track, Math.floor(curSec));
     }
   }, 450);
 }
@@ -6064,9 +6096,9 @@ function updatePeqHint() {
   const peq = state.dsp.peq;
   if (!peq.enabled) { hint.textContent = '關閉'; return; }
   const n = peq.bands.filter(b => b.on).length;
-  if (!state.dsp.enabled) { hint.textContent = `已設定 ${n} 段（需啟用升頻引擎）`; return; }
   if (!n) { hint.textContent = '尚無作用頻段'; return; }
-  hint.textContent = `${n} 段作用中 (預降 ${peqHeadroomDb().toFixed(1)} dB)`;
+  const mode = state.dsp.enabled ? '' : '（原生率處理）';
+  hint.textContent = `${n} 段作用中 (預降 ${peqHeadroomDb().toFixed(1)} dB)${mode}`;
 }
 
 function peqUpdateGainCell(row, band) {
@@ -6152,6 +6184,8 @@ function syncPeqModalUI() {
   const peq = state.dsp.peq;
   const cb = document.getElementById('togglePeq');
   const editor = document.getElementById('peqEditor');
+  const peqCard = document.getElementById('peqCard');
+  if (peqCard) peqCard.classList.toggle('active', peq.enabled);
   if (cb) cb.checked = peq.enabled;
   if (editor) editor.style.display = peq.enabled ? 'block' : 'none';
   document.querySelectorAll('#peqPresetSelector .dsp-pill').forEach(p =>
@@ -6169,14 +6203,8 @@ function initPeqControls() {
   if (togglePeq) {
     togglePeq.addEventListener('change', () => {
       state.dsp.peq.enabled = togglePeq.checked;
-      if (togglePeq.checked && !state.dsp.enabled) {
-        state.dsp.enabled = true;
-        const t = document.getElementById('toggleSoxDsp');
-        if (t) t.checked = true;
-        const card = document.querySelector('.dsp-sox-card');
-        if (card) card.classList.add('active');
-        showToast('⚡ PEQ 需經升頻路徑處理：已同時啟用升頻引擎');
-      }
+      const peqCard = document.getElementById('peqCard');
+      if (peqCard) peqCard.classList.toggle('active', togglePeq.checked);
       localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
       if (peqEditor) peqEditor.style.display = togglePeq.checked ? 'block' : 'none';
       if (togglePeq.checked) { buildPeqBandRows(); drawPeqCurve(); }
@@ -6231,15 +6259,7 @@ function initDspControls() {
       if (track && !track.isDemo && track.filePath) {
         const curSec = getCurrentPlaybackTime();
         if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
-          const dspOptions = {
-            enabled: true,
-            sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-            dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
-            dsdOrder: state.dsp.dsdOrder || 5,
-            filterPhase: state.dsp.filterPhase || 'linear',
-            peq: buildPeqPayload()
-          };
-          window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), dspOptions);
+          window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), buildDspOptions(track));
         } else {
           playSoxTrack(track, Math.floor(curSec));
         }
@@ -6262,18 +6282,16 @@ function initDspControls() {
       if (track && !track.isDemo && track.filePath && state.isPlaying) {
         const curSec = getCurrentPlaybackTime();
         if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
-          const dspOptions = state.dsp.enabled ? {
-            enabled: true,
-            sampleRate: calculateTargetSampleRate(track.sampleRate || 44100, state.dsp.rateMode),
-            dsdMode: isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
-            dsdOrder: state.dsp.dsdOrder || 5,
-            filterPhase: state.dsp.filterPhase || 'linear',
-            peq: buildPeqPayload()
-          } : null;
-          window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), dspOptions);
+          window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), buildDspOptions(track));
         } else {
           if (state.dsp.enabled) {
             playSoxTrack(track, Math.floor(curSec));
+          } else if (countActivePeqBands() > 0) {
+            // PEQ-only processing: native-rate DSP stream (DSF via the decimate path)
+            const ext = (track.formatName || '').toUpperCase();
+            const isDsd = ext === 'DSF' || ext === 'DFF' || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
+            if (isDsd) playDsdTrack(track, Math.floor(curSec));
+            else playSoxTrack(track, Math.floor(curSec));
           } else {
             isCurrentSox = false;
             currentSoxOffset = 0;
