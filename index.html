@@ -1276,6 +1276,7 @@
                   <span class="meta-badge">64-bit Floating Engine</span>
                   <span class="meta-badge">Native Polyphase FIR</span>
                   <span class="meta-badge">1-bit DSD SDM Modulator</span>
+                  <span class="meta-badge">Parametric EQ • Convolution IR</span>
                   <span class="meta-badge">DLNA / UPnP Bit-Perfect</span>
                 </div>
               </div>
@@ -1297,7 +1298,7 @@
               <h3>各選單功能與操作手冊</h3>
             </div>
             <p class="section-intro-text">
-              rooPlayer 採用直覺的模組化架構，將本地無損音樂收藏與先進 DSP 升頻、網路串流設備深度融合。以下為各選單的詳細操作說明：
+              rooPlayer 採用直覺的模組化架構，將本地無損音樂收藏與先進 DSP 升頻、參數化等化、卷積濾波與網路串流設備深度融合。以下為各選單的詳細操作說明：
             </p>
 
             <div class="manual-modules-grid">
@@ -1413,12 +1414,14 @@
                 <div class="manual-item-body">
                   <p>點擊播放控制器上方的發燒星芒徽章 ⚡ 即可喚起訊號路徑視窗：</p>
                   <ul>
-                    <li><strong>左欄（即時音訊路徑）</strong>：即時追蹤從「原始母帶音源 ➔ 升頻引擎 ➔ DLNA / 本機端點」的各處理節點狀態。</li>
+                    <li><strong>左欄（即時音訊路徑）</strong>：即時追蹤從「原始母帶音源 ➔ 升頻引擎 ➔ 參數化等化 ➔ 卷積濾波 ➔ DLNA / 本機端點」的各處理節點狀態；作用中的等化器與卷積節點會即時顯示於路徑圖的實際套用位置。</li>
                     <li><strong>右欄（升頻引擎設定）</strong>：
                       <br>• <strong>PCM 升頻</strong>：支援 2x、4x 整數倍頻（推薦相位最純淨）、固定 96k / 192k / 384k DXD 超取樣。
                       <br>• <strong>七種濾波器相位</strong>：線性相位、最小相位、緩衰減混和、高斯長脈衝、高斯最小相位、EXT2 近似，以及 PS-EXT2 直譯 FIR（陡峭滾降、止帶達 -180 dB）。
                       <br>• <strong>1-bit DSD 調變</strong>：內建 2 / 5 / 7 階諧振噪聲整形 Delta-Sigma 調變器，支援即時轉制為 DSD64 (2.8MHz)、DSD128 (5.6MHz)、DSD256 (11.2MHz) 或 DSD512 (22.5MHz)。
                     </li>
+                    <li><strong>參數化等化器 (PEQ)</strong>：獨立於升頻引擎的音色調整，引擎開或關皆可作用（引擎關閉時於原生採樣率處理，不做多餘升頻）。最多 6 段全參數化頻段（低架 / 峰值 / 高架 / 低通 / 高通 / 陷波），內建平直、溫暖厚實、明亮通透、人聲突出、低頻飽和五種音色預設，並支援<strong>6 組自訂命名儲存槽</strong>一鍵存取個人調校；自動預降保護電路確保任何增益組合都不削頂，頻段設定即時套用到播放中的曲目。</li>
+                    <li><strong>卷積濾波器 (IR 脈衝響應)</strong>：載入脈衝響應 WAV 檔案做高精度卷積處理，適用房間校正 FIR、喇叭與耳機校正等應用。採用分割式頻域卷積技術，長脈衝響應也能即時運算；IR 自動重採樣至播放取樣率、單聲道 IR 自動套用左右聲道、響應峰值過高時自動衰減防削頂。處理於參數化等化之後；DSD 來源自動經 24-bit 88.2kHz 降頻路徑套用。</li>
                     <li><strong>漸進式平行轉換引擎</strong>：長曲由最多 8 個平行工作核心同步調變並自動節流穩定 CPU 用量；轉換結果以串流方式邊轉邊推送至端點設備，<strong>無需等待整曲轉換完成即可立即開始播放</strong>。</li>
                   </ul>
                 </div>
@@ -1436,6 +1439,7 @@
                     <li>點擊播放控制器右側的<strong>「輸出裝置按鈕 (🔊/📡)」</strong>，系統將透過 SSDP 自動搜尋區網內的 UPnP/DLNA 渲染器（如 Eversolo、WiIM、Linn 等）。</li>
                     <li>支援<strong>直接輸入 IP 探測</strong>，若路由器封鎖 UDP 廣播亦可快速手動連線。</li>
                     <li>支援原生 DSF 直通、PCM 升頻 24-bit PCM 串流與 PCM ➔ 1-bit DSD 比特流即時推送，DAC 自動鎖定 DSD 時脈。</li>
+                    <li>參數化等化器與卷積濾波同樣適用於網路串流：套用時 PCM 以 24-bit 串流推送、DSD 來源自動降採樣至 24-bit 88.2kHz 處理後推送（引擎 DSD 調變模式下 DSF 直通優先）。</li>
                     <li>串流採<strong>漸進式生成與 HTTP Range / 反壓流量控制</strong>：即使轉換速度慢於實時，端點設備也不會卡頓或中斷。</li>
                     <li>切換曲目或結束程式時，端點設備會<strong>立即停止並清空剩餘緩衝音訊</strong>。</li>
                   </ul>
@@ -1470,6 +1474,7 @@
                     <li><strong>原生圖示安全預設</strong>：底欄專輯封面未播放時預設呈現 rooPlayer 標誌，徹底避免破圖與檔案遺失現象。</li>
                     <li><strong>全螢幕詳情、即時頻譜與動態歌詞</strong>：點擊底欄左側專輯封面即可喚起全螢幕視窗，支援大尺寸封面、進度條上方的<strong>即時頻譜視覺化</strong>（由升頻引擎的來源音訊直接驅動）、即時動態滾動歌詞與右側播放清單互動。</li>
                     <li><strong>精確控制與循環模式</strong>：支援隨機播放、單曲循環、全曲循環與關閉，並即時回饋高解析音訊規格徽章（如 LOSSLESS 24/96 FLAC）。</li>
+                    <li><strong>啟動智慧還原</strong>：開啟程式時播放列自動還原上一次播放的最後一首歌曲，一鍵即可繼續聆聽。</li>
                   </ul>
                 </div>
               </div>
@@ -1496,7 +1501,7 @@
                   <li><strong>Electron Framework</strong>：跨平台視窗執行環境 (Chromium / Node.js)。</li>
                   <li><strong>@wasm-audio-decoders/flac</strong>：WebAssembly 高效能純本地 FLAC 無損解碼核心。</li>
                   <li><strong>music-metadata</strong>：純 JavaScript 音訊標頭格式剖析與母帶元資料讀取引擎。</li>
-                  <li><strong>rooPlayer Native DSP Kernel</strong>：自研 64-bit 浮點多相 FIR 升頻濾波器與高階 1-bit Delta-Sigma 調變器，全數由本程式自行實作，不使用外部 DSP 函式庫。</li>
+                  <li><strong>rooPlayer Native DSP Kernel</strong>：自研 64-bit 浮點多相 FIR 升頻濾波器、參數化等化器 biquad 鏈、分割式頻域卷積引擎與高階 1-bit Delta-Sigma 調變器，全數由本程式自行實作，不使用外部 DSP 函式庫。</li>
                 </ul>
               </div>
               <div class="legal-block">
@@ -1554,6 +1559,14 @@
               <div class="spec-row">
                 <span class="spec-label">DSD 調變器</span>
                 <span class="spec-value">2 / 5 / 7 階諧振噪聲整形 1-bit Delta-Sigma Modulator (2.8224 MHz ~ 22.5792 MHz，標準 Sony DSF 封裝、規格正確 MSB-first 位元順序)；最多 8 工作核心平行調變，段與段之間以真實暖機音訊無縫接續</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-label">參數化等化器 (PEQ)</span>
+                <span class="spec-value">6 段全參數化 biquad（低架 / 峰值 / 高架 / 低通 / 高通 / 陷波，20 Hz ~ 20 kHz）；5 種音色預設與 6 組自訂命名儲存槽；自動預降防削頂保護；獨立於升頻引擎作用，引擎關閉時於原生採樣率處理</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-label">卷積濾波器 (IR)</span>
+                <span class="spec-value">分割式頻域卷積（FFT 4096 / 區塊 2048，支援脈衝響應長度達 262,144  taps）；IR WAV 自動重採樣至播放取樣率、單聲道自動套用雙聲道、響應峰值 &gt; 1 自動衰減防削頂；於 PEQ 之後以 64-bit 浮點處理，線性相位特性完整保留</span>
               </div>
               <div class="spec-row">
                 <span class="spec-label">網路串流架構</span>
