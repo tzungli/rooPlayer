@@ -686,6 +686,43 @@ async function initApp() {
   // 截圖模式 hook（主行程以 ?rpCapture=1 載入時觸發，供 GitHub Pages 介面展示；
   // 正常啟動 location 無此參數，本區塊完全不執行）
   if (window.location.search.includes('rpCapture')) {
+    const capParams = new URLSearchParams(window.location.search);
+    if (capParams.get('testVersions')) {
+      // 執行期測試：「其他版本」匹配邏輯——只允許同名＋同演出者的格式／解析度／平台差異
+      setTimeout(async () => {
+        try {
+          const now = Date.now();
+          const cover = createSvgCover('Fixture', 'X', '#334155', '#0f172a');
+          const mkTrack = (album, artist, i, fmt, sr, bits) => ({
+            id: `fx_${album.replace(/\W/g, '')}_${artist.replace(/\W/g, '')}_${fmt}_${i}`,
+            title: `Track ${i + 1}`, trackNumber: i + 1, duration: 120,
+            album, artist, albumArtist: artist, year: 2000, genre: 'Test', cover,
+            formatName: fmt, sampleRate: sr, bitsPerSample: bits, isLossless: true,
+            addedAt: now, filePath: null
+          });
+          const fixture = [
+            ...[0, 1].map(i => mkTrack('Test Album', 'Artist A', i, 'FLAC', 44100, 16)),                       // A：目前專輯
+            ...[0, 1].map(i => mkTrack('Test Album', 'Artist B', i, 'WAV', 96000, 24)),                        // B：同名但不同演出者 → 必須排除
+            ...[0, 1].map(i => mkTrack('Test Album (Deluxe Edition)', 'Artist A', i, 'FLAC', 96000, 24))      // D：正規化後同專輯同演出者、不同解析度 → 必須納入
+          ];
+          state.tracks = [...state.tracks, ...fixture];
+          rebuildLibraryCollections();
+          const target = state.albums.find(a => a.title === 'Test Album' && a.artist === 'Artist A');
+          if (!target) throw new Error('fixture album not found');
+          openAlbumDetail(target);
+          await new Promise(r => setTimeout(r, 2000)); // 等 renderAlbumVersions 完成
+          const grid = document.getElementById('albumVersionsGrid');
+          const cards = grid ? [...grid.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80)) : [];
+          const sectionShown = !!(document.getElementById('albumVersionsSection') && document.getElementById('albumVersionsSection').style.display === 'block');
+          const excludedOk = !cards.some(t => t.includes('WAV'));        // B（Artist B 的 WAV）不得出現
+          const includedDeluxe = cards.some(t => t.includes('24-bit'));  // D 必須出現
+          const pass = sectionShown && cards.length === 2 && excludedOk && includedDeluxe;
+          window.electronAPI.captureStep(9, `TEST-VERSIONS ${pass ? 'PASS' : 'FAIL'} count=${cards.length} excludedOk=${excludedOk} deluxe=${includedDeluxe} cards=${JSON.stringify(cards)}`);
+        } catch (e) {
+          if (window.electronAPI.captureStep) window.electronAPI.captureStep(9, 'TEST-VERSIONS ERROR ' + e.message);
+        }
+      }, 4000);
+    } else {
     setTimeout(() => {
       try {
         const btn = document.getElementById('btnSignalPath');
@@ -807,6 +844,7 @@ async function initApp() {
         }, 700);
       } catch (e) { console.warn('[rpCapture] spotlight failed:', e); }
     }, 19000);
+    }
   }
 }
 
@@ -4960,9 +4998,19 @@ async function renderAlbumVersions(album) {
   versionsSection.style.display = 'none';
   versionsGrid.innerHTML = '';
 
-  const norm = (s) => (s || '').toLowerCase().replace(/\(.*?\)|\[.*?\]/g, '').replace(/[^a-z0-9\u4e00-\u9fa5]/g, '').trim();
+  const norm = (s) => (s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/\(.*?\)|\[.*?\]/g, '').replace(/[^a-z0-9\u4e00-\u9fa5]/g, '').trim();
+  // 「其他版本」定義：同專輯名稱＋同演出者，只有格式／解析度／平台不同。
+  // 同名但不同演出者的專輯（翻唱、同名合輯）不是版本，一律排除。
+  const artistOf = (a) => {
+    let ar = a && (a.artist || a.albumArtist);
+    if (ar && typeof ar === 'object') ar = ar.name;
+    return norm(ar);
+  };
   const currentTitleNorm = norm(album.title);
-  if (!currentTitleNorm) return;
+  const currentArtistNorm = artistOf(album);
+  if (!currentTitleNorm || !currentArtistNorm) return;
 
   const versions = [];
   const seenKeys = new Set();
@@ -5007,7 +5055,7 @@ async function renderAlbumVersions(album) {
     if (seenKeys.has(String(alb.id))) return;
     if (alb.tidalId && seenTidalIds.has(String(alb.tidalId))) return;
 
-    if (norm(alb.title) === currentTitleNorm) {
+    if (norm(alb.title) === currentTitleNorm && artistOf(alb) === currentArtistNorm) {
       const tr0 = (alb.tracks && alb.tracks[0]) || {};
       const f = getAudioFormatFromPath(tr0.filePath || tr0.fileName, alb.formatName || 'PCM').toUpperCase();
       const b = alb.bitsPerSample || tr0.bitsPerSample || 16;
@@ -5045,7 +5093,7 @@ async function renderAlbumVersions(album) {
         const tidStr = String(ta.tidalId || ta.id || '');
         if (tidStr && seenTidalIds.has(tidStr)) return;
 
-        if (norm(ta.title) === currentTitleNorm) {
+        if (norm(ta.title) === currentTitleNorm && artistOf(ta) === currentArtistNorm) {
           const isHiRes = ta.audioQuality === 'HI_RES_LOSSLESS' || ta.audioQuality === 'HIRES' || (ta.mediaMetadata?.tags?.includes('HIRES_LOSSLESS'));
           const candVer = {
             album: ta,

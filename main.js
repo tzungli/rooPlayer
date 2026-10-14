@@ -20,7 +20,8 @@ process.on('unhandledRejection', (reason, promise) => {
 // worker_threads 繼承 process.env，worker 內的 dsp-kernel 啟動時自動載入同一份槽位）。
 // 截圖模式（--capture）改用暫存 userData：不碰使用者真實設定、空庫自動顯示 demo 展示。
 const CAPTURE_MODE = process.argv.includes('--capture');
-if (CAPTURE_MODE) {
+const TEST_VERSIONS = process.argv.includes('--test-versions'); // 執行期測試「其他版本」匹配邏輯
+if (CAPTURE_MODE || TEST_VERSIONS) {
   // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
   // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -184,6 +185,13 @@ function runCaptureSequence() {
   ]);
   (async () => {
     try {
+      if (TEST_VERSIONS) {
+        console.log('[test] waiting for renderer version-matching test result');
+        await waitRenderer(9, 30000);
+        console.log('[test] done');
+        app.exit(0);
+        return;
+      }
       await sleep(4500); // 等 initApp / demo 展示渲染完成
       console.log('[capture] step 1: home');
       await captureShot('home.png');
@@ -261,7 +269,9 @@ function createWindow() {
     console.warn('Failed to configure kkboxSession:', e);
   }
 
-  if (CAPTURE_MODE) {
+  if (TEST_VERSIONS) {
+    mainWindow.loadFile('index.html', { query: { rpCapture: '1', testVersions: '1' } });
+  } else if (CAPTURE_MODE) {
     try { writeDemoIrWav(CAPTURE_DEMO_IR); console.log('[capture] demo IR written:', CAPTURE_DEMO_IR); } catch (e) { console.warn('[capture] demo IR write failed:', e); }
     mainWindow.loadFile('index.html', { query: { rpCapture: '1', demoIr: CAPTURE_DEMO_IR } });
   } else {
@@ -270,10 +280,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (CAPTURE_MODE) runCaptureSequence();
+    if (CAPTURE_MODE || TEST_VERSIONS) runCaptureSequence();
   });
 
-  if (CAPTURE_MODE) {
+  if (CAPTURE_MODE || TEST_VERSIONS) {
     // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {
