@@ -586,6 +586,7 @@ async function initApp() {
 
   // Startup default: show the last played track in the player bar (display only, not playing)
   restoreLastPlayedTrack();
+  console.log(`[Startup] last-played restore: queue=${state.queue.length} index=${state.currentTrackIndex} history=${getPlaybackHistory().length} tidalLoggedIn=${!!(window.tidalService && window.tidalService.isLoggedIn)}`);
 
   // Set initial default volume
   nativeAudio.volume = state.volume;
@@ -757,14 +758,19 @@ function restoreLastPlayedTrack() {
     const kkboxAccount = localStorage.getItem('rooplayer_kkbox_account');
 
     for (const h of history) {
-      if (h.isDemo) continue;
-      const isTidalEntry = h.isTidal || (!h.filePath && !h.isKkbox && h.tidalId);
-      const isKkboxEntry = h.isKkbox || (!h.filePath && !h.isTidal && h.kkboxId);
+      if (h.isDemo || String(h.id || '').startsWith('demo_')) continue;
+      // Legacy entries (recorded before source flags existed) are identified by their id prefix:
+      // TIDAL tracks are always `tidal_<id>`, KKBOX tracks `kkbox_<id>` (see tidal-service / kkbox mapping)
+      const isTidalEntry = h.isTidal || String(h.id || '').startsWith('tidal_') || (!h.filePath && !h.isKkbox && h.tidalId);
+      const isKkboxEntry = h.isKkbox || String(h.id || '').startsWith('kkbox_') || (!h.filePath && !h.isTidal && h.kkboxId);
+      const legacyTidalId = String(h.id || '').startsWith('tidal_') ? String(h.id).slice(6) : null;
+      const legacyKkboxId = String(h.id || '').startsWith('kkbox_') ? String(h.id).slice(6) : null;
 
       if (isTidalEntry) {
-        if (!tidalLoggedIn || !h.tidalId) continue;
+        const tidalId = h.tidalId || legacyTidalId;
+        if (!tidalLoggedIn || !tidalId) continue;
         const track = {
-          id: h.id, isTidal: true, tidalId: h.tidalId,
+          id: h.id, isTidal: true, tidalId,
           title: h.title, artist: h.artist, album: h.album || '',
           duration: h.duration || 0, cover: h.cover || null,
           sampleRate: h.sampleRate || 44100, bitDepth: h.bitsPerSample || 16,
@@ -777,9 +783,10 @@ function restoreLastPlayedTrack() {
       }
 
       if (isKkboxEntry) {
-        if (!kkboxAccount || !h.kkboxId) continue;
+        const kkboxId = h.kkboxId || legacyKkboxId;
+        if (!kkboxAccount || !kkboxId) continue;
         const track = {
-          id: h.id, isKkbox: true, kkboxId: h.kkboxId,
+          id: h.id, isKkbox: true, kkboxId,
           title: h.title, artist: h.artist, album: h.album || '',
           duration: h.duration || 0, cover: h.cover || null,
           _restoredSession: true
@@ -808,7 +815,6 @@ function restoreLastPlayedTrack() {
 function showRestoredTrack(track, queue, index) {
   state.queue = [...queue];
   state.currentTrackIndex = index;
-  renderQueue();
 
   playerTitle.textContent = track.title;
   playerArtist.textContent = `${track.artist} — ${track.title}`;
@@ -830,9 +836,16 @@ function showRestoredTrack(track, queue, index) {
   }
 
   totalTimeLabel.textContent = formatDuration(track.duration || 0);
-  updateSignalPathUI(track);
-  updateQueueActiveItem();
   updatePlayPauseBtnUI();
+
+  // Secondary panels must never block the player-bar restore itself
+  try {
+    renderQueue();
+    updateQueueActiveItem();
+    updateSignalPathUI(track);
+  } catch (e) {
+    console.warn('showRestoredTrack secondary UI:', e);
+  }
 }
 
 function formatTimeAgo(timestamp) {
