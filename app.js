@@ -2588,6 +2588,7 @@ function renderDiscoverArtists() {
       seen.add(norm);
       overviewArtistsGrid.appendChild(createArtistCard(a));
     });
+    hydrateArtistAvatars(overviewArtistsGrid);
   };
 
   paint([], localArtists);
@@ -2766,9 +2767,69 @@ function createAlbumCard(album) {
 }
 
 // Create Artist Card
+// ----------------- Artist Avatar Engine（登入 TIDAL 時由 TIDAL 抓取演出者照片） -----------------
+const artistAvatarCache = new Map(); // 小寫演出者名 -> TIDAL picture 圖片 ID
+try {
+  const rawAvatars = localStorage.getItem('rooplayer_artist_avatars');
+  if (rawAvatars) Object.entries(JSON.parse(rawAvatars) || {}).forEach(([k, v]) => { if (v) artistAvatarCache.set(k, v); });
+} catch (e) {}
+function saveArtistAvatarCache() {
+  try {
+    const obj = {}; let n = 0;
+    for (const [k, v] of artistAvatarCache) { if (n++ >= 400) break; obj[k] = v; }
+    localStorage.setItem('rooplayer_artist_avatars', JSON.stringify(obj));
+  } catch (e) {}
+}
+const normArtistKey = (s) => String(s || '').toLowerCase().trim();
+const looseArtistKey = (s) => normArtistKey(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\u4e00-\u9fa5]/g, '');
+function applyArtistAvatar(card, pictureId) {
+  if (!pictureId || !window.tidalService) return;
+  const url = window.tidalService.getCoverUrl(pictureId, 320);
+  if (!url) return;
+  const avatar = card.querySelector('.artist-avatar');
+  if (!avatar || avatar.querySelector('img')) return;
+  const initial = (card.dataset.artistName || '?').charAt(0).toUpperCase();
+  const wrap = document.createElement('div');
+  wrap.className = 'artist-avatar';
+  wrap.style.cssText = 'overflow:hidden;background:#27272a;';
+  wrap.innerHTML = `<img src="${url}" alt="${escapeXml(card.dataset.artistName || '')}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;" onerror="this.style.display='none';this.parentElement.textContent='${initial}';">`;
+  avatar.replaceWith(wrap);
+}
+const avatarFetchInFlight = new Set();
+async function hydrateArtistAvatars(container) {
+  if (!container || !window.tidalService || !window.tidalService.isLoggedIn) return;
+  const svc = window.tidalService;
+  for (const card of [...container.querySelectorAll('.artist-card')]) {
+    if (card.querySelector('.artist-avatar img')) continue; // 已有照片
+    const name = card.dataset.artistName || '';
+    const key = normArtistKey(name);
+    if (!key) continue;
+    const cached = artistAvatarCache.get(key);
+    if (cached) { applyArtistAvatar(card, cached); continue; }
+    if (avatarFetchInFlight.has(key)) continue;
+    avatarFetchInFlight.add(key);
+    (async () => {
+      try {
+        const res = await svc.search(name, 5);
+        const items = (res && res.artists) || [];
+        // 僅接受名稱完全相符或去符號後相符者，避免誤掛不相干演出者的照片
+        const hit = items.find(a => normArtistKey(a.name) === key)
+          || items.find(a => looseArtistKey(a.name) && looseArtistKey(a.name) === looseArtistKey(name));
+        const pic = hit && (hit.picture || hit.image);
+        if (pic) {
+          artistAvatarCache.set(key, pic);
+          saveArtistAvatarCache();
+          if (card.isConnected) applyArtistAvatar(card, pic);
+        }
+      } catch (e) {} finally { avatarFetchInFlight.delete(key); }
+    })();
+  }
+}
+
 function createArtistCard(art) {
   const card = document.createElement('div');
   card.className = 'artist-card';
+  card.dataset.artistName = art.name || '';
   const initial = (art.name || '?').charAt(0).toUpperCase();
   const isFav = isArtistFavorite(art.name);
 
@@ -2788,8 +2849,9 @@ function createArtistCard(art) {
   }
 
   let avatarHtml = `<div class="artist-avatar">${initial}</div>`;
-  if (art.picture && window.tidalService) {
-    const picUrl = window.tidalService.getCoverUrl(art.picture, 320);
+  let picId = art.picture || artistAvatarCache.get(normArtistKey(art.name)) || '';
+  if (picId && window.tidalService) {
+    const picUrl = window.tidalService.getCoverUrl(picId, 320);
     if (picUrl) {
       avatarHtml = `
         <div class="artist-avatar" style="overflow: hidden; background: #27272a;">
@@ -2834,6 +2896,7 @@ function renderArtists() {
     frag.appendChild(createArtistCard(art));
   });
   artistsGrid.appendChild(frag);
+  hydrateArtistAvatars(artistsGrid); // 登入 TIDAL 時補抓演出者照片
 }
 
 // ----------------- Artist Detail View -----------------
@@ -4714,6 +4777,7 @@ function renderAlbumArtistRecommendations(album) {
     seenArtistNames.add((art.name || '').toLowerCase().trim());
     container.appendChild(createArtistCard(art));
   });
+  hydrateArtistAvatars(container);
 
   const isTidalLoggedIn = window.tidalService && window.tidalService.isLoggedIn;
 
@@ -8890,6 +8954,7 @@ function renderFavArtists() {
     favList.forEach(art => {
       grid.appendChild(createArtistCard(art));
     });
+    hydrateArtistAvatars(grid);
   }
 }
 
