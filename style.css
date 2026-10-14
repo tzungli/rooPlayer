@@ -1087,18 +1087,29 @@ body.table-col-resizing * {
   box-sizing: border-box;
 }
 
-#allTracksTable td:nth-child(4),
-#favTracksTable td:nth-child(4) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 #allTracksTable td:nth-child(5),
 #favTracksTable td:nth-child(5) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#allTracksTable td:nth-child(6),
+#favTracksTable td:nth-child(6) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dedicated YouTube link column (immediately right of the track title column) */
+.track-yt-cell {
+  text-align: center;
+}
+
+.track-yt-cell:empty::after {
+  content: "·";
+  color: rgba(255, 255, 255, 0.12);
+  font-size: 12px;
 }
 
 .tracklist-table tr {

@@ -2907,7 +2907,7 @@ async function fetchArtistMissingAlbums(artistName, localAlbums) {
   });
 }
 
-// Generate external YouTube icon link for track (placed inline next to track title)
+// Generate external YouTube icon link for track (rendered in its own dedicated column right of the title column)
 function generateTrackOnlineLinks(track) {
   if (!track || !track.title) return '';
   const title = String(track.title || '').trim();
@@ -2969,7 +2969,7 @@ function renderTracks() {
   renderNextTracksChunk();
   setupTracksScrollListener();
   scheduleNextTracksIdleChunk();
-  setupResizableTable('allTracksTable', 'all_tracks');
+  setupResizableTable('allTracksTable', 'all_tracks_v2');
 }
 
 function renderNextTracksChunk() {
@@ -2996,9 +2996,10 @@ function renderNextTracksChunk() {
       <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${getHeartSvg(isFav, 14)}</button></td>
       <td class="track-title-cell">
         <div class="track-title-text">
-          <span class="track-name-span">${escapeXml(track.title)}</span>${onlineLinksHtml}${playBadge}
+          <span class="track-name-span">${escapeXml(track.title)}</span>${playBadge}
         </div>
       </td>
+      <td class="track-yt-cell">${onlineLinksHtml}</td>
       <td>${escapeXml(track.artist)}</td>
       <td>${escapeXml(track.album)}</td>
       <td><span class="format-chip ${isHires ? 'hires' : ''}">${specLabel}</span></td>
@@ -3176,10 +3177,10 @@ function setupResizableTable(tableId, storageKey) {
 }
 
 function setupResizableTables() {
-  setupResizableTable('allTracksTable', 'all_tracks');
-  setupResizableTable('favTracksTable', 'fav_tracks');
-  setupResizableTable('historyTracksTable', 'history_tracks');
-  setupResizableTable('detailTracklistTable', 'album_detail_tracks');
+  setupResizableTable('allTracksTable', 'all_tracks_v2');
+  setupResizableTable('favTracksTable', 'fav_tracks_v2');
+  setupResizableTable('historyTracksTable', 'history_tracks_v2');
+  setupResizableTable('detailTracklistTable', 'album_detail_tracks_v2');
 }
 
 // Realistic Genre Illustration & Metadata Registry
@@ -4305,9 +4306,10 @@ function renderDetailTracklist(album) {
       <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${getHeartSvg(isFav, 14)}</button></td>
       <td class="track-title-cell">
         <div class="track-title-text">
-          <span class="track-name-span">${escapeXml(t.title)}</span>${onlineLinksHtml}
+          <span class="track-name-span">${escapeXml(t.title)}</span>
         </div>
       </td>
+      <td class="track-yt-cell">${onlineLinksHtml}</td>
       <td><span class="format-chip">${trackChipText}</span></td>
       <td style="text-align: right;">${formatDuration(t.duration)}</td>
     `;
@@ -4328,7 +4330,7 @@ function renderDetailTracklist(album) {
     });
     detailTracklistTbody.appendChild(tr);
   });
-  setupResizableTable('detailTracklistTable', 'album_detail_tracks');
+  setupResizableTable('detailTracklistTable', 'album_detail_tracks_v2');
 }
 
 // ==========================================================
@@ -7048,9 +7050,10 @@ function renderPlaybackHistory() {
         <td style="text-align: center;"><button class="btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? '取消最愛歌曲' : '加入最愛歌曲'}">${getHeartSvg(isFav, 14)}</button></td>
         <td class="track-title-cell">
           <div class="track-title-text">
-            <span class="track-name-span">${escapeXml(track.title)}</span>${onlineLinksHtml}
+            <span class="track-name-span">${escapeXml(track.title)}</span>
           </div>
         </td>
+        <td class="track-yt-cell">${onlineLinksHtml}</td>
         <td><span class="history-artist-link" title="前往演出者頁面">${escapeXml(track.artist || '未知演出者')}</span></td>
         <td><span class="history-album-link" title="前往專輯頁面">${escapeXml(track.album || '未知專輯')}</span></td>
         <td style="color: var(--text-muted); font-size: 12px;">${formatTimeAgo(track.playedAt)}</td>
@@ -7175,9 +7178,10 @@ function renderFavTracks() {
         <td style="text-align: center;"><button class="btn-track-fav active" title="取消最愛歌曲">${getHeartSvg(true, 14)}</button></td>
         <td class="track-title-cell">
           <div class="track-title-text">
-            <span class="track-name-span">${escapeXml(track.title)}</span>${onlineLinksHtml}${playBadge}
+            <span class="track-name-span">${escapeXml(track.title)}</span>${playBadge}
           </div>
         </td>
+        <td class="track-yt-cell">${onlineLinksHtml}</td>
         <td>${escapeXml(track.artist)}</td>
         <td>${escapeXml(track.album)}</td>
         <td><span class="format-chip ${isHires ? 'hires' : ''}">${specLabel}</span></td>
@@ -7202,7 +7206,7 @@ function renderFavTracks() {
 
       tbody.appendChild(tr);
     });
-    setupResizableTable('favTracksTable', 'fav_tracks');
+    setupResizableTable('favTracksTable', 'fav_tracks_v2');
   }
 }
 
