@@ -6895,14 +6895,14 @@ function ufSpecFromForm() {
 function ufUpdateFormReadouts() {
   const spec = ufSpecFromForm();
   document.getElementById('ufAsVal').textContent = spec.asDb + ' dB';
-  document.getElementById('ufCutVal').textContent = spec.cutoffRel.toFixed(2) + ' × 源Nyquist';
+  document.getElementById('ufCutVal').textContent = spec.cutoffRel.toFixed(2) + ' ×源Nyq';
   document.getElementById('ufTapVal').textContent = spec.taps + ' taps';
   document.getElementById('ufAsRow').style.display = spec.window === 'kaiser' ? '' : 'none';
   const ctx = ufPreviewContext();
   const mmac = Math.round(spec.taps * ctx.targetRate * 2 / 1e6);
   const badge = document.getElementById('ufLoadBadge');
   const level = mmac < 60 ? '低' : (mmac < 150 ? '中' : '高');
-  badge.textContent = `負荷: ${level} (~${mmac} MMAC/s)`;
+  badge.textContent = `${level}負荷 ~${mmac}MMAC/s`;
   badge.className = 'uf-load' + (level === '中' ? ' load-mid' : (level === '高' ? ' load-high' : ''));
 }
 

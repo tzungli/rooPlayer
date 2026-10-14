@@ -2177,7 +2177,23 @@ body.table-col-resizing * {
 .uf-form-col {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 9px;
+}
+
+/* 兩欄緊湊配置（名稱+槽、截止+長度） */
+.uf-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.uf-info {
+  font-size: 10px;
+  font-weight: 600;
+  color: #34d399;
+  opacity: 0.75;
+  cursor: help;
+  margin-left: 4px;
 }
 
 .uf-field label {
@@ -2213,8 +2229,8 @@ body.table-col-resizing * {
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
   border-radius: 7px;
-  padding: 6px 10px;
-  font-size: 12px;
+  padding: 4px 8px;
+  font-size: 11px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
