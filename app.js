@@ -6293,8 +6293,115 @@ function syncPeqModalUI() {
   document.querySelectorAll('#peqPresetSelector .dsp-pill').forEach(p =>
     p.classList.toggle('active', peq.enabled && peq.preset !== 'custom' && p.getAttribute('data-peq-preset') === peq.preset));
   if (peq.enabled) { buildPeqBandRows(); drawPeqCurve(); }
+  buildPeqSlotRow();
   updatePeqHeadroomNote();
   updatePeqHint();
+}
+
+// ----------------- User PEQ Slots: 6 named saved setups (localStorage) -----------------
+const PEQ_SLOT_COUNT = 6;
+const PEQ_SLOTS_KEY = 'rooplayer_peq_slots';
+
+function getPeqSlots() {
+  const slots = new Array(PEQ_SLOT_COUNT).fill(null);
+  try {
+    const raw = JSON.parse(localStorage.getItem(PEQ_SLOTS_KEY) || '[]');
+    if (!Array.isArray(raw)) return slots;
+    for (let i = 0; i < PEQ_SLOT_COUNT; i++) {
+      const s = raw[i];
+      if (s && typeof s.name === 'string' && s.name.trim() && Array.isArray(s.bands)) {
+        slots[i] = {
+          name: s.name.trim().slice(0, 24),
+          bands: normalizePeqSettings({ enabled: true, bands: s.bands }).bands
+        };
+      }
+    }
+  } catch (e) {}
+  return slots;
+}
+
+function savePeqSlots(slots) {
+  try { localStorage.setItem(PEQ_SLOTS_KEY, JSON.stringify(slots)); } catch (e) {}
+}
+
+function buildPeqSlotRow() {
+  const row = document.getElementById('peqSlotRow');
+  if (!row) return;
+  const slots = getPeqSlots();
+  row.innerHTML = '';
+  slots.forEach((slot, i) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    if (slot) {
+      chip.className = 'peq-slot-chip filled';
+      chip.title = `載入「${slot.name}」（雙擊更名，點 ✕ 刪除）`;
+      const nameEl = document.createElement('span');
+      nameEl.className = 'peq-slot-name';
+      nameEl.textContent = slot.name;
+      const delEl = document.createElement('span');
+      delEl.className = 'peq-slot-del';
+      delEl.title = '刪除設定';
+      delEl.textContent = '✕';
+      chip.appendChild(nameEl);
+      chip.appendChild(delEl);
+      chip.addEventListener('click', (e) => {
+        if (e.target === delEl) {
+          if (confirm(`刪除 PEQ 設定「${slot.name}」？`)) {
+            slots[i] = null;
+            savePeqSlots(slots);
+            buildPeqSlotRow();
+          }
+          return;
+        }
+        loadPeqSlot(slot);
+      });
+      chip.addEventListener('dblclick', () => {
+        const name = prompt('重新命名此 PEQ 設定：', slot.name);
+        if (name && name.trim()) {
+          slot.name = name.trim().slice(0, 24);
+          savePeqSlots(slots);
+          buildPeqSlotRow();
+        }
+      });
+    } else {
+      chip.className = 'peq-slot-chip';
+      chip.title = '將目前 PEQ 設定儲存到此空格';
+      const plusEl = document.createElement('span');
+      plusEl.className = 'peq-slot-plus';
+      plusEl.textContent = '＋';
+      const labelEl = document.createElement('span');
+      labelEl.className = 'peq-slot-name';
+      labelEl.textContent = `儲存 ${i + 1}`;
+      chip.appendChild(plusEl);
+      chip.appendChild(labelEl);
+      chip.addEventListener('click', () => {
+        const name = prompt('為此 PEQ 設定命名：', `我的設定 ${i + 1}`);
+        if (!name || !name.trim()) return;
+        slots[i] = { name: name.trim().slice(0, 24), bands: state.dsp.peq.bands.map(b => ({ ...b })) };
+        savePeqSlots(slots);
+        buildPeqSlotRow();
+        showToast(`💾 已儲存 PEQ 設定「${slots[i].name}」`);
+      });
+    }
+    row.appendChild(chip);
+  });
+}
+
+function loadPeqSlot(slot) {
+  state.dsp.peq.enabled = true;
+  state.dsp.peq.preset = 'custom';
+  state.dsp.peq.bands = slot.bands.map(b => ({ ...b }));
+  const cb = document.getElementById('togglePeq');
+  if (cb) cb.checked = true;
+  const peqCard = document.getElementById('peqCard');
+  if (peqCard) peqCard.classList.add('active');
+  const editor = document.getElementById('peqEditor');
+  if (editor) editor.style.display = 'block';
+  buildPeqBandRows();
+  drawPeqCurve();
+  updatePeqHeadroomNote();
+  peqScheduleReapply();
+  showToast(`🎚️ 已載入 PEQ 設定「${slot.name}」`);
 }
 
 function initPeqControls() {
