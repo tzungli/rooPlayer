@@ -682,6 +682,41 @@ async function initApp() {
   // Initialize playback control button states
   updateShuffleUI();
   updateRepeatUI();
+
+  // 截圖模式 hook（主行程以 ?rpCapture=1 載入時觸發，供 GitHub Pages 介面展示；
+  // 正常啟動 location 無此參數，本區塊完全不執行）
+  if (window.location.search.includes('rpCapture')) {
+    setTimeout(() => {
+      try {
+        const btn = document.getElementById('btnSignalPath');
+        if (btn) btn.click();
+        const eng = document.getElementById('toggleSoxDsp');
+        if (eng && !eng.checked) eng.click(); // 啟用升頻引擎：展開引擎設定欄（工具箱在其內）
+        const strip = document.getElementById('userFilterStrip');
+        if (strip) strip.scrollIntoView({ block: 'center' });
+        if (window.electronAPI && window.electronAPI.captureStep) window.electronAPI.captureStep(2, 'signalpath ready');
+      } catch (e) { console.warn('[rpCapture] open signal path failed:', e); }
+    }, 6000);
+    setTimeout(() => {
+      try {
+        const nb = document.getElementById('ufNewBtn');
+        if (nb) nb.click();
+        const nm = document.getElementById('ufNameInput');
+        if (nm) nm.value = '暖聲緩降';
+        const sd = document.getElementById('ufSoundInput');
+        if (sd) sd.value = '高頻柔化、鈴振不可聽';
+        const winBtn = document.querySelector('#ufWindowSeg .uf-seg-btn[data-window="blackman"]');
+        if (winBtn) winBtn.click();
+        const cut = document.getElementById('ufCutSlider');
+        if (cut) { cut.value = 95; cut.dispatchEvent(new Event('input')); }
+        const tap = document.getElementById('ufTapSlider');
+        if (tap) { tap.value = 128; tap.dispatchEvent(new Event('input')); }
+        const panel = document.getElementById('ufEditorPanel');
+        if (panel) panel.scrollIntoView({ block: 'center' });
+        if (window.electronAPI && window.electronAPI.captureStep) window.electronAPI.captureStep(3, 'toolbox ready');
+      } catch (e) { console.warn('[rpCapture] open toolbox failed:', e); }
+    }, 8500);
+  }
 }
 
 // ----------------- Theme Switcher -----------------

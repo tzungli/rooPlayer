@@ -18,6 +18,16 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // 使用者自訂濾波槽儲存路徑：必須在任何 dsp-kernel 載入前設定（主行程與 DSP worker 共用；
 // worker_threads 繼承 process.env，worker 內的 dsp-kernel 啟動時自動載入同一份槽位）。
+// 截圖模式（--capture）改用暫存 userData：不碰使用者真實設定、空庫自動顯示 demo 展示。
+const CAPTURE_MODE = process.argv.includes('--capture');
+if (CAPTURE_MODE) {
+  // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
+  // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+  const capDir = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata');
+  try { fs.mkdirSync(capDir, { recursive: true }); } catch (e) {}
+  app.setPath('userData', capDir);
+}
 process.env.ROOPLAYER_USER_FILTERS = path.join(app.getPath('userData'), 'rooplayer_user_filters.json');
 
 const nativeAudioEngine = require('./native-audio-engine');
@@ -115,6 +125,61 @@ let mainWindow;
 const LIBRARY_FILE = path.join(app.getPath('userData'), 'rooplayer_library.json');
 const LEGACY_LIBRARY_FILE = path.join(app.getPath('userData'), 'roon_library.json');
 
+// ----------------- 截圖模式（--capture）：自動擷取介面供 GitHub Pages 使用 -----------------
+const CAPTURE_OUT_DIR = path.join(__dirname, 'docs', 'img');
+
+async function captureShot(name) {
+  const img = await Promise.race([
+    mainWindow.webContents.capturePage(),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('capturePage timeout')), 10000))
+  ]);
+  fs.mkdirSync(CAPTURE_OUT_DIR, { recursive: true });
+  fs.writeFileSync(path.join(CAPTURE_OUT_DIR, name), img.toPNG());
+  console.log('[capture] saved', name);
+}
+
+let captureStarted = false;
+const captureSignals = {}; // n -> resolve（渲染器完成 UI 操作後經 capture:step IPC 回報）
+ipcMain.on('capture:step', (event, n, info) => {
+  console.log('[capture] renderer step signal:', n, info || '');
+  if (captureSignals[n]) { captureSignals[n](); captureSignals[n] = null; }
+});
+
+function runCaptureSequence() {
+  if (captureStarted) return;
+  captureStarted = true;
+  console.log('[capture] sequence start');
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const waitRenderer = (n, ms) => Promise.race([
+    new Promise((resolve) => { captureSignals[n] = resolve; }),
+    sleep(ms).then(() => console.log('[capture] WARNING: renderer step', n, 'not signaled in time'))
+  ]);
+  (async () => {
+    try {
+      await sleep(4500); // 等 initApp / demo 展示渲染完成
+      console.log('[capture] step 1: home');
+      await captureShot('home.png');
+
+      // 訊號路徑設定視窗：等渲染器自行開啟（?rpCapture=1 hook），再截
+      console.log('[capture] step 2: signalpath (waiting renderer signal)');
+      await waitRenderer(2, 25000);
+      await sleep(900);
+      await captureShot('signalpath.png');
+
+      // 展開自訂濾波器工具箱編輯面板：等渲染器展開並設好示範參數，再截
+      console.log('[capture] step 3: toolbox (waiting renderer signal)');
+      await waitRenderer(3, 25000);
+      await sleep(1600); // 等響應預覽 IPC 回傳並繪製
+      await captureShot('toolbox.png');
+
+      console.log('[capture] done');
+    } catch (e) {
+      console.error('[capture] failed:', e);
+    }
+    app.exit(0);
+  })();
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320,
@@ -144,11 +209,27 @@ function createWindow() {
     console.warn('Failed to configure kkboxSession:', e);
   }
 
-  mainWindow.loadFile('index.html');
+  if (CAPTURE_MODE) {
+    mainWindow.loadFile('index.html', { query: { rpCapture: '1' } });
+  } else {
+    mainWindow.loadFile('index.html');
+  }
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    if (CAPTURE_MODE) runCaptureSequence();
   });
+
+  if (CAPTURE_MODE) {
+    // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
+    mainWindow.webContents.once('did-finish-load', () => {
+      setTimeout(() => {
+        if (!captureStarted) { console.log('[capture] fallback trigger (ready-to-show missed)'); mainWindow.show(); runCaptureSequence(); }
+      }, 6000);
+    });
+    mainWindow.webContents.on('render-process-gone', (e, d) => console.log('[capture] renderer gone:', JSON.stringify(d)));
+    setTimeout(() => { if (!captureStarted) console.log('[capture] WARNING: no trigger after 30s'); }, 30000);
+  }
 
   mainWindow.on('maximize', () => {
     mainWindow.webContents.send('window:maximizedChange', true);

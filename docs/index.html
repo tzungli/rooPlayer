@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rooPlayer — 發燒友音樂媒體管理器</title>
+<meta name="description" content="rooPlayer：純 Node.js 64-bit 音訊引擎的發燒級音樂播放器。原生 DSD、升頻引擎、濾波器插件與自訂工具箱、PEQ、卷積、DLNA 串流。">
+<style>
+  :root {
+    --bg: #0f1013; --bg2: #16181d; --card: #1b1e25; --border: #2a2e38;
+    --text: #e8eaf0; --text2: #9aa1ad; --purple: #8b5cf6; --purple2: #a78bfa;
+    --green: #34d399; --amber: #f59e0b; --cyan: #22d3ee;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif; line-height: 1.7; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  header { position: sticky; top: 0; background: rgba(15,16,19,.92); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); z-index: 10; }
+  .nav { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+  .logo { font-size: 20px; font-weight: 800; letter-spacing: .5px; }
+  .logo span { color: var(--purple2); }
+  .nav a.btn { margin-left: 12px; }
+  .btn { display: inline-block; background: var(--purple); color: #fff; text-decoration: none; font-weight: 700; font-size: 14px; padding: 9px 18px; border-radius: 8px; transition: .2s; }
+  .btn:hover { background: var(--purple2); }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn.ghost:hover { border-color: var(--purple2); color: var(--purple2); }
+
+  .hero { text-align: center; padding: 72px 0 40px; }
+  .hero h1 { font-size: 44px; font-weight: 800; letter-spacing: 1px; }
+  .hero h1 span { color: var(--purple2); }
+  .hero .tagline { color: var(--text2); font-size: 18px; margin-top: 14px; }
+  .hero .badges { margin-top: 22px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .badge { font-size: 12.5px; font-weight: 700; padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border); color: var(--text2); }
+  .badge.p { border-color: rgba(139,92,246,.5); color: var(--purple2); }
+  .badge.g { border-color: rgba(52,211,153,.5); color: var(--green); }
+  .hero .cta { margin-top: 30px; display: flex; gap: 12px; justify-content: center; }
+
+  .shot { margin: 34px 0; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--bg2); }
+  .shot img { width: 100%; display: block; }
+  .shot .cap { padding: 12px 18px; font-size: 13.5px; color: var(--text2); border-top: 1px solid var(--border); }
+
+  h2 { font-size: 26px; margin: 56px 0 8px; }
+  h2::before { content: "◆ "; color: var(--purple2); font-size: 18px; }
+  .sub { color: var(--text2); margin-bottom: 24px; font-size: 15px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; }
+  .card h3 { font-size: 16.5px; margin-bottom: 8px; }
+  .card h3 .ico { margin-right: 8px; }
+  .card p { font-size: 14px; color: var(--text2); }
+  .card .tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; margin: 8px 4px 0 0; }
+  .tag.p { background: rgba(139,92,246,.15); color: var(--purple2); }
+  .tag.g { background: rgba(52,211,153,.15); color: var(--green); }
+  .tag.a { background: rgba(245,158,11,.15); color: var(--amber); }
+  .tag.c { background: rgba(34,211,238,.15); color: var(--cyan); }
+
+  .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 820px) { .cols2 { grid-template-columns: 1fr; } .hero h1 { font-size: 30px; } }
+
+  .run { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 22px 26px; }
+  .run code { display: block; background: #0a0b0e; border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; font-family: Consolas, monospace; font-size: 14px; color: #d4d7de; margin: 8px 0; }
+  .run .note { font-size: 13px; color: var(--text2); }
+
+  footer { margin-top: 64px; border-top: 1px solid var(--border); padding: 26px 0 40px; color: var(--text2); font-size: 13px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  footer a { color: var(--purple2); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <div class="logo">roo<span>Player</span></div>
+    <nav>
+      <a class="btn ghost" href="#features">功能</a>
+      <a class="btn ghost" href="#run">如何執行</a>
+      <a class="btn" href="https://github.com/tzungli/rooPlayer">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section class="hero">
+    <h1>roo<span>Player</span></h1>
+    <div class="tagline">發燒友級音樂媒體管理器 · 純淨 64-bit 音訊引擎 · 原生 DSD 直通</div>
+    <div class="badges">
+      <span class="badge p">純 Node.js 引擎 · 零原生依賴</span>
+      <span class="badge p">Float64 64-bit 精度處理</span>
+      <span class="badge g">原生 DSD64–DSD512 調變</span>
+      <span class="badge g">PCM 升頻至 384 kHz</span>
+      <span class="badge">Windows · Electron</span>
+    </div>
+    <div class="cta">
+      <a class="btn" href="https://github.com/tzungli/rooPlayer">下載原始碼</a>
+      <a class="btn ghost" href="#run">快速開始</a>
+    </div>
+  </section>
+
+  <figure class="shot">
+    <img src="img/home.png" alt="rooPlayer 曲庫主介面" loading="lazy">
+    <figcaption class="cap">曲庫主介面：專輯封面牆、演出者／曲風分類、最愛與播放歷史（此圖以內建示範資料展示）</figcaption>
+  </figure>
+
+  <section id="features">
+    <h2>核心功能</h2>
+    <p class="sub">從取樣率轉換到 1-bit DSD 調變，全部在自研的純 JavaScript 引擎內以 64-bit 浮點完成——沒有原生附加模組、沒有取樣率轉換的黑箱。</p>
+
+    <div class="grid">
+      <div class="card">
+        <h3><span class="ico">⚡</span>純 Node.js 音訊引擎</h3>
+        <p>自研 DSP 核心以 Float64Array 做 64-bit 精度運算：多相 FIR、子樣本內插、1-bit ΔΣ 調變。無原生依賴、跨平台、可驗證——每一條訊號路徑都是可讀的原始碼。</p>
+        <span class="tag p">Float64</span><span class="tag p">零原生模組</span>
+      </div>
+      <div class="card">
+        <h3><span class="ico">🎚️</span>升頻引擎與七種內建濾波器</h3>
+        <p>PCM 升頻至 2×/4×/384k 或原生 DSD。線性相位、最小相位、Hermite 內插、高斯脈衝、EXT2 與 PS-EXT2 濾波器，各自的聲音性格在介面上都有明確描述。</p>
+        <span class="tag p">線性／最小相位</span><span class="tag p">DSD64–512</span>
+      </div>
+      <div class="card">
+        <h3><span class="ico">🧩</span>濾波器插件系統</h3>
+        <p>在 filter-plugins/ 放一個描述卡檔案，引擎、設定頁按鈕、DLNA 與播放路徑全部自動支援——同名插件可覆寫內建設計做實驗，損毀檔案自動跳過。</p>
+        <span class="tag g">drop-in 架構</span><span class="tag g">UI 自動生成</span>
+      </div>
+      <div class="card">
+        <h3><span class="ico">🛠️</span>自訂濾波器工具箱</h3>
+        <p>不寫程式也能設計專屬濾波器：窗函數、截止延伸、濾波長度、相位性格全部在安全範圍內滑動調整，右側即時顯示頻率響應預覽。六個命名儲存槽，純參數儲存、引擎端二次驗證。</p>
+        <span class="tag g">即時響應預覽</span><span class="tag g">安全夾限</span>
+      </div>
+      <div class="card">
+        <h3><span class="ico">🎛️</span>參數化等化器（PEQ）</h3>
+        <p>六段參數化 EQ：峰／谷、低架／高架、 shelving 與通過濾波，播放中即時套用，並提供命名儲存槽一鍵載入。</p>
+        <span class="tag p">播放中即時套用</span>
+      </div>
+      <div class="card">
+        <h3><span class="ico">🌊</span>卷積濾波器（IR）</h3>
+        <p>載入脈衝響應檔案，以卷積重現音樂廳、經典硬體與效果器的空間特性，可插入訊號路徑的任意位置。</p>
+        <span class="tag a">IR 卷積</span>
+      </div>
+      <div class="card">
+        <h3><span class="ico">📡</span>DLNA 串流輸出</h3>
+        <p>把 rooPlayer 作為串流伺服器，推送音樂到 Eversolo、LG 電視等 DLNA 渲染器——支援原生 1-bit DSD 直通輸出。</p>
+        <span class="tag c">1-bit DSD 直通</span>
+      </div>
+      <div class="card">
+        <h3><span class="ico">☁️</span>串流服務整合</h3>
+        <p>TIDAL 與 KKBOX 帳號整合：線上專輯直接播放或收錄進本機曲庫，演出者與專輯自動補齊完整發行清單。</p>
+        <span class="tag c">TIDAL · KKBOX</span>
+      </div>
+      <div class="card">
+        <h3><span class="ico">🗂️</span>曲庫管理</h3>
+        <p>專輯／演出者／曲風三維分類、可調式表格欄、最愛系統、播放歷史統計、啟動時還原最後播放歌曲。</p>
+        <span class="tag a">發燒友級元資料</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>訊號路徑，看得見</h2>
+    <p class="sub">每一首歌的完整處理鏈以圖示呈現：來源取樣率 → 升頻引擎與濾波器 → PEQ → 卷積 → 輸出裝置。所有引擎參數在同一個視窗內完成。</p>
+    <div class="cols2">
+      <figure class="shot">
+        <img src="img/signalpath.png" alt="訊號路徑設定視窗" loading="lazy">
+        <figcaption class="cap">訊號路徑視窗：引擎設定欄（取樣率、調變器階數、濾波器相位按鈕列由插件註冊表動態生成）與自訂濾波器工具箱條列</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="img/toolbox.png" alt="自訂濾波器工具箱編輯器" loading="lazy">
+        <figcaption class="cap">自訂濾波器編輯器：窗函數與參數滑桿全部附「對聲音的影響」滑鼠提示，右側為即時頻率響應預覽（通帶、源 Nyquist 標記、鏡像帶）</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="run">
+    <h2>如何執行</h2>
+    <div class="run">
+      <p>需要 Windows 10 以上與 <a href="https://nodejs.org" style="color:var(--purple2)">Node.js</a>（含 Electron）：</p>
+      <code>git clone https://github.com/tzungli/rooPlayer.git
+cd rooplayer
+npm install
+npm start</code>
+      <p class="note">首次啟動若無音樂庫，會以內建示範專輯展示完整介面。新增濾波器：在 filter-plugins/ 放一個插件檔案，或直接在設定頁的「🛠️ 自訂濾波器」工具箱設計。</p>
+    </div>
+  </section>
+
+  <footer>
+    <div>rooPlayer · MIT License · 純 Node.js 發燒級音訊引擎</div>
+    <div><a href="https://github.com/tzungli/rooPlayer">GitHub 原始碼</a> · <a href="https://tzungli.github.io/rooPlayer/">本頁</a></div>
+  </footer>
+
+</div>
+</body>
+</html>
