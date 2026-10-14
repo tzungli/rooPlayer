@@ -5975,7 +5975,7 @@ function drawPeqCurve() {
   const canvas = document.getElementById('peqCurveCanvas');
   if (!canvas || !canvas.getContext) return;
   const dpr = window.devicePixelRatio || 1;
-  const W = canvas.clientWidth || 560, H = 128;
+  const W = canvas.clientWidth || 560, H = canvas.clientHeight || 150;
   const pw = Math.max(1, Math.round(W * dpr)), ph = Math.round(H * dpr);
   if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; }
   const ctx = canvas.getContext('2d');
@@ -6014,7 +6014,7 @@ function drawPeqCurve() {
   const activeBands = peq.enabled ? peq.bands.filter(b => b.on) : [];
   const coeffs = activeBands.map(b => peqUiBiquad(b.type, fs, b.freq, b.gain, b.q)).filter(Boolean);
 
-  const N = 256;
+  const N = 512;
   const pts = [];
   for (let i = 0; i <= N; i++) {
     const f = fMin * Math.pow(fMax / fMin, i / N);

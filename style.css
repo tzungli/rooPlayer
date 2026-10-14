@@ -1738,9 +1738,9 @@ body.table-col-resizing * {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
 }
 .signal-path-container {
-  width: 900px;
-  max-width: 94vw;
-  max-height: 88vh;
+  width: 1400px;
+  max-width: 96vw;
+  max-height: 94vh;
   overflow-y: auto;
   padding: 28px 32px;
 }
@@ -2164,7 +2164,7 @@ body.table-col-resizing * {
 
 .peq-curve {
   width: 100%;
-  height: 128px;
+  height: 150px;
   display: block;
   margin-top: 10px;
   background: rgba(15, 18, 26, 0.55);
