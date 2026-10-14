@@ -233,7 +233,8 @@ class NativeDspStreamer {
       if (startBlock === 0) sec = CHUNK0_SEC;
       else if (rEst === 0 || rEst < 0.7) sec = 4;     // well below real time: small chunks -> frequent prefix jumps
       else if (rEst < 0.9) sec = 6;                   // slightly below real time: medium chunks (deficit < 1.1 s)
-      else sec = 10;                                  // at/above real time: large chunks, minimal warm-up overhead
+      else if (rEst < 2) sec = 10;                    // at/above real time: large chunks, minimal warm-up overhead
+      else sec = 15;                                  // far above real time (DSD64/128): largest chunks (overhead 9%)
       let sizeBlocks = Math.max(segAlignBlocks, Math.round((sec * blocksPerSec) / segAlignBlocks) * segAlignBlocks);
       if (startBlock + sizeBlocks > totalBlocks) sizeBlocks = totalBlocks - startBlock; // final chunk may be short
       return Math.max(1, sizeBlocks);
