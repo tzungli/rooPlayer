@@ -5792,10 +5792,35 @@ function updateSignalPathUI(track = null) {
       if (signalPathDot) signalPathDot.className = 'signal-dot purple';
     }
 
-    // PEQ stage annotation on the active DSP path
+    // PEQ stage in the signal flow diagram: JS repositions the stage node to the exact
+    // point of the chain where the engine applies it - before the 1-bit DSD modulation
+    // stage in DSD mode (PEQ runs on the source PCM there), after the PCM upsampler
+    // otherwise (PEQ runs at the output rate there).
+    const peqStage = document.getElementById('signalPeqStage');
+    const peqArrow = document.getElementById('signalPeqArrow');
     const peqActiveCount = countActivePeqBands();
-    if (peqActiveCount > 0 && signalSoxDesc) {
-      signalSoxDesc.textContent += ` ＋ 參數化等化器 PEQ (${peqActiveCount} 段作用中)`;
+    if (peqStage && peqArrow) {
+      if (peqActiveCount > 0) {
+        const stagesEl = peqStage.parentElement;
+        let anchor = isDsdRateMode(state.dsp.rateMode)
+          ? (signalSoxArrow && signalSoxArrow.parentElement === stagesEl ? signalSoxArrow : null)
+          : (() => {
+              let a = signalSoxStage && signalSoxStage.parentElement === stagesEl ? signalSoxStage.nextElementSibling : null;
+              if (a === peqArrow) a = peqStage.nextElementSibling; // already positioned here
+              return a;
+            })();
+        if (anchor && anchor.parentElement === stagesEl) {
+          stagesEl.insertBefore(peqArrow, anchor);
+          stagesEl.insertBefore(peqStage, anchor);
+        }
+        peqArrow.style.display = 'block';
+        peqStage.style.display = 'flex';
+        const peqDesc = document.getElementById('signalPeqDesc');
+        if (peqDesc) peqDesc.textContent = peqStageSummary();
+      } else {
+        peqArrow.style.display = 'none';
+        peqStage.style.display = 'none';
+      }
     }
   } else if (isNativeDsd) {
     const dsdRate = track.sampleRate ? `${(track.sampleRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
@@ -5857,6 +5882,17 @@ function peqQFromSlider(v) { return 0.3 * Math.pow(8 / 0.3, v / 100); }
 function peqQToSlider(q) { return Math.max(0, Math.min(100, Math.round(100 * Math.log(Math.min(Math.max(q, 0.3), 8) / 0.3) / Math.log(8 / 0.3)))); }
 function peqFormatFreq(f) { return f >= 10000 ? (f / 1000).toFixed(1) + ' kHz' : (f >= 1000 ? (f / 1000).toFixed(2) + ' kHz' : Math.round(f) + ' Hz'); }
 function peqFormatGain(g) { return (g > 0 ? '+' : '') + g.toFixed(1) + ' dB'; }
+
+// Signal-path stage summary line: "低架 +3.0 dB @ 110 Hz ・ 峰值 -2.0 dB @ 300 Hz ...（自動預降 X.X dB）"
+function peqStageSummary() {
+  const peq = state.dsp.peq;
+  const typeShort = { lowshelf: '低架', peaking: '峰值', highshelf: '高架', lowpass: '低通', highpass: '高通', notch: '陷波' };
+  const parts = peq.bands.filter(b => b.on).map(b => {
+    const g = PEQ_GAIN_TYPES.includes(b.type) ? `${peqFormatGain(b.gain)} ` : '';
+    return `${typeShort[b.type] || b.type} ${g}@ ${peqFormatFreq(b.freq)}`;
+  });
+  return `參數化等化器：${parts.join(' ・ ')}（自動預降 ${peqHeadroomDb().toFixed(1)} dB）`;
+}
 
 // Seamless live re-apply: restart the active stream from the current position with the new EQ
 function peqScheduleReapply() {

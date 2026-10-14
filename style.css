@@ -1911,6 +1911,69 @@ body.table-col-resizing * {
   box-shadow: none !important;
 }
 
+/* PEQ signal-path stage: cyan->pink identity, matching the PEQ response curve gradient */
+.signal-arrow.peq-dsp-element {
+  color: #22d3ee;
+}
+
+.stage-badge-peq {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: transparent;
+  color: #22d3ee;
+  border: none;
+  letter-spacing: 0.8px;
+  position: relative;
+  isolation: isolate;
+  display: inline-block;
+  animation: peq-text-glow 2.6s ease-in-out infinite;
+}
+
+.stage-badge-peq::after {
+  content: '';
+  position: absolute;
+  inset: -3px -7px;
+  border-radius: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(34, 211, 238, 0.8) 0%, rgba(167, 139, 250, 0.4) 45%, rgba(244, 114, 182, 0) 78%);
+  animation: peq-halo-expand 2.6s ease-out infinite;
+}
+
+@keyframes peq-text-glow {
+  0%, 100% {
+    color: #22d3ee;
+    text-shadow: 0 0 6px rgba(34, 211, 238, 0.7), 0 0 16px rgba(34, 211, 238, 0.3);
+    transform: scale(1);
+  }
+  45% {
+    color: #a5f3fc;
+    text-shadow: 0 0 10px rgba(165, 243, 252, 1), 0 0 24px rgba(244, 114, 182, 0.6), 0 0 44px rgba(34, 211, 238, 0.4);
+    transform: scale(1.06);
+  }
+}
+
+@keyframes peq-halo-expand {
+  0% {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  60%, 100% {
+    transform: scale(3.2);
+    opacity: 0;
+  }
+}
+
+[data-theme="light"] .stage-badge-peq {
+  color: #0e7490;
+}
+
+[data-theme="light"] .signal-arrow.peq-dsp-element {
+  color: #0e7490;
+}
+
 /* DSP SoX Settings Card (Right Column) */
 .dsp-sox-card {
   margin-top: 0;

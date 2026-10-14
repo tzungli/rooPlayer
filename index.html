@@ -1832,6 +1832,20 @@
               </div>
             </div>
 
+            <!-- Dynamic PEQ (Parametric Equalizer) Stage: JS repositions it to the exact point
+                 of the chain where the engine applies it (before DSD modulation / after PCM upsampling) -->
+            <div class="signal-arrow peq-dsp-element" id="signalPeqArrow" style="display: none;">↓</div>
+            <div class="signal-stage peq-dsp-element" id="signalPeqStage" style="display: none;">
+              <div class="stage-icon">🎚️</div>
+              <div class="stage-info">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <div class="stage-title" id="signalPeqTitle">參數化等化器 (PEQ)</div>
+                  <span class="stage-badge-peq">EQ ACTIVE</span>
+                </div>
+                <div class="stage-desc" id="signalPeqDesc">參數化等化器：N 段作用中</div>
+              </div>
+            </div>
+
             <div class="signal-arrow">↓</div>
             <div class="signal-stage">
               <div class="stage-icon">⚡</div>
