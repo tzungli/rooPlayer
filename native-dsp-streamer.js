@@ -131,17 +131,22 @@ class NativeDspStreamer {
   // Create progressive streaming session for PCM -> 1-bit DSD (DSF format)
   // Powered by background worker_threads to prevent any Electron UI / main process lag.
   //
-  // Parallel segment modulation (fix for DLNA playback dropouts with 5th/7th-order modulators):
-  // a single worker thread modulating 5th/7th-order CIFFR (especially with FIR filter phases or
-  // at DSD128+) can run SLOWER than real time; the progressive DSF file then starves and the
-  // DLNA renderer stops after its buffer drains. The track is split into up to 8 contiguous block
-  // segments modulated by parallel worker threads. The FIRST segment is deliberately short (~5 s):
-  // the contiguous prefix the renderer consumes is gated by the frontier worker's rate, so a short
-  // first segment bounds any stall, and every later segment is pre-generated well before the
-  // renderer reaches it (segment sizes grow geometrically x1.5). Each non-first segment additionally
-  // modulates ~1.5 s of preceding audio (warm-up) that is DISCARDED, so its integrator state at the
-  // segment boundary has converged to the continuous-run state (no audible discontinuity).
-  // Segment/view boundaries are chosen so the input<->output sample mapping stays exact
+  // Rolling chunk work pool (fix for DLNA playback dropouts + CPU spikes with 5th/7th-order
+  // modulators, especially DSD512): a single worker thread modulating 5th/7th-order CIFFR
+  // (with FIR phases or at DSD256/512) runs SLOWER than real time (measured 0.4-0.73x for
+  // 7th-order DSD512); the progressive DSF file then starves and the DLNA renderer stops after
+  // its buffer drains. A fixed pool of up to 8 RESIDENT worker threads is fed small sequential
+  // chunks (3-10 s, sized adaptively from each worker's measured real-time factor) by the main
+  // thread. The assignment itself is the flow control: only chunks within ~20 s of the
+  // contiguous frontier are handed out, so pre-generation is bounded and workers idle when the
+  // pool is ahead - CPU tracks real-time demand instead of racing to a shared cap and waking in
+  // synchronized polling bursts (the old design's periodic ~50% CPU spikes starved HTTP serving
+  // and caused dropouts). First-round assignments are staggered so chunk completions interleave
+  // and the prefix advances in small steps. Each non-first chunk additionally modulates ~1.5 s
+  // of preceding audio (warm-up) that is DISCARDED, so its integrator state at the chunk
+  // boundary has converged to the continuous-run state (no audible discontinuity). Chunk 0 is
+  // short (~5 s), starts at sample 0 with no warm-up, and is bit-identical to a single-pass
+  // whole-file encoding. Chunk/view boundaries keep the input<->output sample mapping exact
   // (required for non-integer ratios such as 48k -> DSD).
   async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear', peqOptions = null, convOptions = null) {
     this.cancelSession(token);
@@ -196,45 +201,43 @@ class NativeDspStreamer {
     // rounded up to whole blocks so generation and file mapping stay block-aligned.
     const preRollBitsFull = Math.ceil(((1.5 * dsdRate) + guardBits) / warmupLcm) * warmupLcm;
 
-    // Segment sizes: first ~5 s, then geometrically x1.5, so the contiguous prefix crosses segment
-    // boundaries before a slower-than-real-time frontier worker runs out of lead.
-    const segSizes = [];
-    {
-      let remaining = totalBlocks;
-      // Up to 8 parallel workers: modern audiophile machines have 8+ physical cores; the
-      // contiguous-prefix frontier gains every worker's output once the first segment lands.
-      const maxWorkers = Math.max(1, Math.min(8, os.cpus().length - 1));
-      const minSegBlocks = Math.max(segAlignBlocks, Math.round(6 * dsdRate / samplesPerBlock));
-      while (remaining > 0 && segSizes.length < maxWorkers) {
-        const wantSec = segSizes.length === 0 ? 5 : 5 * Math.pow(1.5, segSizes.length);
-        let sizeBlocks = Math.max(segAlignBlocks, Math.round((wantSec * dsdRate / samplesPerBlock) / segAlignBlocks) * segAlignBlocks);
-        if (segSizes.length > 0 && remaining - sizeBlocks < minSegBlocks) sizeBlocks = remaining; // merge short tail
-        if (sizeBlocks > remaining) sizeBlocks = remaining;
-        segSizes.push(sizeBlocks);
-        remaining -= sizeBlocks;
-      }
-    }
+    // --- Rolling chunk work pool (fix for DSD512 / 7th-order modulation) ---
+    // Measured single-thread RTF for 7th-order DSD512 is 0.4-0.73x real-time, so the old fixed
+    // geometric segments (5 s growing x1.5) made the contiguous prefix CRAWL inside long segments
+    // at one worker's sub-realtime rate: the renderer buffer drained and playback stuttered for
+    // minutes ("斷斷續續"). The shared sliding-window cap + Atomics.wait 1 s polling also made
+    // every capped worker wake on the same timeout boundary and race simultaneously - periodic
+    // ~50% CPU spikes that starved the main-process HTTP serving (more dropouts).
+    // New design: a fixed pool of W resident workers fed SMALL sequential chunks (3-10 s, sized
+    // adaptively from each worker's measured RTF) by the main thread. The assignment itself is
+    // the flow control (no Atomics at all): only chunks within AHEAD_SEC of the contiguous
+    // frontier are assigned, so total pre-generation is bounded and workers idle when ahead -
+    // CPU automatically tracks real-time demand instead of bursting. The first round of
+    // assignments is staggered (MIN_GAP_MS) so chunk completions interleave and the prefix
+    // advances in small steps instead of one giant jump. Chunk 0 (no warm-up, from sample 0) is
+    // bit-identical to a single-pass whole-file encoding; every later chunk warm-starts 1.5 s
+    // of the true preceding audio (discarded) so chunk joins match a continuous run.
+    const blocksPerSec = dsdRate / samplesPerBlock;
+    const W = Math.max(1, Math.min(8, os.cpus().length - 1));
+    const AHEAD_SEC = 20;
+    const aheadBlocks = Math.max(1, Math.round(AHEAD_SEC * blocksPerSec));
+    const MIN_GAP_MS = 250; // first-round assignment stagger
+    const CHUNK0_SEC = 5;
+    const INIT_SEC = 4; // session resolves (renderer may start) once this much is available
+    const chunk0Blocks = Math.min(totalBlocks, Math.max(segAlignBlocks, Math.round((CHUNK0_SEC * blocksPerSec) / segAlignBlocks) * segAlignBlocks));
+    const initBlocks = Math.min(chunk0Blocks, Math.max(1, Math.round((INIT_SEC * blocksPerSec) / segAlignBlocks) * segAlignBlocks));
 
-    const segs = [];
-    {
-      let startBlock = 0;
-      for (let i = 0; i < segSizes.length; i++) {
-        const endBlock = startBlock + segSizes[i];
-        // The view starts preRollBits output-bits before the segment (exact integer input offset).
-        // Generation starts AT the view start: it modulates the segment's true preceding audio
-        // (warm-up) so the integrator state at the segment boundary matches a continuous run,
-        // then writes the segment itself at its exact file position (no shift). The first
-        // segment starts at 0 exactly like the old single-worker whole-file pass.
-        const preRollBits = startBlock === 0 ? 0 : Math.min(preRollBitsFull, startBlock * samplesPerBlock);
-        const viewStartInput = Math.max(0, Math.round(((startBlock * samplesPerBlock - preRollBits) * srcRate) / dsdRate));
-        const genStartBit = 0;
-        const genEndBit = preRollBits + (endBlock - startBlock) * samplesPerBlock;
-        const viewLen = Math.min(inLen - viewStartInput, Math.ceil((genEndBit * srcRate) / dsdRate) + guardSamples);
-        segs.push({ startBlock, endBlock, viewStartInput, viewLen, genStartBit, genEndBit, warmupBits: preRollBits });
-        startBlock = endBlock;
-      }
-    }
-    const K = segs.length;
+    let rEst = 0; // EMA of measured per-chunk worker RTF (audioSec / wallSec); 0 = not yet measured
+    const chunkSizeFor = (startBlock) => {
+      let sec;
+      if (startBlock === 0) sec = CHUNK0_SEC;
+      else if (rEst === 0 || rEst < 0.5) sec = 4;      // slow config: small chunks -> frequent prefix jumps
+      else if (rEst < 1.1) sec = 6;                    // borderline: keep warm-up overhead low
+      else sec = 10;                                   // faster than real time: large chunks, minimal overhead
+      let sizeBlocks = Math.max(segAlignBlocks, Math.round((sec * blocksPerSec) / segAlignBlocks) * segAlignBlocks);
+      if (startBlock + sizeBlocks > totalBlocks) sizeBlocks = totalBlocks - startBlock; // final chunk may be short
+      return Math.max(1, sizeBlocks);
+    };
 
     // Shared PCM: SharedArrayBuffer views are shared with every worker without per-worker copies.
     const leftSAB = new SharedArrayBuffer(pcm.left.byteLength);
@@ -251,6 +254,7 @@ class NativeDspStreamer {
     session.isCancelled = false;
     session.totalFileBytes = totalFileBytes;
     session.durationSec = inLen / srcRate;
+    session.chunk0Blocks = chunk0Blocks; // exposed for bit-identical regression tests
     // Source PCM exposed for the NOW PLAYING real-time spectrum (zero-copy views on the
     // SharedArrayBuffers the modulation workers already read).
     session.startSec = startSec;
@@ -262,124 +266,190 @@ class NativeDspStreamer {
     session.convIrRaw = convIrRaw;
 
     const workerPath = path.join(__dirname, 'dsd-modulator-worker.js');
-    const workers = [];
-    const workerProgress = segs.map((s) => s.startBlock); // absolute contiguous completed blocks per segment
-    let completedCount = 0;
+    const pool = [];             // resident worker entries { worker, idle, currentChunk }
+    const idleWorkers = [];      // entries currently awaiting an assignment
+    const chunkMeta = [];        // assigned chunks: { startBlock, endBlock }
+    const chunkProgress = [];    // absolute contiguous completed blocks per assigned chunk
+    const chunkRetries = new Map();
+    let nextStartBlock = 0;      // next unassigned chunk start (blocks)
+    let allAssigned = false;
+    let firstRoundAssigned = 0;  // assignments in the initial staggered round
+    let lastAssignAt = 0;
+    let chunk0Started = false;   // chunk 0 has produced its first batch (frontier is moving)
     let initDone = false;
     let initError = null;
     let resolveInit, rejectInit;
     const initPromise = new Promise((res, rej) => { resolveInit = res; rejectInit = rej; });
 
-    // The reader may only consume the contiguous completed prefix across all segments.
+    // The reader may only consume the contiguous completed prefix across all chunks.
     let currentPrefixBlocks = 0;
     const updateAvailable = () => {
       let prefix = 0;
-      for (let i = 0; i < K; i++) {
-        if (workerProgress[i] >= segs[i].endBlock) { prefix = segs[i].endBlock; continue; }
-        prefix = workerProgress[i];
+      for (let i = 0; i < chunkMeta.length; i++) {
+        if (chunkProgress[i] >= chunkMeta[i].endBlock) { prefix = chunkMeta[i].endBlock; continue; }
+        prefix = chunkProgress[i];
         break;
       }
       currentPrefixBlocks = prefix;
       session.bytesWritten = 92 + prefix * bytesPerBlockPair;
       session.emit('progress', session.bytesWritten);
-      updateCaps();
+      if (!initDone && (session.isCompleted || prefix >= initBlocks)) { initDone = true; resolveInit(); }
     };
 
-    // Sliding-window cap pacing: a worker may generate at most CAP_AHEAD_SEC of audio beyond
-    // the contiguous frontier; beyond that it naps until the frontier approaches. The frontier
-    // worker is never capped (always full speed -> the renderer can never starve), while
-    // far-ahead workers idle instead of pinning all cores for the whole track - CPU contention
-    // had been starving the HTTP serving / Electron and caused periodic pops.
-    const blocksPerSec = dsdRate / samplesPerBlock;
-    const CAP_AHEAD_SEC = 25;
-    const capBlocks = Math.max(1, Math.round(CAP_AHEAD_SEC * blocksPerSec));
-    const capSAB = new SharedArrayBuffer(K * 4);
-    const capView = new Int32Array(capSAB);
-    capView.fill(capBlocks); // initial window: prefix = 0
-    const updateCaps = () => {
-      if (session.isCompleted || session.isCancelled) return;
-      const cap = currentPrefixBlocks + capBlocks;
-      for (let i = 0; i < K; i++) Atomics.store(capView, i, cap);
-    };
-
-    if (K === 0) {
+    const checkComplete = () => {
+      if (session.isCompleted) return true;
+      if (!allAssigned || chunkMeta.length === 0) return false;
+      for (let i = 0; i < chunkMeta.length; i++) {
+        if (chunkProgress[i] < chunkMeta[i].endBlock) return false;
+      }
       session.isCompleted = true;
       session.bytesWritten = totalFileBytes;
+      try { clearInterval(assignTimer); } catch (e) {}
+      for (const p of pool) { try { p.worker.terminate(); } catch (e) {} }
+      session.emit('complete');
+      return true;
+    };
+
+    // Assignment IS the flow control: a chunk is only handed out while its start lies within
+    // AHEAD_SEC of the contiguous frontier. Workers idle (zero CPU) whenever the pool is ahead,
+    // so aggregate generation automatically tracks the renderer's real-time demand.
+    const tryAssign = () => {
+      if (session.isCompleted || session.isCancelled) return;
+      if (checkComplete()) return;
+      while (idleWorkers.length > 0 && nextStartBlock < totalBlocks) {
+        if (nextStartBlock > currentPrefixBlocks + aheadBlocks) break;
+        if (nextStartBlock > 0 && !chunk0Started) break; // keep the startup window clear for chunk 0
+        if (firstRoundAssigned < W && Date.now() - lastAssignAt < MIN_GAP_MS) break; // stagger completions
+        const startBlock = nextStartBlock;
+        const sizeBlocks = chunkSizeFor(startBlock);
+        const endBlock = startBlock + sizeBlocks;
+        // The view starts warmupBits output-bits before the chunk (exact integer input offset).
+        // Generation starts AT the view start: it modulates the chunk's true preceding audio
+        // (warm-up) so the integrator state at the chunk boundary matches a continuous run,
+        // then writes the chunk itself at its exact file position (no shift). Chunk 0 starts
+        // at 0 exactly like a single-worker whole-file pass.
+        const warmupBits = startBlock === 0 ? 0 : Math.min(preRollBitsFull, startBlock * samplesPerBlock);
+        const viewStartInput = Math.max(0, Math.round(((startBlock * samplesPerBlock - warmupBits) * srcRate) / dsdRate));
+        const genEndBit = warmupBits + (endBlock - startBlock) * samplesPerBlock;
+        const viewLen = Math.min(inLen - viewStartInput, Math.ceil((genEndBit * srcRate) / dsdRate) + guardSamples);
+        const idx = chunkMeta.length;
+        chunkMeta.push({ startBlock, endBlock });
+        chunkProgress.push(startBlock);
+        nextStartBlock = endBlock;
+        if (nextStartBlock >= totalBlocks) allAssigned = true;
+        const entry = idleWorkers.pop();
+        entry.idle = false;
+        entry.currentChunk = idx;
+        firstRoundAssigned++;
+        lastAssignAt = Date.now();
+        entry.worker.postMessage({ type: 'assign', idx, startBlock, endBlock, viewStartInput, viewLen, warmupBits, genEndBit });
+      }
+    };
+
+    // Safety net: drives the staggered first round and recovers missed hand-offs.
+    const assignTimer = setInterval(() => { tryAssign(); }, 300);
+
+    if (totalBlocks === 0) {
+      session.isCompleted = true;
+      session.bytesWritten = totalFileBytes;
+      allAssigned = true;
       initDone = true;
+      clearInterval(assignTimer);
       resolveInit();
     }
 
-    for (let i = 0; i < K; i++) {
-      const s = segs[i];
+    const spawnWorker = () => {
       const worker = new Worker(workerPath, {
         workerData: {
           tmpFile,
           leftBuffer: leftSAB,
-          leftByteOffset: s.viewStartInput * 4,
-          leftLength: s.viewLen,
           rightBuffer: rightSAB,
-          rightByteOffset: s.viewStartInput * 4,
-          rightLength: s.viewLen,
           sampleRate: srcRate,
           dsdMode,
           dsdOrder,
           filterPhase,
-          peqOptions: session.peqOptions,
-          genStartBit: s.genStartBit,
-          genEndBit: s.genEndBit,
-          warmupBits: s.warmupBits,
-          writeStartBlock: s.startBlock,
-          isPrimary: i === 0,
-          capSAB,
-          capSlot: i
+          peqOptions: session.peqOptions
         }
       });
-      workers.push(worker);
+      const entry = { worker, idle: true, currentChunk: -1 };
+      pool.push(entry);
+      idleWorkers.push(entry);
       worker.on('message', (msg) => {
-        if (msg.type === 'progress' || msg.type === 'initial') {
-          workerProgress[i] = Math.max(workerProgress[i], msg.blocksWritten);
+        if (msg.type === 'progress') {
+          chunk0Started = true;
+          const c = msg.idx;
+          if (c >= 0 && c < chunkProgress.length) chunkProgress[c] = Math.max(chunkProgress[c], msg.blocksWritten);
           updateAvailable();
-          if (msg.type === 'initial' && !initDone) { initDone = true; resolveInit(); }
+          tryAssign();
+        } else if (msg.type === 'chunkdone') {
+          const c = msg.idx;
+          const meta = chunkMeta[c];
+          if (meta) {
+            chunkProgress[c] = Math.max(chunkProgress[c], meta.endBlock);
+            const audioSec = (meta.endBlock - meta.startBlock) * samplesPerBlock / dsdRate;
+            if (msg.wallSec > 0 && audioSec > 0) {
+              const rChunk = audioSec / msg.wallSec;
+              rEst = rEst === 0 ? rChunk : rEst * 0.7 + rChunk * 0.3;
+            }
+          }
+          entry.currentChunk = -1;
+          entry.idle = true;
+          if (!session.isCompleted && !session.isCancelled) idleWorkers.push(entry);
+          updateAvailable();
+          checkComplete() || tryAssign();
         }
       });
-      worker.on('error', (err) => {
+      const degrade = (err) => {
         console.error('[DsdWorker] error:', err);
         if (!initDone) {
           if (!initError) { initError = err; rejectInit(err); }
-        } else if (!session.isCompleted) {
-          session.isCompleted = true; session.emit('complete'); // degrade to EOF instead of hanging forever
+          return;
         }
-      });
+        // Retry the unfinished chunk once (regenerated from its start by another worker -
+        // same file range, idempotent overwrite); degrade to EOF only on a second failure.
+        const c = entry.currentChunk;
+        if (c >= 0 && (chunkRetries.get(c) || 0) < 1 && !session.isCompleted && !session.isCancelled) {
+          chunkRetries.set(c, (chunkRetries.get(c) || 0) + 1);
+          entry.idle = true;
+          idleWorkers.push(entry);
+          tryAssign();
+          return;
+        }
+        if (!session.isCompleted) {
+          session.isCompleted = true;
+          try { clearInterval(assignTimer); } catch (e) {}
+          session.emit('complete'); // degrade to EOF instead of hanging forever
+        }
+      };
+      worker.on('error', degrade);
       worker.on('exit', (code) => {
-        if (code === 0) {
-          workerProgress[i] = segs[i].endBlock;
-          completedCount++;
-          if (completedCount >= K) {
-            session.isCompleted = true;
-            session.bytesWritten = totalFileBytes;
-            session.emit('complete');
-          } else {
-            updateAvailable();
-          }
-        } else if (!initDone) {
-          if (!initError) { initError = new Error(`DSD worker exited with code ${code}`); rejectInit(initError); }
-        } else if (!session.isCompleted) {
-          session.isCompleted = true; session.emit('complete');
-        }
+        if (code === 0) return; // terminated on complete/cancel
+        if (!session.isCompleted && !session.isCancelled) degrade(new Error(`DSD worker exited with code ${code}`));
       });
+    };
+
+    if (totalBlocks > 0) {
+      // Spawn the whole pool immediately: the parallel workers' module load / JIT warm-up /
+      // warm-up regions overlap chunk 0's generation, so the first parallel chunk completions
+      // land as early as possible (early completions = early prefix jumps = no startup stall).
+      for (let i = 0; i < W; i++) spawnWorker();
     }
+
+    tryAssign(); // kick off chunk 0 immediately
 
     try {
       await initPromise;
     } catch (err) {
-      for (const w of workers) { try { w.terminate(); } catch (e) {} }
+      try { clearInterval(assignTimer); } catch (e) {}
+      for (const p of pool) { try { p.worker.terminate(); } catch (e) {} }
       try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
       throw initError || err;
     }
 
     session.cancel = () => {
       session.isCancelled = true;
-      for (const w of workers) { try { w.terminate(); } catch (e) {} }
+      try { clearInterval(assignTimer); } catch (e) {}
+      for (const p of pool) { try { p.worker.terminate(); } catch (e) {} }
       try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
       this.activeSessions.delete(token);
     };

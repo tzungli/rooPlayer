@@ -1,5 +1,5 @@
 // ==========================================
-// rooPlayer - DSD Modulator Worker Thread (segment mode)
+// rooPlayer - DSD Modulator Worker Thread (rolling chunk mode)
 // Dedicated High-Speed Noise-Shaping 1-bit Delta-Sigma Modulator
 // Supports 2nd, 5th, and 7th Order SDM with Linear/Minimum/Intermediate Phase
 // Hermite interpolation, or the 'gauss-long' (linear-phase) / 'gauss-min'
@@ -7,16 +7,19 @@
 // 'hqp-ps-ext2' extended poly-sinc FIR filters.
 // Completely offloaded from Electron UI / Main Process
 //
-// Parallel segment mode (see createDsdSession in native-dsp-streamer.js): 5th/7th-order
-// CIFFR on a single thread can run slower than real time (DSD128+ or FIR phases), which
-// starved the progressive DSF file and cut off DLNA playback after a few seconds. The track
-// is split into contiguous block segments modulated by independent worker threads.
-// This worker generates view-relative output bits [0, genEndBit): the first warmupBits blocks are
-// the segment's true PRECEDING audio (warm-up, DISCARDED - they converge the integrator state to
-// the continuous-run state at the segment boundary), the rest is written at
-// 92 + (writeStartBlock + n) * 2 * DSD_BLOCK_SIZE with no shift. The DSF header is written by the
-// main thread. The first segment (writeStartBlock 0, warmupBits 0, view from sample 0) is
-// bit-identical to the old single-worker whole-file pass.
+// Rolling chunk mode (see createDsdSession in native-dsp-streamer.js): the main thread
+// assigns small chunks (3-10 s) sequentially to a fixed pool of resident worker threads.
+// The ASSIGNMENT itself is the flow control (replaces the old sliding-window cap +
+// Atomics.wait polling, which made every capped worker wake on the same 1 s timeout and
+// race simultaneously -> periodic ~50% CPU spikes that starved the DLNA HTTP serving):
+// a worker generates exactly one assigned chunk, reports progress per 100-block batch,
+// then waits idle for its next assignment.
+//
+// Each chunk view (except chunk 0) starts 1.5 s + FIR guard BEFORE the chunk's own audio
+// (warm-up: generated to converge the integrator state to the continuous-run state at the
+// chunk boundary, then DISCARDED). Chunk 0 starts at sample 0 with no warm-up and is
+// bit-identical to a single-pass whole-file encoding. Chunk joins stay seamless
+// (verified by test-dsd-boundary).
 //
 // All DSP math (interpolation kernel + modulator) comes from dsp-kernel.js,
 // the single source of truth shared with the progressive streaming engine.
@@ -34,137 +37,111 @@ const {
   applyPeqArrays
 } = require('./dsp-kernel');
 
-function run() {
-  const {
-    tmpFile,
-    leftBuffer,
-    leftByteOffset,
-    leftLength,
-    rightBuffer,
-    rightByteOffset,
-    rightLength,
-    sampleRate,
-    dsdMode,
-    dsdOrder,
-    filterPhase,
-    genStartBit,
-    genEndBit,
-    warmupBits,
-    writeStartBlock,
-    isPrimary,
-    capSAB,
-    capSlot
-  } = workerData;
+const {
+  tmpFile,
+  leftBuffer,
+  rightBuffer,
+  sampleRate,
+  dsdMode,
+  dsdOrder,
+  filterPhase,
+  peqOptions
+} = workerData;
 
-  // Sliding-window cap signal (see createDsdSession): capView[capSlot] = absolute block index
-  // this worker may generate up to (frontier + CAP_AHEAD_SEC). The worker naps whenever it is
-  // ahead of the sliding window; Atomics.wait wakes early when the main thread advances the cap.
-  const capView = capSAB ? new Int32Array(capSAB) : null;
+const dsdRate = getDsdRate(dsdMode);
+const invRatio = sampleRate / dsdRate;
+const samplesPerBlock = DSD_SAMPLES_PER_BLOCK;
+const bytesPerBlockPair = 2 * DSD_BLOCK_SIZE;
 
-  // The main thread hands an exact input-sample view (segment range + warm-up + FIR guard).
-  const left = new Float32Array(leftBuffer, leftByteOffset || 0, leftLength !== undefined ? leftLength : leftBuffer.byteLength / 4);
-  const right = new Float32Array(rightBuffer, rightByteOffset || 0, rightLength !== undefined ? rightLength : rightBuffer.byteLength / 4);
-  const inLen = left.length;
+// Data-only mode: the 92-byte DSF header was already written by the main thread.
+const fd = fs.openSync(tmpFile, 'r+');
 
-  const dsdRate = getDsdRate(dsdMode);
-  const ratio = dsdRate / sampleRate;
-  const invRatio = 1.0 / ratio;
+// FIR coefficients and PEQ chain depend only on (dsdRate, srcRate, phase, options):
+// built ONCE per worker and reused across every assigned chunk.
+let gaussFilter = null;
+try { gaussFilter = buildFilterForPhase(dsdRate, sampleRate, filterPhase); } catch (e) { gaussFilter = null; }
+let peqChain = null;
+try { peqChain = (peqOptions && peqOptions.enabled) ? createPeqChain(sampleRate, peqOptions) : null; } catch (e) { peqChain = null; }
 
-  const blockSize = DSD_BLOCK_SIZE;
-  const samplesPerBlock = DSD_SAMPLES_PER_BLOCK;
-  const bytesPerBlockPair = 2 * blockSize;
+// Reused batch scratch (100 blocks): avoids per-batch allocation churn and the GC pauses
+// that used to stall the frontier worker mid-generation (frontier stall = renderer underrun).
+const scratch = Buffer.allocUnsafe(100 * bytesPerBlockPair);
 
-  const genBlocks = Math.round((genEndBit - genStartBit) / samplesPerBlock);
-  const warmupBlocks = Math.round(warmupBits / samplesPerBlock);
+// JIT warm-up: run a short throwaway modulation (zeros, DISCARDED) at worker start so the
+// hot loop is fully optimized before the first real chunk. Without this, the first seconds of
+// a session run at cold-JIT speed (~0.2x), the startup prefix crawl dips below real time,
+// and the renderer's preroll buffer drains -> a startup dropout.
+try {
+  const warmMod = new DsdModulator(dsdOrder, filterPhase, gaussFilter);
+  const warmBits = Math.max(samplesPerBlock, Math.ceil((0.2 * dsdRate) / samplesPerBlock) * samplesPerBlock);
+  const warmSamples = Math.ceil((warmBits * sampleRate) / dsdRate) + 8;
+  const zl = new Float32Array(warmSamples);
+  const zr = new Float32Array(warmSamples);
+  warmMod.processBlocks(zl, zr, warmSamples, 0, warmBits, invRatio, scratch);
+} catch (e) {}
 
-  // Data-only mode: the 92-byte DSF header was already written by the main thread.
-  const fd = fs.openSync(tmpFile, 'r+');
+function processChunk(msg) {
+  const { idx, startBlock, endBlock, viewStartInput, viewLen, warmupBits, genEndBit } = msg;
 
-  // 濾波器插件：FIR 插件經 buildFilterForPhase 建立此 (dsdRate, sampleRate) 的係數一次
-  // （設計見 dsp-kernel.js 與 filter-plugins/）。
-  let gaussFilter = null;
-  try { gaussFilter = buildFilterForPhase(dsdRate, sampleRate, filterPhase); } catch (e) { gaussFilter = null; }
-  const modulator = new DsdModulator(dsdOrder, filterPhase, gaussFilter);
+  // The main thread hands an exact input-sample view (chunk range + warm-up + FIR guard).
+  const left = new Float32Array(leftBuffer, viewStartInput * 4, viewLen);
+  const right = new Float32Array(rightBuffer, viewStartInput * 4, viewLen);
+  const inLen = viewLen;
 
-  // PEQ (PCM domain, at source rate): applied once to this worker's view slice before
-  // modulation. The view includes the segment's true preceding audio (warm-up), so the
-  // biquad state at the segment boundary is converged exactly like the modulator's -
-  // segment joins stay seamless. Fresh chain per worker (identical coefficients).
+  // PEQ (PCM domain, at source rate): applied to this chunk's view before modulation.
+  // The view includes the chunk's true preceding audio (warm-up), so the biquad state at
+  // the chunk boundary is converged exactly like the modulator's - chunk joins stay seamless.
   let peqL = left, peqR = right;
-  if (workerData.peqOptions && workerData.peqOptions.enabled) {
+  if (peqChain) {
     try {
-      const peqChain = createPeqChain(sampleRate, workerData.peqOptions);
-      if (peqChain) {
-        peqL = new Float32Array(inLen);
-        peqR = new Float32Array(inLen);
-        applyPeqArrays(peqChain, left, right, peqL, peqR, inLen);
-      }
-    } catch (e) { /* PEQ failure must never break playback: fall through unprocessed */ }
+      peqL = new Float32Array(inLen);
+      peqR = new Float32Array(inLen);
+      applyPeqArrays(peqChain, left, right, peqL, peqR, inLen);
+    } catch (e) { peqL = left; peqR = right; /* PEQ failure must never break playback */ }
   }
 
+  const modulator = new DsdModulator(dsdOrder, filterPhase, gaussFilter);
+  const genBlocks = Math.round(genEndBit / samplesPerBlock);
+  const warmupBlocks = Math.round(warmupBits / samplesPerBlock);
+
+  const t0 = process.hrtime.bigint();
   let genDone = 0; // generated blocks so far, INCLUDING warm-up blocks
-
-  const writeBatch = (count) => {
-    const startB = genDone;
-    const endB = Math.min(genBlocks, startB + count);
-    if (startB >= endB) return 0;
-
+  while (genDone < genBlocks) {
+    const endB = Math.min(genBlocks, genDone + 100);
     const chunk = modulator.processBlocks(
       peqL,
       peqR,
       inLen,
-      genStartBit + startB * samplesPerBlock,
-      genStartBit + endB * samplesPerBlock,
-      invRatio
+      genDone * samplesPerBlock,
+      endB * samplesPerBlock,
+      invRatio,
+      scratch
     );
 
     // Warm-up blocks are generated (to converge modulator state) but never written.
-    const writeStart = Math.max(startB, warmupBlocks);
+    const writeStart = Math.max(genDone, warmupBlocks);
     if (writeStart < endB) {
-      const fileOffset = 92 + (writeStart - warmupBlocks + writeStartBlock) * bytesPerBlockPair;
-      fs.writeSync(fd, chunk, (writeStart - startB) * bytesPerBlockPair, (endB - writeStart) * bytesPerBlockPair, fileOffset);
+      const fileOffset = 92 + (writeStart - warmupBlocks + startBlock) * bytesPerBlockPair;
+      fs.writeSync(fd, chunk, (writeStart - genDone) * bytesPerBlockPair, (endB - writeStart) * bytesPerBlockPair, fileOffset);
     }
     genDone = endB;
     parentPort.postMessage({
       type: 'progress',
-      blocksWritten: writeStartBlock + Math.max(0, genDone - warmupBlocks)
-    });
-    return endB - startB;
-  };
-
-  // 1. Initial burst for instant playback start (< 250ms): first ~3 seconds of this segment.
-  //    The primary (first) segment's initial write gates the session start. Segments far ahead
-  //    of the sliding window skip their initial burst (it would only burn CPU for later).
-  const initialBlocks = Math.min(genBlocks, Math.ceil(3 * dsdRate / samplesPerBlock));
-  const skipInitial = capView && !isPrimary && writeStartBlock > Atomics.load(capView, capSlot);
-  if (!skipInitial) writeBatch(initialBlocks);
-  if (isPrimary) {
-    parentPort.postMessage({
-      type: 'initial',
-      blocksWritten: writeStartBlock + Math.max(0, genDone - warmupBlocks)
+      idx,
+      blocksWritten: startBlock + Math.max(0, genDone - warmupBlocks)
     });
   }
 
-  // 2. Progressive modulation in background (~100 blocks per batch), held to the sliding
-  //    window: nap until the frontier comes within CAP_AHEAD_SEC of this segment.
-  while (genDone < genBlocks) {
-    if (capView) {
-      const myAbs = writeStartBlock + Math.max(0, genDone - warmupBlocks);
-      let cap = Atomics.load(capView, capSlot);
-      while (myAbs > cap) {
-        Atomics.wait(capView, capSlot, cap, 1000);
-        const c2 = Atomics.load(capView, capSlot);
-        if (c2 > cap) cap = c2;
-      }
-    }
-    writeBatch(Math.min(100, genBlocks - genDone));
-  }
-
-  try { fs.closeSync(fd); } catch (e) {}
-  parentPort.postMessage({
-    type: 'progress',
-    blocksWritten: writeStartBlock + Math.max(0, genBlocks - warmupBlocks)
-  });
+  const wallSec = Number(process.hrtime.bigint() - t0) / 1e9;
+  parentPort.postMessage({ type: 'chunkdone', idx, wallSec });
 }
 
-run();
+parentPort.on('message', (msg) => {
+  if (!msg) return;
+  if (msg.type === 'assign') {
+    processChunk(msg);
+  } else if (msg.type === 'stop') {
+    try { fs.closeSync(fd); } catch (e) {}
+    process.exit(0);
+  }
+});

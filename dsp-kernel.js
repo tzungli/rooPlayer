@@ -729,13 +729,16 @@ class DsdModulator {
   // startBit / endBit must be multiples of DSD_SAMPLES_PER_BLOCK.
   // Returns a Buffer of numBlocks * 2 * DSD_BLOCK_SIZE bytes in DSF block-pair layout
   // (left block followed by right block for each block).
-  processBlocks(left, right, inLen, startBit, endBit, invRatio) {
+  // Optional outBuf: a caller-reused scratch buffer (>= needed size) to avoid per-batch
+  // allocation churn / GC pauses in progressive worker loops. Ignored when too small.
+  processBlocks(left, right, inLen, startBit, endBit, invRatio, outBuf) {
     const numBlocks = Math.round((endBit - startBit) / DSD_SAMPLES_PER_BLOCK);
     if (numBlocks <= 0) return Buffer.alloc(0);
 
     const blockSize = DSD_BLOCK_SIZE;
     const samplesPerBlock = DSD_SAMPLES_PER_BLOCK;
-    const out = Buffer.allocUnsafe(numBlocks * 2 * blockSize);
+    const needBytes = numBlocks * 2 * blockSize;
+    const out = (outBuf && outBuf.length >= needBytes) ? outBuf : Buffer.allocUnsafe(needBytes);
     const order = this.order;
     const phase = this.phase;
     const useGauss = this.useFir;
