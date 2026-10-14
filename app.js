@@ -6996,8 +6996,8 @@ function drawUfPreview(cv, data) {
 }
 
 function openUfEditor(slotId) {
-  const modal = document.getElementById('userFilterModal');
-  if (!modal) return;
+  const panel = document.getElementById('ufEditorPanel');
+  if (!panel) return;
   const slot = slotId ? ufSlots.find(s => s.id === slotId) : null;
   ufEditingId = slot ? slot.id : null;
   document.getElementById('ufEditorTitle').textContent = slot ? `編輯濾波器（${slot.id}）` : '新建濾波器';
@@ -7012,14 +7012,16 @@ function openUfEditor(slotId) {
   document.querySelectorAll('#ufPhaseSeg .uf-seg-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-phase') === phase));
   document.getElementById('ufDeleteBtn').style.display = slot ? '' : 'none';
   ufFillSlotSelect(slot ? slot.id : null);
-  modal.style.display = 'flex';
+  document.getElementById('ufManagePanel').style.display = 'none';
+  panel.style.display = '';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   ufUpdateFormReadouts();
   ufSchedulePreview();
 }
 
 function closeUfEditor() {
-  const modal = document.getElementById('userFilterModal');
-  if (modal) modal.style.display = 'none';
+  const panel = document.getElementById('ufEditorPanel');
+  if (panel) panel.style.display = 'none';
   clearTimeout(ufPreviewTimer);
 }
 
@@ -7115,14 +7117,13 @@ function initUserFilterControls() {
 
   $('ufNewBtn').addEventListener('click', () => openUfEditor(null));
   $('ufManageBtn').addEventListener('click', () => {
-    const m = $('userFilterManageModal');
+    const p = $('ufManagePanel');
+    const opening = p.style.display === 'none';
     renderUfManageList();
-    m.style.display = 'flex';
+    p.style.display = opening ? '' : 'none';
   });
   $('ufCloseEditor').addEventListener('click', closeUfEditor);
-  $('ufCloseManage').addEventListener('click', () => { $('userFilterManageModal').style.display = 'none'; });
-  $('userFilterModal').addEventListener('click', (e) => { if (e.target === $('userFilterModal')) closeUfEditor(); });
-  $('userFilterManageModal').addEventListener('click', (e) => { if (e.target === $('userFilterManageModal')) $('userFilterManageModal').style.display = 'none'; });
+  $('ufCloseManage').addEventListener('click', () => { $('ufManagePanel').style.display = 'none'; });
 
   $('ufWindowSeg').addEventListener('click', (e) => {
     const b = e.target.closest('.uf-seg-btn');
@@ -7156,7 +7157,7 @@ function initUserFilterControls() {
     const slotId = row && row.getAttribute('data-slot');
     if (!slotId) return;
     const action = btn.getAttribute('data-action');
-    if (action === 'edit') { $('userFilterManageModal').style.display = 'none'; openUfEditor(slotId); }
+    if (action === 'edit') openUfEditor(slotId); // openUfEditor 會收合管理面板，保持單面板
     else if (action === 'copy') ufCopyFlow(slotId);
     else if (action === 'delete') ufDeleteFlow(slotId);
   });

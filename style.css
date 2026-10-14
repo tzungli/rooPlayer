@@ -2154,16 +2154,24 @@ body.table-col-resizing * {
   color: #ecfdf5;
 }
 
-/* 編輯器 modal */
-.uf-editor-card {
-  max-width: 940px;
-  width: 92vw;
+/* 內聯展開面板（編輯器／管理，全部在同一視窗內完成） */
+.uf-panel {
+  margin-top: 12px;
+  border-top: 1px solid rgba(52, 211, 153, 0.25);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.uf-editor-body {
-  display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.1fr);
-  gap: 22px;
+.uf-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #34d399;
 }
 
 .uf-form-col {
@@ -2259,12 +2267,7 @@ body.table-col-resizing * {
   color: var(--text-muted);
 }
 
-/* 管理 modal */
-.uf-manage-card {
-  max-width: 720px;
-  width: 90vw;
-}
-
+/* 管理面板（內聯） */
 .uf-manage-list {
   display: flex;
   flex-direction: column;

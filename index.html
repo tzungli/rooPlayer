@@ -1584,89 +1584,6 @@
     </main>
   </div>
 
-  <!-- User Filter Editor Modal (使用者自訂濾波器編輯器：純參數，即時響應預覽) -->
-  <div id="userFilterModal" class="modal-overlay" style="display: none;">
-    <div class="modal-card uf-editor-card">
-      <div class="modal-header">
-        <div class="modal-title-wrap" style="display: flex; align-items: center;">
-          <span style="background: #34d399; color: #06281e; font-weight: 800; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-right: 10px; letter-spacing: 0.5px;">自訂濾波器</span>
-          <h3 style="margin: 0; font-size: 16px; font-weight: 600;" id="ufEditorTitle">新建濾波器</h3>
-        </div>
-        <button class="icon-btn" id="ufCloseEditor">✕</button>
-      </div>
-      <div class="modal-body uf-editor-body">
-        <div class="uf-form-col">
-          <div class="uf-field">
-            <label for="ufNameInput">名稱</label>
-            <input type="text" id="ufNameInput" class="form-control" maxlength="40" placeholder="例如：暖聲緩降" style="width:100%;box-sizing:border-box;">
-          </div>
-          <div class="uf-field">
-            <label for="ufSoundInput">聲音特色描述（顯示於按鈕提示）</label>
-            <input type="text" id="ufSoundInput" class="form-control" maxlength="80" placeholder="例如：高頻柔化、鈴振不可聽" style="width:100%;box-sizing:border-box;">
-          </div>
-          <div class="uf-field">
-            <label>窗函數</label>
-            <div class="uf-seg" id="ufWindowSeg">
-              <button class="uf-seg-btn" data-window="hann">Hann</button>
-              <button class="uf-seg-btn" data-window="hamming">Hamming</button>
-              <button class="uf-seg-btn" data-window="blackman">Blackman</button>
-              <button class="uf-seg-btn active" data-window="blackmanHarris">Blackman-Harris</button>
-              <button class="uf-seg-btn" data-window="kaiser">Kaiser</button>
-            </div>
-          </div>
-          <div class="uf-field" id="ufAsRow" style="display:none;">
-            <label>止帶深度 <span class="uf-val" id="ufAsVal">100 dB</span></label>
-            <input type="range" id="ufAsSlider" min="40" max="180" step="5" value="100">
-          </div>
-          <div class="uf-field">
-            <label>截止延伸 <span class="uf-val" id="ufCutVal">1.135 × 源Nyquist</span></label>
-            <input type="range" id="ufCutSlider" min="80" max="135" step="1" value="113">
-          </div>
-          <div class="uf-field">
-            <label>濾波長度 <span class="uf-val" id="ufTapVal">96 taps</span> <span class="uf-load" id="ufLoadBadge">負荷: 低</span></label>
-            <input type="range" id="ufTapSlider" min="16" max="512" step="8" value="96">
-          </div>
-          <div class="uf-field">
-            <label>相位性格</label>
-            <div class="uf-seg" id="ufPhaseSeg">
-              <button class="uf-seg-btn active" data-phase="linear">線性相位</button>
-              <button class="uf-seg-btn" data-phase="minimum">最小相位 (零預響鈴)</button>
-            </div>
-          </div>
-          <div class="uf-field">
-            <label for="ufSlotSelect">儲存槽</label>
-            <select id="ufSlotSelect" class="form-control" style="width:100%;box-sizing:border-box;"></select>
-          </div>
-          <div class="uf-editor-actions">
-            <button class="uf-mini-btn uf-save-btn" id="ufSaveBtn">💾 儲存並套用</button>
-            <button class="uf-mini-btn uf-delete-btn" id="ufDeleteBtn" style="display:none;">刪除這個濾波器</button>
-          </div>
-        </div>
-        <div class="uf-preview-col">
-          <div class="uf-preview-title">頻率響應預覽 <span class="uf-preview-note" id="ufPreviewCtxNote">44.1k → 176.4k 脈絡</span></div>
-          <canvas id="ufPreviewCanvas" width="440" height="240"></canvas>
-          <div class="uf-preview-legend">通帶平坦區・源Nyquist 標記・鏡像泄漏區・止帶（-120dB 底）</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- User Filter Manage Modal (槽位管理：編輯/複製/刪除) -->
-  <div id="userFilterManageModal" class="modal-overlay" style="display: none;">
-    <div class="modal-card uf-manage-card">
-      <div class="modal-header">
-        <div class="modal-title-wrap">
-          <h3 style="margin: 0; font-size: 16px; font-weight: 600;">🛠️ 自訂濾波器管理</h3>
-        </div>
-        <button class="icon-btn" id="ufCloseManage">✕</button>
-      </div>
-      <div class="modal-body">
-        <div id="ufManageList" class="uf-manage-list"></div>
-        <div class="uf-manage-hint">自訂濾波器以純參數儲存，引擎自動做安全驗證與夾限；任何異常自動退回線性相位，不影響播放穩定。</div>
-      </div>
-    </div>
-  </div>
-
   <!-- KKBOX Account/Password Login Modal -->
   <div id="kkboxLoginModal" class="modal-overlay" style="display: none;">
     <div class="modal-card kkbox-login-modal-card">
@@ -2044,7 +1961,8 @@
                 <div class="dsp-pill-selector" id="dspPhaseSelector"></div>
               </div>
 
-              <!-- User Filter Toolbox (使用者自訂濾波槽：純參數 JSON，安全範圍由引擎夾限) -->
+              <!-- User Filter Toolbox (使用者自訂濾波槽：純參數 JSON，安全範圍由引擎夾限；
+                   編輯器與管理直接在條列內展開，所有操作同一視窗完成) -->
               <div class="user-filter-strip" id="userFilterStrip">
                 <div class="user-filter-strip-head">
                   <span class="user-filter-strip-title">🛠️ 自訂濾波器</span>
@@ -2054,6 +1972,76 @@
                   </span>
                 </div>
                 <div class="user-filter-chips" id="ufChipRow"><span class="uf-chips-empty">尚無自訂濾波器 — 點「＋ 新建」於安全範圍內設計專屬濾波器</span></div>
+
+                <!-- Inline editor panel -->
+                <div class="uf-panel" id="ufEditorPanel" style="display: none;">
+                  <div class="uf-panel-head">
+                    <span id="ufEditorTitle">新建濾波器</span>
+                    <button class="uf-mini-btn" id="ufCloseEditor">收合 ✕</button>
+                  </div>
+                  <div class="uf-form-col">
+                    <div class="uf-field">
+                      <label for="ufNameInput">名稱</label>
+                      <input type="text" id="ufNameInput" class="form-control" maxlength="40" placeholder="例如：暖聲緩降" style="width:100%;box-sizing:border-box;">
+                    </div>
+                    <div class="uf-field">
+                      <label for="ufSoundInput">聲音特色描述（顯示於按鈕提示）</label>
+                      <input type="text" id="ufSoundInput" class="form-control" maxlength="80" placeholder="例如：高頻柔化、鈴振不可聽" style="width:100%;box-sizing:border-box;">
+                    </div>
+                    <div class="uf-field">
+                      <label>窗函數</label>
+                      <div class="uf-seg" id="ufWindowSeg">
+                        <button class="uf-seg-btn" data-window="hann">Hann</button>
+                        <button class="uf-seg-btn" data-window="hamming">Hamming</button>
+                        <button class="uf-seg-btn" data-window="blackman">Blackman</button>
+                        <button class="uf-seg-btn active" data-window="blackmanHarris">Blackman-Harris</button>
+                        <button class="uf-seg-btn" data-window="kaiser">Kaiser</button>
+                      </div>
+                    </div>
+                    <div class="uf-field" id="ufAsRow" style="display:none;">
+                      <label>止帶深度 <span class="uf-val" id="ufAsVal">100 dB</span></label>
+                      <input type="range" id="ufAsSlider" min="40" max="180" step="5" value="100">
+                    </div>
+                    <div class="uf-field">
+                      <label>截止延伸 <span class="uf-val" id="ufCutVal">1.13 × 源Nyquist</span></label>
+                      <input type="range" id="ufCutSlider" min="80" max="135" step="1" value="113">
+                    </div>
+                    <div class="uf-field">
+                      <label>濾波長度 <span class="uf-val" id="ufTapVal">96 taps</span> <span class="uf-load" id="ufLoadBadge">負荷: 低</span></label>
+                      <input type="range" id="ufTapSlider" min="16" max="512" step="8" value="96">
+                    </div>
+                    <div class="uf-field">
+                      <label>相位性格</label>
+                      <div class="uf-seg" id="ufPhaseSeg">
+                        <button class="uf-seg-btn active" data-phase="linear">線性相位</button>
+                        <button class="uf-seg-btn" data-phase="minimum">最小相位 (零預響鈴)</button>
+                      </div>
+                    </div>
+                    <div class="uf-field">
+                      <label for="ufSlotSelect">儲存槽</label>
+                      <select id="ufSlotSelect" class="form-control" style="width:100%;box-sizing:border-box;"></select>
+                    </div>
+                    <div class="uf-editor-actions">
+                      <button class="uf-mini-btn uf-save-btn" id="ufSaveBtn">💾 儲存並套用</button>
+                      <button class="uf-mini-btn uf-delete-btn" id="ufDeleteBtn" style="display:none;">刪除這個濾波器</button>
+                    </div>
+                  </div>
+                  <div class="uf-preview-col">
+                    <div class="uf-preview-title">頻率響應預覽 <span class="uf-preview-note" id="ufPreviewCtxNote"></span></div>
+                    <canvas id="ufPreviewCanvas" width="440" height="240"></canvas>
+                    <div class="uf-preview-legend">通帶平坦區・源Nyquist 標記・鏡像泄漏區・止帶（-120dB 底）</div>
+                  </div>
+                </div>
+
+                <!-- Inline manage panel -->
+                <div class="uf-panel" id="ufManagePanel" style="display: none;">
+                  <div class="uf-panel-head">
+                    <span>自訂濾波器管理</span>
+                    <button class="uf-mini-btn" id="ufCloseManage">收合 ✕</button>
+                  </div>
+                  <div id="ufManageList" class="uf-manage-list"></div>
+                  <div class="uf-manage-hint">自訂濾波器以純參數儲存，引擎自動做安全驗證與夾限；任何異常自動退回線性相位，不影響播放穩定。</div>
+                </div>
               </div>
             </div>
           </div>
