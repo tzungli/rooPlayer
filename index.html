@@ -1044,7 +1044,7 @@
           <!-- TIDAL Status Banner -->
           <div class="tidal-info-banner" id="tidalInfoBanner">
             <span class="banner-icon">💎</span>
-            <span class="banner-text" id="tidalBannerText">💡 TIDAL 發燒無損曲庫：支援 24-bit/192kHz Hi-Res MAX、SoX Hermite 即時倍頻與 1-bit DSD 調變，可一鍵點播整張專輯或無縫加入本機曲庫。</span>
+            <span class="banner-text" id="tidalBannerText">💡 TIDAL 發燒無損曲庫：支援 24-bit/192kHz Hi-Res MAX、Native DSP 即時倍頻與 1-bit DSD 調變，可一鍵點播整張專輯或無縫加入本機曲庫。</span>
             <button class="banner-close-btn" id="btnCloseTidalBanner">✕</button>
           </div>
 
@@ -1270,7 +1270,7 @@
                 <p class="app-tagline">次世代發燒級數位音訊媒體庫與極致無損串流核心播放器</p>
                 <div class="app-meta-badges">
                   <span class="meta-badge">64-bit Floating Engine</span>
-                  <span class="meta-badge">SoX Resampler</span>
+                  <span class="meta-badge">Native Polyphase FIR</span>
                   <span class="meta-badge">1-bit DSD SDM Modulator</span>
                   <span class="meta-badge">DLNA / UPnP Bit-Perfect</span>
                 </div>
@@ -1310,7 +1310,7 @@
                     <li><strong>🆕 最近新增專輯</strong>：自動同步本機最新匯入與已加入曲庫之 TIDAL 線上專輯。</li>
                     <li><strong>🌟 每日推薦 (Daily Picks)</strong>：依聆聽紀錄自動精選 5 張發燒代表作，每日自動更新。</li>
                     <li><strong>📖 藝人生活誌 (Artist Spotlight)</strong>：隨機探索音樂大師生平歷程、代表作與關聯發燒名盤。</li>
-                    <li><strong>快速掃描與隨機播放</strong>：一鍵快速匯入音樂資料夾或由曲庫隨機抽樣連續播放。</li>
+                    <li><strong>🎤 探索演出者 (Artists)</strong>：曲庫演出者卡片隨機抽样，一鍵進入演出者主頁與其專輯。</li>
                   </ul>
                 </div>
               </div>
@@ -1393,7 +1393,7 @@
                 <div class="manual-item-body">
                   <p>管理本機音樂檔案目錄與資料庫備份：</p>
                   <ul>
-                    <li><strong>掃描本機資料夾</strong>：選取存放無損音訊的硬碟資料夾，引擎將自動以多執行緒高速分析 ID3 / FLAC / DSF 元資料與封面圖。</li>
+                    <li><strong>掃描本機資料夾</strong>：選取存放無損音訊的硬碟資料夾，引擎將自動批次高速分析 ID3 / FLAC / DSF 元資料與封面圖。</li>
                     <li><strong>💾 匯出資料庫</strong>：將所有已收錄音樂資料夾、曲目母帶元資料、我的最愛收藏及播放次數統計完整匯出為標準 JSON 備份檔。</li>
                     <li><strong>📥 匯入資料庫</strong>：匯入備份資料並執行智慧去重合併。已存在的資料夾與重複曲目將自動略過，並彈出<strong>詳細略過報告</strong>。</li>
                   </ul>
@@ -1409,11 +1409,13 @@
                 <div class="manual-item-body">
                   <p>點擊播放控制器上方的發燒星芒徽章 ⚡ 即可喚起訊號路徑視窗：</p>
                   <ul>
-                    <li><strong>左欄（即時音訊路徑）</strong>：即時追蹤從「原始母帶音源 ➔ 升頻引擎 ➔ 混音核心 ➔ WASAPI/DLNA 端點」的各處理節點狀態。</li>
+                    <li><strong>左欄（即時音訊路徑）</strong>：即時追蹤從「原始母帶音源 ➔ 升頻引擎 ➔ DLNA / 本機端點」的各處理節點狀態。</li>
                     <li><strong>右欄（升頻引擎設定）</strong>：
                       <br>• <strong>PCM 升頻</strong>：支援 2x、4x 整數倍頻（推薦相位最純淨）、固定 96k / 192k / 384k DXD 超取樣。
-                      <br>• <strong>1-bit DSD 調變</strong>：內建 5 階高頻噪聲整形 Delta-Sigma 調變器，支援即時轉制為 DSD64 (2.8MHz)、DSD128 (5.6MHz)、DSD256 (11.2MHz) 或 DSD512 (22.5MHz)。
+                      <br>• <strong>七種濾波器相位</strong>：線性相位、最小相位、緩衰減混和、高斯長脈衝、高斯最小相位、EXT2 近似，以及 PS-EXT2 直譯 FIR（陡峭滾降、止帶達 -180 dB）。
+                      <br>• <strong>1-bit DSD 調變</strong>：內建 2 / 5 / 7 階諧振噪聲整形 Delta-Sigma 調變器，支援即時轉制為 DSD64 (2.8MHz)、DSD128 (5.6MHz)、DSD256 (11.2MHz) 或 DSD512 (22.5MHz)。
                     </li>
+                    <li><strong>漸進式平行轉換引擎</strong>：長曲由最多 8 個平行工作核心同步調變並自動節流穩定 CPU 用量；轉換結果以串流方式邊轉邊推送至端點設備，<strong>無需等待整曲轉換完成即可立即開始播放</strong>。</li>
                   </ul>
                 </div>
               </div>
@@ -1429,7 +1431,9 @@
                   <ul>
                     <li>點擊播放控制器右側的<strong>「輸出裝置按鈕 (🔊/📡)」</strong>，系統將透過 SSDP 自動搜尋區網內的 UPnP/DLNA 渲染器（如 Eversolo、WiIM、Linn 等）。</li>
                     <li>支援<strong>直接輸入 IP 探測</strong>，若路由器封鎖 UDP 廣播亦可快速手動連線。</li>
-                    <li>支援原生 DSF 直通與 PCM 升頻 DSD 比特流即時推送，DAC 自動鎖定 DSD 時脈。</li>
+                    <li>支援原生 DSF 直通、PCM 升頻 24-bit PCM 串流與 PCM ➔ 1-bit DSD 比特流即時推送，DAC 自動鎖定 DSD 時脈。</li>
+                    <li>串流採<strong>漸進式生成與 HTTP Range / 反壓流量控制</strong>：即使轉換速度慢於實時，端點設備也不會卡頓或中斷。</li>
+                    <li>切換曲目或結束程式時，端點設備會<strong>立即停止並清空剩餘緩衝音訊</strong>。</li>
                   </ul>
                 </div>
               </div>
@@ -1460,7 +1464,7 @@
                   <p>專業級沉浸式底部播放控制列：</p>
                   <ul>
                     <li><strong>原生圖示安全預設</strong>：底欄專輯封面未播放時預設呈現 rooPlayer 標誌，徹底避免破圖與檔案遺失現象。</li>
-                    <li><strong>全螢幕詳情與動態歌詞</strong>：點擊底欄左側專輯封面即可喚起全螢幕視窗，支援大尺寸封面、即時動態滾動歌詞與右側播放清單互動。</li>
+                    <li><strong>全螢幕詳情、即時頻譜與動態歌詞</strong>：點擊底欄左側專輯封面即可喚起全螢幕視窗，支援大尺寸封面、進度條上方的<strong>即時頻譜視覺化</strong>（由升頻引擎的來源音訊直接驅動）、即時動態滾動歌詞與右側播放清單互動。</li>
                     <li><strong>精確控制與循環模式</strong>：支援隨機播放、單曲循環、全曲循環與關閉，並即時回饋高解析音訊規格徽章（如 LOSSLESS 24/96 FLAC）。</li>
                   </ul>
                 </div>
@@ -1488,7 +1492,7 @@
                   <li><strong>Electron Framework</strong>：跨平台視窗執行環境 (Chromium / Node.js)。</li>
                   <li><strong>@wasm-audio-decoders/flac</strong>：WebAssembly 高效能純本地 FLAC 無損解碼核心。</li>
                   <li><strong>music-metadata</strong>：純 JavaScript 音訊標頭格式剖析與母帶元資料讀取引擎。</li>
-                  <li><strong>libsoxr / SoX Resampler 原理</strong>：Chebyshev 64 位元高階三次 Hermite 升頻超取樣多相濾波器。</li>
+                  <li><strong>rooPlayer Native DSP Kernel</strong>：自研 64-bit 浮點多相 FIR 升頻濾波器與高階 1-bit Delta-Sigma 調變器，全數由本程式自行實作，不使用外部 DSP 函式庫。</li>
                 </ul>
               </div>
               <div class="legal-block">
@@ -1541,15 +1545,15 @@
               </div>
               <div class="spec-row">
                 <span class="spec-label">PCM 升頻引擎</span>
-                <span class="spec-value">64-bit 浮點多相高階三次 Hermite 濾波器，支援 2x / 4x 整數倍頻、96k、192k、384k DXD</span>
+                <span class="spec-value">自研 64-bit 浮點 Native DSP Kernel：高階 Hermite 插值與七種濾波器相位（線性 / 最小 / 緩衰減混和、高斯窗長脈衝、高斯最小相位、EXT2 近似、PS-EXT2 直譯 FIR，止帶最深 -180 dB）；多相預計算加速架構；支援 2x / 4x 整數倍頻、96k、192k、384k DXD</span>
               </div>
               <div class="spec-row">
                 <span class="spec-label">DSD 調變器</span>
-                <span class="spec-value">5 階超高頻噪聲整形 1-bit Delta-Sigma Modulator (2.8224 MHz ~ 22.5792 MHz 標準 Sony DSF 封裝)</span>
+                <span class="spec-value">2 / 5 / 7 階諧振噪聲整形 1-bit Delta-Sigma Modulator (2.8224 MHz ~ 22.5792 MHz，標準 Sony DSF 封裝、規格正確 MSB-first 位元順序)；最多 8 工作核心平行調變，段與段之間以真實暖機音訊無縫接續</span>
               </div>
               <div class="spec-row">
                 <span class="spec-label">網路串流架構</span>
-                <span class="spec-value">UPnP A/V Architecture v1.0, DLNA MediaRenderer, HTTP Progressive Streaming with Backpressure Flow Control</span>
+                <span class="spec-value">UPnP A/V Architecture v1.0, DLNA MediaRenderer, HTTP Progressive Streaming with Range & Backpressure Flow Control（邊生成邊推送，轉換慢於實時也不中斷）</span>
               </div>
               <div class="spec-row">
                 <span class="spec-label">本地資料庫</span>
@@ -1817,7 +1821,7 @@
               <div class="stage-icon">🎛️</div>
               <div class="stage-info">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                  <div class="stage-title" id="signalSoxTitle">SoX Resampler Engine</div>
+                  <div class="stage-title" id="signalSoxTitle">Native DSP Engine</div>
                   <span class="stage-badge-dsp">DSP ACTIVE</span>
                 </div>
                 <div class="stage-desc" id="signalSoxDesc">高解析度即時升頻：44.1 kHz ➔ 176.4 kHz (4x 整數倍頻)</div>

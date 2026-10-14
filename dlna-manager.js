@@ -1220,7 +1220,7 @@ class DlnaManager extends EventEmitter {
     const dev = this.devices.get(deviceId);
     if (!dev) return;
 
-    // For transcoded streams (DSD or SoX Resampler), UPnP Seek does not work on generated stream;
+    // For transcoded streams (DSD or PCM upsampling), UPnP Seek does not work on generated stream;
     // restart transcoding from the target offset instead.
     if (this.currentTrack) {
       const ext = (this.currentTrack.formatName || '').toUpperCase();

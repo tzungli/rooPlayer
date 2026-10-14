@@ -592,7 +592,7 @@ ipcMain.handle('audio:getDsdStreamUrl', (event, filePath, startSec = 0) => {
   return `http://127.0.0.1:${dsdStreamPort}/dsd-stream?${params.toString()}`;
 });
 
-// SoX Resampler Stream URL helper IPC
+// Native DSP PCM Upsampling Stream URL helper IPC
 ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear') => {
   if (!dsdStreamPort) return '';
   const params = new URLSearchParams();

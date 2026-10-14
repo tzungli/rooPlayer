@@ -5403,7 +5403,7 @@ async function playDsdTrack(track, startSec = 0) {
   }
 }
 
-// ----------------- SoX Resampler Direct Streaming Engine -----------------
+// ----------------- Native DSP Progressive Streaming Engine -----------------
 let isCurrentSox = false;
 let currentSoxOffset = 0;
 
@@ -5665,13 +5665,13 @@ function updateSignalPathUI(track = null) {
     } else {
       const modeUpper = state.dsp.rateMode.toUpperCase();
       if (signalPathBadge) signalPathBadge.textContent = `DSP (${modeUpper}) | 24/${targetKhz} ⚡`;
-      if (statusPill) statusPill.textContent = 'DSP ENHANCED (SOX RESAMPLER)';
+      if (statusPill) statusPill.textContent = 'DSP ENHANCED (NATIVE FIR UPSAMPLER)';
       if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${track.bitDepth || track.bitsPerSample || 16}-bit / ${srcKhz} (${track.title || ''})`;
       if (sourceDesc) sourceDesc.textContent = customSourceDesc;
 
       if (signalSoxArrow) signalSoxArrow.style.display = 'block';
       if (signalSoxStage) signalSoxStage.style.display = 'flex';
-      if (signalSoxTitle) signalSoxTitle.textContent = `升頻引擎：SoX Resampler (${modeUpper})`;
+      if (signalSoxTitle) signalSoxTitle.textContent = `升頻引擎：rooPlayer Native DSP (${modeUpper})`;
       if (signalSoxDesc) signalSoxDesc.textContent = `超取樣升頻規格：${srcKhz} ➔ 24-bit / ${targetKhz} (${phaseDesc})`;
 
       if (engineTitle) engineTitle.textContent = 'rooPlayer Core Audio Engine';
@@ -5801,7 +5801,7 @@ function initDspControls() {
           }
         }
       }
-      showToast(state.dsp.enabled ? '⚡ 已啟用 SoX Resampler / DSD 升頻引擎' : '已關閉 DSP 升頻，恢復 Bit-Perfect 直通');
+      showToast(state.dsp.enabled ? '⚡ 已啟用 Native DSP 升頻引擎' : '已關閉 DSP 升頻，恢復 Bit-Perfect 直通');
     });
   }
 
