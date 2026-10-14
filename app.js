@@ -6324,14 +6324,88 @@ function savePeqSlots(slots) {
   try { localStorage.setItem(PEQ_SLOTS_KEY, JSON.stringify(slots)); } catch (e) {}
 }
 
+// Slot chips use inline UI only (no window.prompt/confirm - Electron does not support them):
+// empty slot click -> inline name input (Enter save / Esc cancel); filled chip click -> load;
+// dblclick -> inline rename; ✕ -> two-step inline delete confirmation.
 function buildPeqSlotRow() {
   const row = document.getElementById('peqSlotRow');
   if (!row) return;
   const slots = getPeqSlots();
   row.innerHTML = '';
-  slots.forEach((slot, i) => {
-    const chip = document.createElement('button');
-    chip.type = 'button';
+
+  const makeEditChip = (i, currentName, isNew) => {
+    const chip = document.createElement('div');
+    chip.className = 'peq-slot-chip editing';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'peq-slot-input';
+    input.maxLength = 24;
+    input.value = currentName || `我的設定 ${i + 1}`;
+    const okBtn = document.createElement('span');
+    okBtn.className = 'peq-slot-edit-ok';
+    okBtn.title = '儲存名稱 (Enter)';
+    okBtn.textContent = '✓';
+    const cancelBtn = document.createElement('span');
+    cancelBtn.className = 'peq-slot-edit-cancel';
+    cancelBtn.title = '取消 (Esc)';
+    cancelBtn.textContent = '✕';
+    chip.appendChild(input);
+    chip.appendChild(okBtn);
+    chip.appendChild(cancelBtn);
+    const commit = () => {
+      const name = input.value.trim().slice(0, 24);
+      if (!name) { buildPeqSlotRow(); return; }
+      if (isNew) {
+        slots[i] = { name, bands: state.dsp.peq.bands.map(b => ({ ...b })) };
+        savePeqSlots(slots);
+        showToast(`💾 已儲存 PEQ 設定「${name}」`);
+      } else {
+        slots[i].name = name;
+        savePeqSlots(slots);
+      }
+      buildPeqSlotRow();
+    };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') commit();
+      else if (e.key === 'Escape') buildPeqSlotRow();
+    });
+    input.addEventListener('click', (e) => e.stopPropagation());
+    okBtn.addEventListener('click', (e) => { e.stopPropagation(); commit(); });
+    cancelBtn.addEventListener('click', (e) => { e.stopPropagation(); buildPeqSlotRow(); });
+    return chip;
+  };
+
+  const makeConfirmDeleteChip = (slot, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'peq-slot-chip filled confirming';
+    const label = document.createElement('span');
+    label.className = 'peq-slot-name';
+    label.textContent = `刪除「${slot.name}」?`;
+    const yes = document.createElement('span');
+    yes.className = 'peq-slot-confirm-yes';
+    yes.title = '確定刪除';
+    yes.textContent = '✓';
+    const no = document.createElement('span');
+    no.className = 'peq-slot-confirm-no';
+    no.title = '保留';
+    no.textContent = '✕';
+    chip.appendChild(label);
+    chip.appendChild(yes);
+    chip.appendChild(no);
+    yes.addEventListener('click', (e) => {
+      e.stopPropagation();
+      slots[i] = null;
+      savePeqSlots(slots);
+      buildPeqSlotRow();
+    });
+    no.addEventListener('click', (e) => { e.stopPropagation(); buildPeqSlotRow(); });
+    chip.addEventListener('click', () => buildPeqSlotRow());
+    return chip;
+  };
+
+  const makeChip = (slot, i) => {
+    const chip = document.createElement('div');
     if (slot) {
       chip.className = 'peq-slot-chip filled';
       chip.title = `載入「${slot.name}」（雙擊更名，點 ✕ 刪除）`;
@@ -6344,24 +6418,23 @@ function buildPeqSlotRow() {
       delEl.textContent = '✕';
       chip.appendChild(nameEl);
       chip.appendChild(delEl);
+      let clickTimer = null; // defer load so a dblclick rename does not also load
       chip.addEventListener('click', (e) => {
         if (e.target === delEl) {
-          if (confirm(`刪除 PEQ 設定「${slot.name}」？`)) {
-            slots[i] = null;
-            savePeqSlots(slots);
-            buildPeqSlotRow();
-          }
+          if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+          chip.replaceWith(makeConfirmDeleteChip(slot, i));
           return;
         }
-        loadPeqSlot(slot);
+        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; return; }
+        clickTimer = setTimeout(() => { clickTimer = null; loadPeqSlot(slot); }, 260);
       });
       chip.addEventListener('dblclick', () => {
-        const name = prompt('重新命名此 PEQ 設定：', slot.name);
-        if (name && name.trim()) {
-          slot.name = name.trim().slice(0, 24);
-          savePeqSlots(slots);
-          buildPeqSlotRow();
-        }
+        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+        const edit = makeEditChip(i, slot.name, false);
+        chip.replaceWith(edit);
+        const inp = edit.querySelector('input');
+        inp.focus();
+        inp.select();
       });
     } else {
       chip.className = 'peq-slot-chip';
@@ -6375,16 +6448,17 @@ function buildPeqSlotRow() {
       chip.appendChild(plusEl);
       chip.appendChild(labelEl);
       chip.addEventListener('click', () => {
-        const name = prompt('為此 PEQ 設定命名：', `我的設定 ${i + 1}`);
-        if (!name || !name.trim()) return;
-        slots[i] = { name: name.trim().slice(0, 24), bands: state.dsp.peq.bands.map(b => ({ ...b })) };
-        savePeqSlots(slots);
-        buildPeqSlotRow();
-        showToast(`💾 已儲存 PEQ 設定「${slots[i].name}」`);
+        const edit = makeEditChip(i, `我的設定 ${i + 1}`, true);
+        chip.replaceWith(edit);
+        const inp = edit.querySelector('input');
+        inp.focus();
+        inp.select();
       });
     }
-    row.appendChild(chip);
-  });
+    return chip;
+  };
+
+  slots.forEach((slot, i) => row.appendChild(makeChip(slot, i)));
 }
 
 function loadPeqSlot(slot) {

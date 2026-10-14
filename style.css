@@ -2236,6 +2236,58 @@ body.table-col-resizing * {
   opacity: 0.75;
 }
 
+/* Inline rename/save editor inside a slot chip */
+.peq-slot-chip.editing {
+  border-style: solid;
+  border-color: rgba(34, 211, 238, 0.7);
+  background: rgba(34, 211, 238, 0.1);
+}
+
+.peq-slot-input {
+  width: 96px;
+  min-width: 60px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #e0f7fb;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0;
+}
+
+.peq-slot-edit-ok,
+.peq-slot-edit-cancel {
+  font-size: 11px;
+  padding: 0 3px;
+  cursor: pointer;
+}
+
+.peq-slot-edit-ok { color: #34d399; }
+.peq-slot-edit-ok:hover { color: #6ee7b7; }
+.peq-slot-edit-cancel { color: rgba(255, 255, 255, 0.5); }
+.peq-slot-edit-cancel:hover { color: #f87171; }
+
+/* Two-step inline delete confirmation state */
+.peq-slot-chip.confirming {
+  border-color: rgba(248, 113, 113, 0.7);
+  background: rgba(248, 113, 113, 0.1);
+  color: #fca5a5;
+}
+
+.peq-slot-confirm-yes,
+.peq-slot-confirm-no {
+  font-size: 11px;
+  padding: 0 3px;
+  cursor: pointer;
+}
+
+.peq-slot-confirm-yes { color: #f87171; font-weight: 800; }
+.peq-slot-confirm-yes:hover { color: #fecaca; }
+.peq-slot-confirm-no { color: rgba(255, 255, 255, 0.5); }
+.peq-slot-confirm-no:hover { color: #a5f3fc; }
+
+[data-theme="light"] .peq-slot-input { color: #0f172a; }
+
 [data-theme="light"] .peq-slot-chip {
   border-color: rgba(0, 0, 0, 0.25);
 }
