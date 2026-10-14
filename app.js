@@ -2314,7 +2314,7 @@ function renderArtists() {
   artistsGrid.appendChild(frag);
 }
 
-// ----------------- Artist Detail View (Roon Inspired) -----------------
+// ----------------- Artist Detail View -----------------
 async function openArtistDetail(artistName) {
   state.currentArtistDetail = artistName;
   navigateTo('artistDetail');
@@ -4332,7 +4332,7 @@ function renderDetailTracklist(album) {
 }
 
 // ==========================================================
-// Roon-Style TIDAL Hybrid Unified Library & Versions Engine
+// Unified Local + TIDAL Hybrid Library & Versions Engine
 // ==========================================================
 
 function isTidalAlbumInLibrary(tidalAlbumId) {
@@ -4811,7 +4811,7 @@ function openAlbumDetail(album) {
     console.warn('updateAlbumDetailLibraryButton error:', e);
   }
 
-  // 6. Roon-Style Album Versions Comparison & Resolution
+  // 6. Album Versions Comparison & Resolution
   try {
     renderAlbumVersions(album);
   } catch (e) {
@@ -5640,8 +5640,8 @@ function updateSignalPathUI(track = null) {
       intermediate: '混和/緩衰減 (溫潤類比)',
       'gauss-long': '高斯長脈衝 FIR (極低鈴振)',
       'gauss-min': '高斯最小相位 FIR (零預響鈴)',
-      'poly-ext2': 'HQ EXT2 近似 FIR (超寬過渡帶)',
-      'hqp-ps-ext2': 'HQ PS-EXT2 直譯 FIR (陡峭滾降・極深止帶)'
+      'poly-ext2': 'EXT2 近似 FIR (超寬過渡帶)',
+      'hqp-ps-ext2': 'PS-EXT2 直譯 FIR (陡峭滾降・極深止帶)'
     };
     const phaseDesc = phaseNames[curPhase] || '線性相位';
 
@@ -6478,11 +6478,11 @@ function updateRepeatUI() {
 // Audiophile Floating Toast
 let toastTimer = null;
 function showToast(message) {
-  let toastEl = document.getElementById('roonToast');
+  let toastEl = document.getElementById('appToast');
   if (!toastEl) {
     toastEl = document.createElement('div');
-    toastEl.id = 'roonToast';
-    toastEl.className = 'roon-toast';
+    toastEl.id = 'appToast';
+    toastEl.className = 'app-toast';
     document.body.appendChild(toastEl);
   }
   toastEl.textContent = message;

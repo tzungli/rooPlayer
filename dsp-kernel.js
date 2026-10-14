@@ -90,7 +90,7 @@ CIFFR_7.g3 = CIFFR_7.th3 * CIFFR_7.th3 / CIFFR_7.c7;
 const CIFFR_CLAMP = 8.0; // anti-windup safety limit (normal operation stays well below)
 
 // ---------------------------------------------------------------------------
-// Poly-Sinc-Gauss Long FIR Upsampling Filter（HQPlayer poly-sinc-gauss 風格）
+// Poly-Sinc-Gauss Long FIR Upsampling Filter（poly-sinc-gauss 風格）
 //
 // 閉式設計：h(t) = sinc(2·fc·t/fs) · exp(-(t/σ)²)
 //   sinc 基準 × 高斯窗 ⇔ 頻域「高斯形過渡帶」：極低的鈴振、通帶平坦至源
@@ -98,7 +98,7 @@ const CIFFR_CLAMP = 8.0; // anti-windup safety limit (normal operation stays wel
 //
 // minimumPhase=true（'gauss-min'）：以複倒數譜（complex cepstrum）折疊把上述
 //   線性相位設計轉換為最小相位因果濾波器：預響鈴嚴格為零，代價是階躍有約 30%
-//   的快速衰減後衝（post-kick，約 180µs 內收斂）——即 HQPlayer 最小相位 gauss
+//   的快速衰減後衝（post-kick，約 180µs 內收斂）——即最小相位 gauss
 //   家族的「凌厲打擊」性格。最小相位脈衝有長尾（sinc 零點造成的冪律衰減），
 //   但長尾對音訊無貢獻：截斷至 ~430µs × fsOut（上限 2500 taps）與全長規格相同
 //   （DSD64 1200 taps 與 8944 taps 實測完全等效：鏡像 -99/-122dB、階躍零誤差）。
@@ -217,9 +217,9 @@ function besselI0(x) {
 }
 
 // ---------------------------------------------------------------------------
-// HQPlayer "extended poly sinc" (EXT2) 風格 FIR 升頻濾波器 — 路線B閉式重新實作
+// "extended poly sinc" (EXT2) 風格 FIR 升頻濾波器 — 路線B閉式重新實作
 //
-// 注意：HQPlayer 的 EXT2 內部參數未公開，此為依「extended poly sinc」家族之
+// 注意：EXT2 家族的內部參數未公開，此為依「extended poly sinc」家族之
 // 公開設計性格所做的閉式近似（Kaiser 窗 sinc）：
 //   h(t) = sinc(2·fc·t/fs) · I0(β·sqrt(1-(t/L)²))/I0(β)
 // 「extended」性格 = 截止點 fc 延伸到源 Nyquist 之上（1.27×，與本引擎 gauss
@@ -270,7 +270,7 @@ function buildPolyExt2Filter(fsOut, srcRate) {
 }
 
 // ---------------------------------------------------------------------------
-// HQPlayer "poly-sinc-ext2" 直譯 FIR — 依公開規格描述重新實作（hqp-ps-ext2）
+// "poly-sinc-ext2" 直譯 FIR — 依公開規格描述重新實作（hqp-ps-ext2）
 //
 // 設計目標（依 poly-sinc-ext2 公開規格：線性相位多相正弦、陡峭滾降、極高止帶）：
 //   - 過渡帶精確從源 Nyquist 起始，延伸至 1.27×源Nyquist（「ext2」延伸）：
@@ -278,12 +278,12 @@ function buildPolyExt2Filter(fsOut, srcRate) {
 //   - Kaiser 窗 As = 180dB（極高止帶衰減；poly-ext2 為 140dB）
 //   - 線性相位（對稱脈衝，同 gauss-long / poly-ext2）
 //   - 任意倍率：S=8 子樣本网格 + 線性插值（與 gauss/poly-ext2 相同）
-//   - HQPlayer 的 16× 兩階段架構（第一階段升頻至 16× 中間速率）是其計算效率
+//   - 16× 兩階段架構（第一階段升頻至 16× 中間速率）是 poly-sinc-ext2 家族的計算效率
 //     實作；對線性相位濾波而言其複合頻率響應與本單級 FIR 等價，故本引擎以
 //     單級直接執行實作（執行成本與 poly-ext2 同級）。
 //   - 邊界情況：fsOut 太低（ratio < 1.27）時過渡帶無法完整位於源Nyquist之上，
 //     截止退回 0.45×fsOut（與 poly-ext2 相同處理）。
-// 非 HQPlayer 官方係數；依公開技術規格描述的閉式直譯。
+// 非官方原廠係數；依公開技術規格描述的閉式直譯。
 // ---------------------------------------------------------------------------
 function buildHqpPsExt2Filter(fsOut, srcRate) {
   const AS_DB = 180;

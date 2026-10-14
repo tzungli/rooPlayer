@@ -1946,7 +1946,7 @@ body.table-col-resizing * {
   line-height: 1.4;
 }
 
-/* Modern iOS / Roon Switch Toggle */
+/* Modern iOS-style Switch Toggle */
 .switch-toggle {
   position: relative;
   display: inline-block;
@@ -3072,7 +3072,7 @@ body.table-col-resizing * {
 }
 
 /* Audiophile Floating Toast Notification */
-.roon-toast {
+.app-toast {
   position: fixed;
   bottom: 104px;
   left: 50%;
@@ -3092,12 +3092,12 @@ body.table-col-resizing * {
   transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.roon-toast.show {
+.app-toast.show {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
 
-[data-theme="light"] .roon-toast {
+[data-theme="light"] .app-toast {
   background-color: rgba(255, 255, 255, 0.95);
   color: #1e293b;
   border-color: rgba(124, 58, 237, 0.3);
@@ -5875,7 +5875,7 @@ body.table-col-resizing * {
 }
 
 /* ==========================================================
-   Roon-Style Album Versions Comparison & Discography Integration
+   Album Versions Comparison & Discography Integration
    ========================================================== */
 .album-versions-section {
   margin-top: 14px;

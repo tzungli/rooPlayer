@@ -119,7 +119,7 @@ function createWindow() {
     minHeight: 680,
     backgroundColor: '#0f1013',
     icon: path.join(__dirname, 'icon.png'),
-    frame: false, // Custom Roon-style titlebar
+    frame: false, // Custom frameless titlebar
     titleBarStyle: 'hidden',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

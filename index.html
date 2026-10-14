@@ -446,7 +446,7 @@
             </div>
           </div>
 
-          <!-- Roon-Style Album Versions (本機與線上版本比對切換) -->
+          <!-- Album Versions (本機與線上版本比對切換) -->
           <div class="album-versions-section" id="albumVersionsSection" style="display: none;">
             <div class="album-versions-header">
               <div class="album-versions-title">
@@ -552,7 +552,7 @@
         </div>
       </section>
 
-      <!-- 3.5 ARTIST DETAIL VIEW (Roon Style) -->
+      <!-- 3.5 ARTIST DETAIL VIEW -->
       <section id="viewArtistDetail" class="content-view">
         <div class="artist-detail-hero" id="artistDetailHero">
           <div class="artist-hero-backdrop" id="artistHeroBackdrop"></div>
@@ -1457,7 +1457,7 @@
                   <h4>發燒底欄控制器與動態全螢幕 (Player Controls & Modal)</h4>
                 </div>
                 <div class="manual-item-body">
-                  <p>專業級 Roon 風格底部播放控制列：</p>
+                  <p>專業級沉浸式底部播放控制列：</p>
                   <ul>
                     <li><strong>原生圖示安全預設</strong>：底欄專輯封面未播放時預設呈現 rooPlayer 標誌，徹底避免破圖與檔案遺失現象。</li>
                     <li><strong>全螢幕詳情與動態歌詞</strong>：點擊底欄左側專輯封面即可喚起全螢幕視窗，支援大尺寸封面、即時動態滾動歌詞與右側播放清單互動。</li>
@@ -1620,7 +1620,7 @@
         <!-- Status Panel: Logged Out -->
         <div id="tidalLoggedOutView">
           <p style="color: var(--text-muted); font-size: 13px; line-height: 1.6; margin-top: 0; margin-bottom: 20px;">
-            在 rooPlayer 登入您的 TIDAL 帳號，享受如 Roon 般無縫融合本機與雲端的 Hi-Res Lossless FLAC 發燒串流體驗。
+            在 rooPlayer 登入您的 TIDAL 帳號，享受無縫融合本機與雲端的 Hi-Res Lossless FLAC 發燒串流體驗。
           </p>
 
           <div class="tidal-auth-action-box" style="text-align: center; padding: 24px 16px; background: rgba(0, 229, 255, 0.05); border: 1px solid rgba(0, 229, 255, 0.2); border-radius: 12px; margin-bottom: 20px;">
@@ -1677,7 +1677,7 @@
           </div>
 
           <div class="tidal-feature-box" style="border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 14px; font-size: 12px; line-height: 1.6; margin-bottom: 20px;">
-            ✨ <strong>Roon 級串流核心功能已就緒</strong>：<br>
+            ✨ <strong>發燒串流核心功能已就緒</strong>：<br>
             • <strong>聲音引擎直通</strong>：TIDAL 無損串流支援 1-bit DSD 調變器（5階/7階）升頻與多相濾波器。<br>
             • <strong>混合曲庫整合</strong>：可隨時將 TIDAL 專輯「加入我的曲庫」，與本機硬碟檔案融為一體。<br>
             • <strong>DLNA 投播</strong>：支援一鍵將 TIDAL 高解析串流推送至您的數位串流機與擴大機。
@@ -1786,7 +1786,7 @@
     </div>
   </div>
 
-  <!-- Audiophile Signal Path Modal (Roon Iconic Feature with SoX Resampler DSP) -->
+  <!-- Audiophile Signal Path Modal (標誌性訊號路徑追蹤功能) -->
   <div id="signalPathModal" class="modal-overlay" style="display: none;">
     <div class="modal-content signal-path-container">
       <button class="btn-close-modal" id="btnCloseSignalPath">✕</button>
@@ -1913,10 +1913,10 @@
                   <button class="dsp-pill active" data-phase="linear" title="線性相位 (Linear Phase)：零相位失真，對稱脈衝響應，定位精準">線性相位 (零相位失真)</button>
                   <button class="dsp-pill" data-phase="minimum" title="最小相位 (Minimum Phase)：零預響鈴 (No Pre-ringing)，打擊瞬態凌厲爆發">最小相位 (零預響鈴)</button>
                   <button class="dsp-pill" data-phase="intermediate" title="混和 / 緩衰減 (Intermediate Phase)：極低預響鈴與自然高頻緩衰，溫潤類比聽感">混和 / 緩衰減 (溫潤類比)</button>
-                  <button class="dsp-pill" data-phase="gauss-long" title="高斯長脈衝 FIR (Poly-Sinc-Gauss Long)：高斯窗長脈衝FIR升頻濾波，通帶平坦、極低鈴振與鏡像能量，HQPlayer poly-sinc-gauss 風格">高斯長脈衝 FIR (極低鈴振)</button>
+                  <button class="dsp-pill" data-phase="gauss-long" title="高斯長脈衝 FIR (Poly-Sinc-Gauss Long)：高斯窗長脈衝FIR升頻濾波，通帶平坦、極低鈴振與鏡像能量">高斯長脈衝 FIR (極低鈴振)</button>
                   <button class="dsp-pill" data-phase="gauss-min" title="高斯最小相位 FIR (Poly-Sinc-Gauss Minimum Phase)：同高斯長脈衝規格但轉換為最小相位因果濾波：預響鈴嚴格為零、瞬態凌厲（些微後衝），DLNA/PCM 升頻完整支援，DSD 路徑亦可用">高斯最小相位 FIR (零預響鈴)</button>
-                  <button class="dsp-pill" data-phase="poly-ext2" title="HQ EXT2 近似 FIR (Extended Poly Sinc 2)：以閉式設計重新實作 HQPlayer extended poly sinc 家族性格：Kaiser 窗 sinc、截止延伸到源 Nyquist 之上、過渡帶全在音訊帶外，通帶完全平坦、止帶約 -140dB；22k 以上有些許鏡像泄漏（不可聽）。路線B近似，非 HQPlayer 官方係數">HQ EXT2 近似 FIR (超寬過渡帶)</button>
-                  <button class="dsp-pill" data-phase="hqp-ps-ext2" title="HQ PS-EXT2 直譯 FIR (poly-sinc-ext2)：依 HQPlayer poly-sinc-ext2 公開規格直譯：線性相位多相正弦、過渡帶自源 Nyquist 精確起始並延伸至 1.27×（ext2 延伸）、通帶 [0,源Nyquist] 完全平坦、止帶約 -180dB（極高衰減）、任意倍率。源Nyquist..1.27×源Nyquist 間為滾降帶，鏡像於此帶部分泄漏（超聲頻不可聽，同真實 EXT2 的取捨）。16× 兩階段架構之複合響應等價於此單級 FIR。非 HQPlayer 官方係數">HQ PS-EXT2 直譯 FIR (陡峭滾降+極深止帶)</button>
+                  <button class="dsp-pill" data-phase="poly-ext2" title="EXT2 近似 FIR (Extended Poly Sinc 2)：以閉式設計重新實作 extended poly sinc 家族性格：Kaiser 窗 sinc、截止延伸到源 Nyquist 之上、過渡帶全在音訊帶外，通帶完全平坦、止帶約 -140dB；22k 以上有些許鏡像泄漏（不可聽）。閉式近似實作，非官方原廠係數">EXT2 近似 FIR (超寬過渡帶)</button>
+                  <button class="dsp-pill" data-phase="hqp-ps-ext2" title="PS-EXT2 直譯 FIR (poly-sinc-ext2)：依 poly-sinc-ext2 公開規格直譯：線性相位多相正弦、過渡帶自源 Nyquist 精確起始並延伸至 1.27×（ext2 延伸）、通帶 [0,源Nyquist] 完全平坦、止帶約 -180dB（極高衰減）、任意倍率。源Nyquist..1.27×源Nyquist 間為滾降帶，鏡像於此帶部分泄漏（超聲頻不可聽，同 EXT2 家族的取捨）。16× 兩階段架構之複合響應等價於此單級 FIR。閉式直譯，非官方原廠係數">PS-EXT2 直譯 FIR (陡峭滾降+極深止帶)</button>
                 </div>
               </div>
             </div>
@@ -1990,7 +1990,7 @@
     </div>
   </div>
 
-  <!-- Bottom Audiophile Playback Bar (Roon Style) -->
+  <!-- Bottom Audiophile Playback Bar -->
   <footer id="playerBar">
     <!-- Left: Track info -->
     <div class="player-left">
