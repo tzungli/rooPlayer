@@ -3646,11 +3646,6 @@ body.table-col-resizing * {
   border: 1px solid rgba(217, 70, 239, 0.3);
 }
 
-.now-playing-subtitle {
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
 .now-playing-source-tag {
   font-size: 11px;
   color: var(--text-muted);
@@ -3981,14 +3976,6 @@ body.table-col-resizing * {
   border: 1px solid rgba(255, 255, 255, 0.05);
   padding: 16px;
   overflow: hidden;
-}
-
-.now-playing-lyric-source {
-  font-size: 11px;
-  color: var(--accent-purple);
-  background: rgba(217, 70, 239, 0.12);
-  padding: 2px 8px;
-  border-radius: 10px;
 }
 
 .now-playing-lyrics-container {
