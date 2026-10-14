@@ -1777,12 +1777,6 @@ body.table-col-resizing * {
   letter-spacing: 0.5px;
 }
 
-.signal-sub {
-  font-size: 12px;
-  color: var(--text-sub);
-  margin-bottom: 24px;
-}
-
 /* Two-column layout: Left (Signal Path) & Right (Upsampling Engine) */
 .signal-path-columns {
   display: grid;
