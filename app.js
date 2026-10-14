@@ -554,7 +554,7 @@ async function initApp() {
   initAudioZones();
   initDspControls();
   initKkboxStreaming();
-  initTidalStreaming();
+  await initTidalStreaming();
 
   // Load saved library or fall back to showcase demo data
   let saved = null;
@@ -583,6 +583,9 @@ async function initApp() {
 
   rebuildLibraryCollections();
   renderAll();
+
+  // Startup default: show the last played track in the player bar (display only, not playing)
+  restoreLastPlayedTrack();
 
   // Set initial default volume
   nativeAudio.volume = state.volume;
@@ -687,6 +690,13 @@ function recordTrackPlaybackHistory(track, foundAlbum) {
     bitsPerSample: track.bitsPerSample || (foundAlbum ? foundAlbum.bitsPerSample : 16),
     isLossless: track.isLossless || (foundAlbum ? foundAlbum.isLossless : false),
     cover: track.cover || (foundAlbum ? foundAlbum.cover : null),
+    // Source identity: lets the startup "last played track" restore know what is restorable
+    isTidal: !!track.isTidal,
+    tidalId: track.tidalId || null,
+    isKkbox: !!track.isKkbox,
+    kkboxId: track.kkboxId || null,
+    isDemo: !!track.isDemo,
+    audioQuality: track.audioQuality || null,
     playedAt: Date.now()
   };
 
@@ -731,6 +741,98 @@ function updateHistoryCountBadges() {
   if (historyBadge) historyBadge.textContent = count;
   const heroBadge = document.getElementById('heroHistoryCount');
   if (heroBadge) heroBadge.textContent = count;
+}
+
+// ----------------- Startup Default Track (Last Played) -----------------
+// On startup the player bar shows the last played track instead of the empty state:
+//  - TIDAL logged in: the newest history entry that is restorable (TIDAL / KKBOX / local)
+//  - TIDAL not logged in: the newest entry that is a local library track
+// Display only - nothing plays until the user presses play (play then starts the track fresh).
+function restoreLastPlayedTrack() {
+  try {
+    if (state.queue && state.queue.length > 0) return; // a session is already active
+    const history = getPlaybackHistory();
+    if (!history.length) return;
+    const tidalLoggedIn = !!(window.tidalService && window.tidalService.isLoggedIn);
+    const kkboxAccount = localStorage.getItem('rooplayer_kkbox_account');
+
+    for (const h of history) {
+      if (h.isDemo) continue;
+      const isTidalEntry = h.isTidal || (!h.filePath && !h.isKkbox && h.tidalId);
+      const isKkboxEntry = h.isKkbox || (!h.filePath && !h.isTidal && h.kkboxId);
+
+      if (isTidalEntry) {
+        if (!tidalLoggedIn || !h.tidalId) continue;
+        const track = {
+          id: h.id, isTidal: true, tidalId: h.tidalId,
+          title: h.title, artist: h.artist, album: h.album || '',
+          duration: h.duration || 0, cover: h.cover || null,
+          sampleRate: h.sampleRate || 44100, bitDepth: h.bitsPerSample || 16,
+          audioQuality: h.audioQuality || 'LOSSLESS',
+          formatName: 'FLAC', isLossless: true,
+          _restoredSession: true
+        };
+        showRestoredTrack(track, [track], 0);
+        return;
+      }
+
+      if (isKkboxEntry) {
+        if (!kkboxAccount || !h.kkboxId) continue;
+        const track = {
+          id: h.id, isKkbox: true, kkboxId: h.kkboxId,
+          title: h.title, artist: h.artist, album: h.album || '',
+          duration: h.duration || 0, cover: h.cover || null,
+          _restoredSession: true
+        };
+        showRestoredTrack(track, [track], 0);
+        return;
+      }
+
+      // Local library entry: the file must still exist in the current library
+      if (!h.filePath) continue;
+      const match = state.tracks.find(t => t.filePath && String(t.filePath).toLowerCase() === String(h.filePath).toLowerCase());
+      if (!match) continue;
+      const album = findAlbumForTrack(match);
+      const queue = (album && album.tracks && album.tracks.length) ? album.tracks : [match];
+      let idx = queue.findIndex(t => (t.id && t.id === match.id) || (t.filePath && String(t.filePath).toLowerCase() === String(match.filePath).toLowerCase()));
+      showRestoredTrack(match, queue, idx >= 0 ? idx : 0);
+      return;
+    }
+  } catch (e) {
+    console.warn('restoreLastPlayedTrack failed:', e);
+  }
+}
+
+// Player-bar display for a restored (not yet played) track: mirrors the UI portion of
+// playCurrentTrack without starting audio. The queue is primed so pressing play works.
+function showRestoredTrack(track, queue, index) {
+  state.queue = [...queue];
+  state.currentTrackIndex = index;
+  renderQueue();
+
+  playerTitle.textContent = track.title;
+  playerArtist.textContent = `${track.artist} — ${track.title}`;
+  const defaultPlayerCover = createSvgCover(track.album || '', track.artist || '', '#27272a', '#09090b');
+  playerCoverImg.src = formatCoverSrc(track.cover) || defaultPlayerCover;
+  playerCoverImg.onerror = () => {
+    playerCoverImg.onerror = null;
+    playerCoverImg.src = defaultPlayerCover;
+  };
+  playerArtist.style.cursor = 'pointer';
+  playerArtist.onclick = () => openArtistDetail(track.artist);
+
+  const playerHeartBtn = document.getElementById('btnPlayerHeart');
+  if (playerHeartBtn) {
+    const isFav = isTrackFavorite(track);
+    playerHeartBtn.classList.toggle('active', isFav);
+    playerHeartBtn.innerHTML = getHeartSvg(isFav, 16);
+    playerHeartBtn.title = isFav ? '從最愛歌曲移除' : '加入最愛歌曲';
+  }
+
+  totalTimeLabel.textContent = formatDuration(track.duration || 0);
+  updateSignalPathUI(track);
+  updateQueueActiveItem();
+  updatePlayPauseBtnUI();
 }
 
 function formatTimeAgo(timestamp) {
@@ -6883,6 +6985,12 @@ function togglePlayPause() {
     state.isPlaying = false;
     updatePlayPauseBtnUI();
   } else {
+    if (currentTrack._restoredSession) {
+      // Restored at startup but never played this session: start it through the full flow
+      currentTrack._restoredSession = false;
+      playCurrentTrack();
+      return;
+    }
     if (currentTrack.isKkbox) {
       if (nativeAudio.src) {
         nativeAudio.play().then(() => {
