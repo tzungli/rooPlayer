@@ -11,7 +11,7 @@ const stream = require('stream');
 const EventEmitter = require('events');
 const { Worker } = require('worker_threads');
 const nativeAudioEngine = require('./native-audio-engine');
-const { interpolateSample, buildGaussFilter, buildPolyExt2Filter, buildHqpPsExt2Filter, firSample, getDsdRate, buildDsfHeader, DSD_BLOCK_SIZE, DSD_SAMPLES_PER_BLOCK, createPeqChain, createPeqState, processPeqPair, applyPeqArrays } = require('./dsp-kernel');
+const { interpolateSample, buildGaussFilter, buildPolyExt2Filter, buildHqpPsExt2Filter, firSample, getDsdRate, buildDsfHeader, DSD_BLOCK_SIZE, DSD_SAMPLES_PER_BLOCK, createPeqChain, createPeqState, processPeqPair, applyPeqArrays, createConvolutionState, processConvolutionPair, applyConvolutionArrays, irResponsePeak } = require('./dsp-kernel');
 
 // Progressive Streaming Reader with Backpressure Flow Control
 // Prevents downstream DLNA/UPnP renderers from reading unwritten / zero-padded blocks
@@ -143,7 +143,7 @@ class NativeDspStreamer {
   // segment boundary has converged to the continuous-run state (no audible discontinuity).
   // Segment/view boundaries are chosen so the input<->output sample mapping stays exact
   // (required for non-integer ratios such as 48k -> DSD).
-  async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear', peqOptions = null) {
+  async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear', peqOptions = null, convOptions = null) {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.dsf`);
@@ -152,6 +152,20 @@ class NativeDspStreamer {
 
     const srcRate = pcm.sampleRate;
     const inLen = pcm.left.length;
+
+    // Convolution (IR) applied in the main process on the source-rate PCM before modulation
+    // (DSD-rate convolution is impractical; the workers keep modulating plain PCM).
+    let convIrRaw = null;
+    try {
+      const irData = await this.loadConvolutionIr(convOptions, srcRate);
+      if (irData) {
+        const cst = createConvolutionState(srcRate, irData.irL, irData.irR);
+        if (cst) {
+          applyConvolutionArrays(cst, pcm.left, pcm.right, pcm.left, pcm.right, inLen);
+          convIrRaw = irData.raw;
+        }
+      }
+    } catch (e) { convIrRaw = null; }
     const dsdRate = getDsdRate(dsdMode);
     const samplesPerBlock = DSD_SAMPLES_PER_BLOCK;
     const blockSize = DSD_BLOCK_SIZE;
@@ -244,6 +258,8 @@ class NativeDspStreamer {
     // PEQ (applied by every worker on its own view at srcRate before modulation; the raw
     // source PCM above stays untouched - the spectrum window applies PEQ separately).
     session.peqOptions = peqOptions && peqOptions.enabled ? peqOptions : null;
+    session.convOptions = convIrRaw ? convOptions : null;
+    session.convIrRaw = convIrRaw;
 
     const workerPath = path.join(__dirname, 'dsd-modulator-worker.js');
     const workers = [];
@@ -373,7 +389,7 @@ class NativeDspStreamer {
   }
 
   // Create progressive streaming session for High-Res PCM Upsampling (WAV format)
-  async createPcmSession(token, filePath, startSec = 0, targetSampleRate = 192000, track = null, filterPhase = 'linear', peqOptions = null) {
+  async createPcmSession(token, filePath, startSec = 0, targetSampleRate = 192000, track = null, filterPhase = 'linear', peqOptions = null, convOptions = null) {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.wav`);
@@ -404,6 +420,16 @@ class NativeDspStreamer {
     let peqChain = null, peqState = null;
     try { peqChain = createPeqChain(targetSampleRate, peqOptions); } catch (e) { peqChain = null; }
     if (peqChain) peqState = createPeqState(peqChain);
+
+    // Convolution (IR) at the output rate, after PEQ: partitioned frequency-domain filtering.
+    let convState = null, convIrRaw = null;
+    try {
+      const irData = await this.loadConvolutionIr(convOptions, targetSampleRate);
+      if (irData) {
+        convState = createConvolutionState(targetSampleRate, irData.irL, irData.irR);
+        if (convState) convIrRaw = irData.raw;
+      }
+    } catch (e) { convState = null; }
 
     const bytesPerSample = 3; // 24-bit PCM
     const channels = 2;
@@ -449,6 +475,8 @@ class NativeDspStreamer {
     session.startSec = startSec;
     session.spectrum = { rate: srcRate, left: inL, right: inR };
     session.peqOptions = peqChain ? peqOptions : null;
+    session.convOptions = convState ? convOptions : null;
+    session.convIrRaw = convState ? convIrRaw : null;
 
     // 3. Encoder state & chunk writer using selected filter phase interpolation
     let framesWritten = 0;
@@ -489,6 +517,12 @@ class NativeDspStreamer {
           const po = processPeqPair(peqChain, peqState, sL, sR);
           sL = po[0];
           sR = po[1];
+        }
+
+        if (convState) {
+          const co = processConvolutionPair(convState, sL, sR);
+          sL = co[0];
+          sR = co[1];
         }
 
         // 24-bit PCM clamp and pack (Little-Endian)
@@ -547,18 +581,26 @@ class NativeDspStreamer {
   }
 
   // Create streaming session for Native DSF/DFF Decimation to 24-bit / 88.2 kHz WAV
-  async createDsdDecimateSession(token, filePath, startSec = 0, track = null, peqOptions = null) {
+  async createDsdDecimateSession(token, filePath, startSec = 0, track = null, peqOptions = null, convOptions = null) {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.wav`);
     const wavBuf = nativeAudioEngine.decimateDsfToWav(filePath, startSec);
     if (!wavBuf) throw new Error('Native DSD decimation failed');
 
-    // PEQ on the decimated 24-bit PCM (88.2 kHz), applied in place before writing the file.
+    // PEQ + Convolution (IR) on the decimated 24-bit PCM (88.2 kHz), applied in place
+    // before writing the file. DSD-rate convolution is impractical, so DSF sources with
+    // an active IR are routed through this decimate path by the callers.
+    const decRate = wavBuf.readUInt32LE(24);
     let peqApplied = null;
-    try { peqApplied = createPeqChain(wavBuf.readUInt32LE(24), peqOptions); } catch (e) { peqApplied = null; }
-    if (peqApplied) {
-      const st = createPeqState(peqApplied);
+    try { peqApplied = createPeqChain(decRate, peqOptions); } catch (e) { peqApplied = null; }
+    let convState = null;
+    try {
+      const irData = await this.loadConvolutionIr(convOptions, decRate);
+      if (irData) convState = createConvolutionState(decRate, irData.irL, irData.irR);
+    } catch (e) { convState = null; }
+    if (peqApplied || convState) {
+      const st = peqApplied ? createPeqState(peqApplied) : null;
       const totalFrames = (wavBuf.length - 44) / 6;
       for (let f = 0; f < totalFrames; f++) {
         const p = 44 + f * 6;
@@ -566,9 +608,19 @@ class NativeDspStreamer {
         if (vL & 0x800000) vL -= 0x1000000;
         let vR = wavBuf[p + 3] | (wavBuf[p + 4] << 8) | (wavBuf[p + 5] << 16);
         if (vR & 0x800000) vR -= 0x1000000;
-        const o = processPeqPair(peqApplied, st, vL / 8388608, vR / 8388608);
-        let iL = Math.max(-8388608, Math.min(8388607, Math.floor(o[0] * 8388607)));
-        let iR = Math.max(-8388608, Math.min(8388607, Math.floor(o[1] * 8388607)));
+        let fL = vL / 8388608, fR = vR / 8388608;
+        if (peqApplied) {
+          const o = processPeqPair(peqApplied, st, fL, fR);
+          fL = o[0];
+          fR = o[1];
+        }
+        if (convState) {
+          const co = processConvolutionPair(convState, fL, fR);
+          fL = co[0];
+          fR = co[1];
+        }
+        let iL = Math.max(-8388608, Math.min(8388607, Math.floor(fL * 8388607)));
+        let iR = Math.max(-8388608, Math.min(8388607, Math.floor(fR * 8388607)));
         if (iL < 0) iL += 16777216;
         if (iR < 0) iR += 16777216;
         wavBuf[p] = iL & 0xFF; wavBuf[p + 1] = (iL >> 8) & 0xFF; wavBuf[p + 2] = (iL >> 16) & 0xFF;
@@ -588,8 +640,9 @@ class NativeDspStreamer {
     session.durationSec = (track && track.duration > 0) ? track.duration : (wavBuf.length / (88200 * 6));
     // Decimated 24-bit PCM WAV is fully in memory: windows are read straight from it.
     session.startSec = startSec;
-    session.spectrum = { rate: wavBuf.readUInt32LE(24), wav24: wavBuf.subarray(44), peqApplied: !!peqApplied };
+    session.spectrum = { rate: wavBuf.readUInt32LE(24), wav24: wavBuf.subarray(44), peqApplied: !!peqApplied, convApplied: !!convState };
     session.peqOptions = peqApplied ? peqOptions : null;
+    session.convOptions = convState ? convOptions : null;
     session.cancel = () => {
       try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
       this.activeSessions.delete(token);
@@ -611,6 +664,56 @@ class NativeDspStreamer {
   // Get active session by token
   getSession(token) {
     return this.activeSessions.get(token);
+  }
+
+  // ----------------- Convolution IR pipeline -----------------
+  // Load an IR WAV (16/24/32-bit int or 32-bit float, mono or stereo), resample it to the
+  // session rate with the engine's own FIR resampler, and attenuate it when its frequency
+  // response peak exceeds unity (anti-clipping; reported back for the UI).
+  // Returns { irL, irR (Float64, at targetRate), raw {rate, L, R}, normDb, taps } or null.
+  async loadConvolutionIr(convOptions, targetRate) {
+    if (!convOptions || !convOptions.enabled || !convOptions.irPath) return null;
+    if (!fs.existsSync(convOptions.irPath)) return null;
+    const ir = await nativeAudioEngine.readPcmSamples(convOptions.irPath, 0, 60);
+    if (!ir || !ir.frameCount || !ir.left || !ir.left.length) return null;
+
+    const rawL = Float64Array.from(ir.left);
+    const rawR = Float64Array.from(ir.right);
+    let irL = rawL, irR = rawR;
+    if (ir.sampleRate !== targetRate) {
+      irL = resampleIrSamples(rawL, ir.sampleRate, targetRate);
+      irR = resampleIrSamples(rawR, ir.sampleRate, targetRate);
+    }
+
+    let normDb = 0;
+    const peak = Math.max(irResponsePeak(irL), irResponsePeak(irR));
+    if (peak > 1.0) {
+      const g = 1.0 / peak;
+      if (irL === rawL) { irL = Float64Array.from(rawL); irR = Float64Array.from(rawR); }
+      for (let i = 0; i < irL.length; i++) { irL[i] *= g; irR[i] *= g; }
+      normDb = 20 * Math.log10(g);
+    }
+    return { irL, irR, raw: { rate: ir.sampleRate, L: rawL, R: rawR }, normDb, taps: irL.length };
+  }
+
+  // Synchronous spectrum-path variant: rebuild from the raw IR cached on the session.
+  _convStateFromRaw(raw, rate) {
+    try {
+      if (!raw || !raw.L || !raw.L.length) return null;
+      let irL = raw.L, irR = raw.R;
+      if (raw.rate !== rate) {
+        irL = resampleIrSamples(raw.L, raw.rate, rate);
+        irR = resampleIrSamples(raw.R, raw.rate, rate);
+      }
+      const peak = Math.max(irResponsePeak(irL), irResponsePeak(irR));
+      if (peak > 1.0) {
+        const g = 1.0 / peak;
+        const sL = Float64Array.from(irL), sR = Float64Array.from(irR);
+        for (let i = 0; i < sL.length; i++) { sL[i] *= g; sR[i] *= g; }
+        irL = sL; irR = sR;
+      }
+      return createConvolutionState(rate, irL, irR);
+    } catch (e) { return null; }
   }
 
   // Real-time spectrum window for the NOW PLAYING visualizer: returns the SOURCE PCM around a
@@ -650,6 +753,15 @@ class NativeDspStreamer {
       }
       if (session._peqSpecChain) applyPeqArrays(session._peqSpecChain, outL, outR, outL, outR, n);
     }
+    // Convolution (IR) for the spectrum too: fresh state per window from the session's cached
+    // raw IR (the first B samples are block latency; the FFT uses the settled remainder).
+    if (session.convOptions && session.convIrRaw && !spec.convApplied) {
+      if (!session._convSpecState || session._convSpecRate !== spec.rate) {
+        session._convSpecState = this._convStateFromRaw(session.convIrRaw, spec.rate);
+        session._convSpecRate = session._convSpecState ? spec.rate : -1;
+      }
+      if (session._convSpecState) applyConvolutionArrays(session._convSpecState, outL, outR, outL, outR, n);
+    }
     return { rate: spec.rate, left: outL, right: outR };
   }
 
@@ -666,6 +778,32 @@ class NativeDspStreamer {
 const instance = new NativeDspStreamer();
 instance.ProgressiveFileStream = ProgressiveFileStream;
 
+// Offline IR resampling with the engine's FIR resampler (gain-preserving: Σh = ratio).
+// Hermite fallback keeps the IR usable if the FIR design path ever fails.
+function resampleIrSamples(samples, srcRate, dstRate) {
+  const ratio = dstRate / srcRate;
+  const outLen = Math.max(1, Math.round(samples.length * ratio));
+  const out = new Float64Array(outLen);
+  let gf = null;
+  try { gf = buildGaussFilter(dstRate, srcRate); } catch (e) { gf = null; }
+  if (gf) {
+    for (let i = 0; i < outLen; i++) out[i] = firSample(samples, samples.length, i, ratio, gf);
+    return out;
+  }
+  for (let i = 0; i < outLen; i++) {
+    const srcPos = i / ratio;
+    const idx = srcPos | 0;
+    const t = srcPos - idx;
+    const last = samples.length - 1;
+    const p1 = samples[Math.min(idx, last)];
+    const p0 = idx > 0 ? samples[idx - 1] : p1;
+    const p2 = idx < last ? samples[idx + 1] : p1;
+    const p3 = idx < last - 1 ? samples[idx + 2] : p2;
+    out[i] = interpolateSample(p0, p1, p2, p3, t, 'linear');
+  }
+  return out;
+}
+
 // Shared helper: apply a PEQ chain to a complete 24-bit WAV buffer in place (used by the
 // local /dsd-stream decimation path in main.js, mirroring createDsdDecimateSession).
 instance.applyPeqToWavBuffer = function (wavBuf, peqOptions) {
@@ -681,6 +819,33 @@ instance.applyPeqToWavBuffer = function (wavBuf, peqOptions) {
     let vR = wavBuf[p + 3] | (wavBuf[p + 4] << 8) | (wavBuf[p + 5] << 16);
     if (vR & 0x800000) vR -= 0x1000000;
     const o = processPeqPair(chain, st, vL / 8388608, vR / 8388608);
+    let iL = Math.max(-8388608, Math.min(8388607, Math.floor(o[0] * 8388607)));
+    let iR = Math.max(-8388608, Math.min(8388607, Math.floor(o[1] * 8388607)));
+    if (iL < 0) iL += 16777216;
+    if (iR < 0) iR += 16777216;
+    wavBuf[p] = iL & 0xFF; wavBuf[p + 1] = (iL >> 8) & 0xFF; wavBuf[p + 2] = (iL >> 16) & 0xFF;
+    wavBuf[p + 3] = iR & 0xFF; wavBuf[p + 4] = (iR >> 8) & 0xFF; wavBuf[p + 5] = (iR >> 16) & 0xFF;
+  }
+  return wavBuf;
+};
+
+// Shared helper: apply a convolution IR to a complete 24-bit WAV buffer in place (used by
+// the local /dsd-stream decimation path in main.js, mirroring createDsdDecimateSession).
+instance.applyConvToWavBufferAsync = async function (wavBuf, convOptions) {
+  let convState = null;
+  try {
+    const irData = await instance.loadConvolutionIr(convOptions, wavBuf.readUInt32LE(24));
+    if (irData) convState = createConvolutionState(wavBuf.readUInt32LE(24), irData.irL, irData.irR);
+  } catch (e) { return wavBuf; }
+  if (!convState) return wavBuf;
+  const totalFrames = (wavBuf.length - 44) / 6;
+  for (let f = 0; f < totalFrames; f++) {
+    const p = 44 + f * 6;
+    let vL = wavBuf[p] | (wavBuf[p + 1] << 8) | (wavBuf[p + 2] << 16);
+    if (vL & 0x800000) vL -= 0x1000000;
+    let vR = wavBuf[p + 3] | (wavBuf[p + 4] << 8) | (wavBuf[p + 5] << 16);
+    if (vR & 0x800000) vR -= 0x1000000;
+    const o = processConvolutionPair(convState, vL / 8388608, vR / 8388608);
     let iL = Math.max(-8388608, Math.min(8388607, Math.floor(o[0] * 8388607)));
     let iR = Math.max(-8388608, Math.min(8388607, Math.floor(o[1] * 8388607)));
     if (iL < 0) iL += 16777216;

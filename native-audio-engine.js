@@ -67,6 +67,7 @@ class NativeAudioEngine {
       channels: fmt.numChannels,
       bitsPerSample: fmt.bitsPerSample,
       blockAlign: fmt.blockAlign,
+      isFloat: fmt.audioFormat === 3,
       dataOffset,
       dataSize
     };
@@ -416,6 +417,16 @@ class NativeAudioEngine {
           : sL;
         left[i] = sL / 8388608.0;
         right[i] = sR / 8388608.0;
+      }
+    } else if (info.bitsPerSample === 32 && info.isFloat) {
+      for (let i = 0; i < frameCount; i++) {
+        const off = i * bytesPerFrame;
+        const sL = isBe ? rawBuf.readFloatBE(off) : rawBuf.readFloatLE(off);
+        const sR = (info.channels > 1)
+          ? (isBe ? rawBuf.readFloatBE(off + 4) : rawBuf.readFloatLE(off + 4))
+          : sL;
+        left[i] = sL;
+        right[i] = sR;
       }
     } else if (info.bitsPerSample === 32) {
       for (let i = 0; i < frameCount; i++) {

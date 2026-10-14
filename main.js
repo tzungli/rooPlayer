@@ -346,6 +346,15 @@ function startDsdStreamingServer() {
             if (parsed && parsed.enabled && Array.isArray(parsed.bands)) peqOptions = parsed;
           } catch (e) { peqOptions = null; }
         }
+        // Convolution (IR) options arrive the same way: { enabled, irPath }
+        let convOptions = null;
+        const convRaw = reqUrl.searchParams.get('conv');
+        if (convRaw) {
+          try {
+            const parsedConv = JSON.parse(convRaw);
+            if (parsedConv && parsedConv.enabled && parsedConv.irPath) convOptions = parsedConv;
+          } catch (e) { convOptions = null; }
+        }
 
         if (!filePath || !fs.existsSync(filePath)) {
           res.writeHead(404);
@@ -356,7 +365,7 @@ function startDsdStreamingServer() {
         // Local Chromium playback always receives progressive 24-bit PCM WAV
         // (DSD rate modes are mapped to intermediate PCM rates by the renderer;
         //  dsd/order URL params are accepted for compatibility and ignored here)
-        const sessionKey = crypto.createHash('md5').update(`${filePath}|${startSec}|${sampleRate}|${filterPhase}|${peqRaw || ''}`).digest('hex');
+        const sessionKey = crypto.createHash('md5').update(`${filePath}|${startSec}|${sampleRate}|${filterPhase}|${peqRaw || ''}|${convRaw || ''}`).digest('hex');
 
         try {
           let entryPromise = localDspSessions.get(sessionKey);
@@ -370,7 +379,7 @@ function startDsdStreamingServer() {
             }
             entryPromise = (async () => {
               const token = `local_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-              const session = await nativeDspStreamer.createPcmSession(token, filePath, startSec, sampleRate, null, filterPhase, peqOptions);
+              const session = await nativeDspStreamer.createPcmSession(token, filePath, startSec, sampleRate, null, filterPhase, peqOptions, convOptions);
               return { token, session };
             })();
             localDspSessions.set(sessionKey, entryPromise);
@@ -428,6 +437,15 @@ function startDsdStreamingServer() {
               outWavFinal = nativeDspStreamer.applyPeqToWavBuffer(outWav, parsedPeq);
             }
           } catch (e) { /* PEQ failure must never break playback */ }
+        }
+        const convRawDsd = reqUrl.searchParams.get('conv');
+        if (convRawDsd) {
+          try {
+            const parsedConv = JSON.parse(convRawDsd);
+            if (parsedConv && parsedConv.enabled && parsedConv.irPath) {
+              outWavFinal = await nativeDspStreamer.applyConvToWavBufferAsync(outWavFinal, parsedConv);
+            }
+          } catch (e) { /* Convolution failure must never break playback */ }
         }
 
         res.writeHead(200, {
@@ -603,17 +621,18 @@ ipcMain.handle('shell:openExternal', (event, url) => {
 });
 
 // DSD Stream URL helper IPC
-ipcMain.handle('audio:getDsdStreamUrl', (event, filePath, startSec = 0, peqJson = '') => {
+ipcMain.handle('audio:getDsdStreamUrl', (event, filePath, startSec = 0, peqJson = '', convJson = '') => {
   if (!dsdStreamPort) return '';
   const params = new URLSearchParams();
   params.set('file', filePath);
   if (startSec > 0) params.set('start', startSec.toString());
   if (peqJson) params.set('peq', peqJson);
+  if (convJson) params.set('conv', convJson);
   return `http://127.0.0.1:${dsdStreamPort}/dsd-stream?${params.toString()}`;
 });
 
 // Native DSP PCM Upsampling Stream URL helper IPC
-ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear', peqJson = '') => {
+ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear', peqJson = '', convJson = '') => {
   if (!dsdStreamPort) return '';
   const params = new URLSearchParams();
   params.set('file', filePath);
@@ -623,8 +642,45 @@ ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRa
   params.set('order', (dsdOrder || 5).toString());
   params.set('phase', filterPhase || 'linear');
   if (peqJson) params.set('peq', peqJson);
+  if (convJson) params.set('conv', convJson);
   params.set('local', '1'); // Local Electron Chromium playback needs decoded PCM WAV
   return `http://127.0.0.1:${dsdStreamPort}/sox-stream?${params.toString()}`;
+});
+
+// ==========================================================
+// Convolution IR: file picker + metadata (for the PEQ-adjacent UI card)
+// ==========================================================
+ipcMain.handle('conv:pickIrFile', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '選擇脈衝響應（IR）WAV 檔案',
+    properties: ['openFile'],
+    filters: [
+      { name: '脈衝響應 WAV', extensions: ['wav'] },
+      { name: '所有檔案', extensions: ['*'] }
+    ]
+  });
+  if (result.canceled || !result.filePaths || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle('conv:getIrInfo', async (event, irPath) => {
+  try {
+    if (!irPath || !fs.existsSync(irPath)) return { ok: false, error: '檔案不存在' };
+    const ir = await nativeAudioEngine.readPcmSamples(irPath, 0, 60);
+    if (!ir || !ir.frameCount) return { ok: false, error: '無法解碼（需 16/24/32-bit WAV）' };
+    const irL = Float64Array.from(ir.left);
+    const peak = require('./dsp-kernel').irResponsePeak(irL);
+    return {
+      ok: true,
+      sampleRate: ir.sampleRate,
+      channels: ir.channels,
+      frames: ir.frameCount,
+      durationMs: Math.round((ir.frameCount / ir.sampleRate) * 1000),
+      responsePeak: peak
+    };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
 });
 
 async function getAudioDurationNative(filePath) {

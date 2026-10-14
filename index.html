@@ -1846,6 +1846,20 @@
               </div>
             </div>
 
+            <!-- Dynamic Convolution (IR) Stage: JS repositions it to the exact point of the chain
+                 where the engine applies it (after PEQ: after upsampling / on source PCM / native rate) -->
+            <div class="signal-arrow conv-dsp-element" id="signalConvArrow" style="display: none;">↓</div>
+            <div class="signal-stage conv-dsp-element" id="signalConvStage" style="display: none;">
+              <div class="stage-icon">🌊</div>
+              <div class="stage-info">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <div class="stage-title" id="signalConvTitle">卷積濾波器 (IR)</div>
+                  <span class="stage-badge-conv">IR ACTIVE</span>
+                </div>
+                <div class="stage-desc" id="signalConvDesc">分割式頻域卷積：IR 作用中</div>
+              </div>
+            </div>
+
             <div class="signal-arrow">↓</div>
             <div class="signal-stage">
               <div class="stage-icon">⚡</div>
@@ -1976,6 +1990,32 @@
                 <span class="peq-live-note">設定即時套用到播放中的曲目</span>
               </div>
               <div class="peq-band-list" id="peqBandList"></div>
+            </div>
+          </div>
+
+          <!-- Convolution (IR) Card: independent stage like PEQ, applied after PEQ in the chain.
+               Loads a Roon-style impulse response and applies partitioned frequency-domain filtering. -->
+          <div class="dsp-sox-card conv-card" id="convCard">
+            <div class="dsp-sox-header">
+              <div class="dsp-sox-title-wrap">
+                <span class="dsp-sox-icon">🌊</span>
+                <div>
+                  <div class="dsp-sox-title">卷積濾波器 (IR 脈衝響應) <span class="dsp-hint-badge" id="dspActiveConvHint">關閉</span></div>
+                  <div class="dsp-sox-desc">載入脈衝響應 WAV 做分割式頻域卷積（房間校正 FIR / 喇叭・耳機校正）；於 PEQ 之後以 PCM 域處理，線性相位不改變</div>
+                </div>
+              </div>
+              <label class="switch-toggle" title="啟用/關閉 卷積濾波器">
+                <input type="checkbox" id="toggleConv">
+                <span class="slider-round"></span>
+              </label>
+            </div>
+            <div id="convEditor" class="conv-editor" style="display: none;">
+              <div class="dsp-pill-selector" id="convActionRow">
+                <button class="dsp-pill" id="convPickIr">📂 載入 IR 檔案…</button>
+                <button class="dsp-pill" id="convRemoveIr" style="display: none;">移除 IR</button>
+              </div>
+              <div class="conv-info" id="convInfo">尚未載入 IR。請選擇 16/24/32-bit WAV 脈衝響應檔（單聲道自動套用到左右聲道）。</div>
+              <div class="conv-hint">DSD 來源自動經 88.2k 降頻路徑套用卷積 ・ 引擎 DSD 模式下 DSF 直通優先（不套卷積） ・ 設定即時套用到播放中的曲目</div>
             </div>
           </div>
         </div>

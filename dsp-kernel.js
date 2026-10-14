@@ -766,6 +766,143 @@ function applyPeqArrays(chain, inL, inR, outL, outR, len) {
   return n;
 }
 
+// ---------------------------------------------------------------------------
+// 卷積濾波器（IR 脈衝響應，Roon 風格）：分割式頻域卷積（partitioned overlap-save）。
+// FFT 尺寸 N = 4096，區塊 B = N/2 = 2048；IR 切成每段 ≤ B taps 的分割（k=0 為最新 taps）。
+// 每個輸入區塊：X_n = FFT([前 B 樣本 | 現行 B 樣本]) 存入環形緩衝，
+// 輸出區塊 n = lastB( IFFT( Σ_{k=0..K-1} X_{n-k} · H_k ) )。
+// 每區塊成本：1 次 FFT + K 次頻譜乘加 + 1 次 IFFT（與 IR 長度無關的線性 K）。
+// 群延遲恆定 = B 樣本（線性相位不受影響）；無累加器、無近似。
+// ---------------------------------------------------------------------------
+const CONV_FFT_SIZE = 4096;
+const CONV_BLOCK_SIZE = CONV_FFT_SIZE / 2;
+const CONV_MAX_IR_TAPS = 262144; // ~5.9s @44.1k / 1.4s @192k 上限，超出自動截尾
+
+function nextPow2(n) { let p = 1; while (p < n) p <<= 1; return p; }
+
+// IR 的頻率響應峰值 max|H(f)|（用於防削頭正規化與 UI 資訊）
+function irResponsePeak(ir) {
+  const taps = Math.min(ir.length, CONV_MAX_IR_TAPS);
+  if (taps <= 0) return 0;
+  const n = nextPow2(Math.max(2, taps));
+  const re = new Float64Array(n), im = new Float64Array(n);
+  for (let i = 0; i < taps; i++) re[i] = ir[i];
+  fftRun(re, im, false);
+  let peak = 0;
+  for (let i = 0; i <= n / 2; i++) {
+    const m = Math.hypot(re[i], im[i]);
+    if (m > peak) peak = m;
+  }
+  return peak;
+}
+
+function buildConvPartitions(ir) {
+  const N = CONV_FFT_SIZE, B = CONV_BLOCK_SIZE;
+  const taps = Math.min(ir.length, CONV_MAX_IR_TAPS);
+  if (taps <= 0) return null;
+  const K = Math.ceil(taps / B);
+  const parts = new Array(K);
+  for (let k = 0; k < K; k++) {
+    const re = new Float64Array(N), im = new Float64Array(N);
+    const start = k * B, len = Math.min(B, taps - start);
+    for (let i = 0; i < len; i++) re[i] = ir[start + i];
+    fftRun(re, im, false);
+    parts[k] = { re, im };
+  }
+  return parts;
+}
+
+function createConvolutionState(fs, irL, irR) {
+  if (!fs || !irL || !irL.length || !irR || !irR.length) return null;
+  const partsL = buildConvPartitions(irL);
+  const partsR = buildConvPartitions(irR);
+  if (!partsL || !partsR) return null;
+  const K = Math.max(partsL.length, partsR.length);
+  const N = CONV_FFT_SIZE, B = CONV_BLOCK_SIZE;
+  const mkChannel = (parts) => {
+    const padded = parts.slice();
+    while (padded.length < K) padded.push({ re: new Float64Array(N), im: new Float64Array(N) });
+    return {
+      parts: padded,
+      ring: Array.from({ length: K }, () => ({ re: new Float64Array(N), im: new Float64Array(N) })),
+      ringPos: 0,
+      window: new Float64Array(2 * B), // [前 B | 現行 B]
+      fillCount: 0,
+      out: new Float64Array(B),
+      outPos: 0,
+      outLen: 0,
+      xRe: new Float64Array(N),
+      xIm: new Float64Array(N)
+    };
+  };
+  return { fs, K, L: mkChannel(partsL), R: mkChannel(partsR), yRe: new Float64Array(N), yIm: new Float64Array(N) };
+}
+
+function convProcessBlock(st, ch) {
+  const N = CONV_FFT_SIZE, B = CONV_BLOCK_SIZE;
+  const xRe = ch.xRe, xIm = ch.xIm;
+  xRe.set(ch.window);
+  xIm.fill(0);
+  fftRun(xRe, xIm, false);
+  const slot = ch.ring[ch.ringPos];
+  slot.re.set(xRe);
+  slot.im.set(xIm);
+  ch.ringPos = (ch.ringPos + 1) % st.K;
+
+  const yRe = st.yRe, yIm = st.yIm;
+  yRe.fill(0);
+  yIm.fill(0);
+  for (let k = 0; k < st.K; k++) {
+    const X = ch.ring[(ch.ringPos - 1 - k + 2 * st.K) % st.K];
+    const H = ch.parts[k];
+    const xr = X.re, xi = X.im, hr = H.re, hi = H.im;
+    for (let i = 0; i < N; i++) {
+      const a = xr[i], b = xi[i];
+      yRe[i] += a * hr[i] - b * hi[i];
+      yIm[i] += a * hi[i] + b * hr[i];
+    }
+  }
+  fftRun(yRe, yIm, true);
+
+  // overlap-save 有效輸出 = 後 B 個樣本 = 區塊 n 的完整卷積輸出
+  for (let i = 0; i < B; i++) ch.out[i] = yRe[B + i];
+  ch.outPos = 0;
+  ch.outLen = B;
+
+  ch.window.copyWithin(0, B); // 前 B ← 現行 B（下一區塊的重疊區）
+}
+
+function processConvolutionPair(st, xL, xR) {
+  const B = CONV_BLOCK_SIZE;
+  st.L.window[B + st.L.fillCount] = xL;
+  st.R.window[B + st.R.fillCount] = xR;
+  st.L.fillCount++;
+  st.R.fillCount++;
+  if (st.L.fillCount === B) {
+    convProcessBlock(st, st.L);
+    convProcessBlock(st, st.R);
+    st.L.fillCount = 0;
+    st.R.fillCount = 0;
+  }
+  let oL = 0, oR = 0;
+  if (st.L.outPos < st.L.outLen) oL = st.L.out[st.L.outPos++];
+  if (st.R.outPos < st.R.outLen) oR = st.R.out[st.R.outPos++];
+  return [oL, oR];
+}
+
+// Whole-array convenience pass (decimate sessions / spectrum windows). Fresh state:
+// the first B samples are the inherent block latency; the final IR tail past the
+// window end is truncated by the caller's fixed output length (same as PEQ sessions).
+function applyConvolutionArrays(st, inL, inR, outL, outR, len) {
+  const n = Math.min(len === undefined ? inL.length : len, inL.length, inR.length, outL.length, outR.length);
+  for (let i = 0; i < n; i++) {
+    const o = processConvolutionPair(st, inL[i], inR[i]);
+    outL[i] = o[0];
+    outR[i] = o[1];
+  }
+  return n;
+}
+
 module.exports = {
   interpolateSample,
   buildGaussFilter,
@@ -781,5 +918,12 @@ module.exports = {
   createPeqChain,
   createPeqState,
   processPeqPair,
-  applyPeqArrays
+  applyPeqArrays,
+  CONV_FFT_SIZE,
+  CONV_BLOCK_SIZE,
+  CONV_MAX_IR_TAPS,
+  irResponsePeak,
+  createConvolutionState,
+  processConvolutionPair,
+  applyConvolutionArrays
 };

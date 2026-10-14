@@ -1974,6 +1974,69 @@ body.table-col-resizing * {
   color: #0e7490;
 }
 
+/* Convolution (IR) signal-path stage: amber identity */
+.signal-arrow.conv-dsp-element {
+  color: #fb923c;
+}
+
+.stage-badge-conv {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: transparent;
+  color: #fb923c;
+  border: none;
+  letter-spacing: 0.8px;
+  position: relative;
+  isolation: isolate;
+  display: inline-block;
+  animation: conv-text-glow 2.6s ease-in-out infinite;
+}
+
+.stage-badge-conv::after {
+  content: '';
+  position: absolute;
+  inset: -3px -7px;
+  border-radius: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(251, 146, 60, 0.8) 0%, rgba(251, 146, 60, 0.4) 45%, rgba(253, 224, 71, 0) 78%);
+  animation: conv-halo-expand 2.6s ease-out infinite;
+}
+
+@keyframes conv-text-glow {
+  0%, 100% {
+    color: #fb923c;
+    text-shadow: 0 0 6px rgba(251, 146, 60, 0.7), 0 0 16px rgba(251, 146, 60, 0.3);
+    transform: scale(1);
+  }
+  45% {
+    color: #fed7aa;
+    text-shadow: 0 0 10px rgba(254, 215, 170, 1), 0 0 24px rgba(251, 146, 60, 0.6), 0 0 44px rgba(251, 146, 60, 0.4);
+    transform: scale(1.06);
+  }
+}
+
+@keyframes conv-halo-expand {
+  0% {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  60%, 100% {
+    transform: scale(3.2);
+    opacity: 0;
+  }
+}
+
+[data-theme="light"] .stage-badge-conv {
+  color: #c2410c;
+}
+
+[data-theme="light"] .signal-arrow.conv-dsp-element {
+  color: #c2410c;
+}
+
 /* DSP SoX Settings Card (Right Column) */
 .dsp-sox-card {
   margin-top: 0;
@@ -2174,6 +2237,64 @@ body.table-col-resizing * {
   padding-top: 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
+
+/* ===== Convolution (IR) card ===== */
+/* Independent card below the PEQ card; amber identity when active (vs engine purple / PEQ cyan) */
+.dsp-sox-card.conv-card.active {
+  border-color: rgba(251, 146, 60, 0.4);
+  background: rgba(251, 146, 60, 0.04);
+}
+
+[data-theme="light"] .dsp-sox-card.conv-card.active {
+  border-color: rgba(180, 83, 9, 0.45);
+  background: rgba(180, 83, 9, 0.05);
+}
+
+.conv-card .conv-editor {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.conv-info {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-sub);
+  word-break: break-all;
+}
+
+.conv-info .conv-info-ok {
+  color: #fdba74;
+  font-weight: 700;
+}
+
+.conv-info .conv-info-err {
+  color: #f87171;
+  font-weight: 700;
+}
+
+.conv-hint {
+  margin-top: 8px;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+#convRemoveIr {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fca5a5;
+}
+
+#convRemoveIr:hover {
+  background: rgba(248, 113, 113, 0.15);
+  color: #fff;
+  border-color: rgba(248, 113, 113, 0.7);
+}
+
+[data-theme="light"] .conv-info .conv-info-ok { color: #c2410c; }
+[data-theme="light"] .conv-info .conv-info-err { color: #b91c1c; }
+[data-theme="light"] #convRemoveIr { border-color: rgba(185, 28, 28, 0.4); color: #b91c1c; }
 
 /* User PEQ slots: 6 named saved setups */
 .peq-slot-row {

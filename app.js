@@ -109,17 +109,41 @@ function peqPayloadJson() {
   return p ? JSON.stringify(p) : '';
 }
 
-// True when any native-DSP processing must run: upsampling engine on, or PEQ active.
+// ----------------- Convolution (IR) model -----------------
+// Fully independent stage like PEQ: its own switch + one IR WAV path. The engine loads the
+// IR itself (path only travels), resamples it to the session rate and applies partitioned
+// frequency-domain convolution after PEQ. DSD sources take the decimate path (IR at PCM rate).
+function normalizeConvSettings(raw) {
+  return {
+    enabled: !!(raw && raw.enabled),
+    irPath: raw && typeof raw.irPath === 'string' && raw.irPath ? raw.irPath : null
+  };
+}
+
+function buildConvPayload() {
+  const conv = state.dsp && state.dsp.conv;
+  if (!state.dsp || !conv || !conv.enabled || !conv.irPath) return null;
+  return { enabled: true, irPath: conv.irPath };
+}
+
+function convPayloadJson() {
+  const p = buildConvPayload();
+  return p ? JSON.stringify(p) : '';
+}
+
+// True when any native-DSP processing must run: upsampling engine on, PEQ active, or convolution active.
 function localDspActive() {
-  return !!(state.dsp && state.dsp.enabled) || countActivePeqBands() > 0;
+  return !!(state.dsp && state.dsp.enabled) || countActivePeqBands() > 0 || !!buildConvPayload();
 }
 
 // Single builder for the engine dspOptions (DLNA playTrack). When the upsampling engine is
-// off but PEQ is active, sampleRate stays at the track's native rate (PEQ-only processing).
+// off but PEQ / convolution is active, sampleRate stays at the track's native rate
+// (native-rate-only processing).
 function buildDspOptions(track) {
   const engineOn = !!(state.dsp && state.dsp.enabled);
   const peqPayload = buildPeqPayload();
-  if (!engineOn && !peqPayload) return null;
+  const convPayload = buildConvPayload();
+  if (!engineOn && !peqPayload && !convPayload) return null;
   const srcRate = (track && track.sampleRate) || 44100;
   return {
     enabled: engineOn,
@@ -127,7 +151,8 @@ function buildDspOptions(track) {
     dsdMode: engineOn && isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
     dsdOrder: state.dsp.dsdOrder || 5,
     filterPhase: state.dsp.filterPhase || 'linear',
-    peq: peqPayload
+    peq: peqPayload,
+    conv: convPayload
   };
 }
 
@@ -180,10 +205,11 @@ const state = {
         rateMode: saved.rateMode || '4x',
         dsdOrder: [2, 5, 7].includes(parseInt(saved.dsdOrder, 10)) ? parseInt(saved.dsdOrder, 10) : 5,
         filterPhase: ['linear', 'minimum', 'intermediate', 'gauss-long', 'gauss-min', 'poly-ext2', 'hqp-ps-ext2'].includes(saved.filterPhase) ? saved.filterPhase : 'linear',
-        peq: normalizePeqSettings(saved.peq)
+        peq: normalizePeqSettings(saved.peq),
+        conv: normalizeConvSettings(saved.conv)
       };
     } catch (e) {
-      return { enabled: false, rateMode: '4x', dsdOrder: 5, filterPhase: 'linear', peq: normalizePeqSettings(null) };
+      return { enabled: false, rateMode: '4x', dsdOrder: 5, filterPhase: 'linear', peq: normalizePeqSettings(null), conv: normalizeConvSettings(null) };
     }
   })()
 };
@@ -5623,7 +5649,7 @@ async function playDsdTrack(track, startSec = 0) {
       }).catch(() => {});
     }
 
-    const streamUrl = await window.electronAPI.getDsdStreamUrl(track.filePath, startSec, peqPayloadJson());
+    const streamUrl = await window.electronAPI.getDsdStreamUrl(track.filePath, startSec, peqPayloadJson(), convPayloadJson());
     if (!streamUrl) {
       playerArtist.textContent = '無法建立 DSD 串流服務';
       return;
@@ -5719,7 +5745,7 @@ async function playSoxTrack(track, startSec = 0) {
     const dsdOrder = state.dsp.dsdOrder || 5;
     const filterPhase = state.dsp.filterPhase || 'linear';
 
-    const streamUrl = await window.electronAPI.getSoxStreamUrl(track.filePath, startSec, targetRate, dsdMode, dsdOrder, filterPhase, peqPayloadJson());
+    const streamUrl = await window.electronAPI.getSoxStreamUrl(track.filePath, startSec, targetRate, dsdMode, dsdOrder, filterPhase, peqPayloadJson(), convPayloadJson());
     if (!streamUrl) {
       playerArtist.textContent = '無法建立 SoX 升頻串流服務';
       return;
@@ -5735,7 +5761,10 @@ async function playSoxTrack(track, startSec = 0) {
         const mhz = getDsdMhz(state.dsp.rateMode);
         showToast(`⚡ 1-bit DSD 調變: PCM ➔ ${state.dsp.rateMode.toUpperCase()} (${dsdOrder} 階 • ${phaseText} • ${mhz})`);
       } else if (!engineOn) {
-        showToast(`🎚️ 參數化等化器 (原生採樣率處理): ${formatKhz(targetRate)} 24-bit • ${countActivePeqBands()} 段作用中`);
+        const proc = [];
+        if (countActivePeqBands() > 0) proc.push(`PEQ ${countActivePeqBands()} 段`);
+        if (buildConvPayload()) proc.push('卷積 IR');
+        showToast(`🎚️ 原生採樣率處理 (${formatKhz(targetRate)} 24-bit): ${proc.join(' + ')}`);
       } else {
         const trkFmt = getAudioFormatFromPath(track.filePath || track.fileName, track.formatName || 'PCM').toUpperCase();
         showToast(`🎛️ SoX 升頻: ${formatKhz(track.sampleRate || 44100)} ➔ ${formatKhz(targetRate)} (24-bit • ${phaseText} • ${trkFmt})`);
@@ -5843,6 +5872,9 @@ function updateSignalPathUI(track = null) {
   // PEQ editor state (modal open / live sync)
   syncPeqModalUI();
 
+  // Convolution (IR) card state (modal open / live sync)
+  syncConvModalUI();
+
   if (!track) {
     if (state.queue && state.queue.length > 0) {
       track = state.queue[0];
@@ -5931,10 +5963,13 @@ function updateSignalPathUI(track = null) {
     const dsdRate = track.sampleRate ? `${(track.sampleRate / 1000000).toFixed(1)}MHz` : '2.8MHz';
     const isDlna = state.activeAudioZone !== 'local' && state.activeDlnaDevice;
     const peqOn = countActivePeqBands() > 0;
+    const convOn = !!buildConvPayload();
+    const procOn = peqOn || convOn;
+    const procLabel = [peqOn ? 'PEQ' : '', convOn ? '卷積 IR' : ''].filter(Boolean).join(' + ');
     if (isDlna) {
-      if (peqOn) {
-        if (signalPathBadge) signalPathBadge.textContent = `PEQ + DSD ➔ 24/88.2kHz ⚡`;
-        if (statusPill) statusPill.textContent = 'ENHANCED (DSD ➔ 24/88.2k + PEQ)';
+      if (procOn) {
+        if (signalPathBadge) signalPathBadge.textContent = `${procLabel} + DSD ➔ 24/88.2kHz ⚡`;
+        if (statusPill) statusPill.textContent = `ENHANCED (DSD ➔ 24/88.2k + ${procLabel})`;
       } else {
         if (signalPathBadge) signalPathBadge.textContent = `BIT-PERFECT | Native DSD (1-bit / ${dsdRate}) ⚡`;
         if (statusPill) statusPill.textContent = 'BIT-PERFECT (DIRECT STREAMING)';
@@ -5945,23 +5980,23 @@ function updateSignalPathUI(track = null) {
       if (signalSoxArrow) signalSoxArrow.style.display = 'none';
       if (signalSoxStage) signalSoxStage.style.display = 'none';
 
-      if (engineTitle) engineTitle.textContent = peqOn ? 'rooPlayer DSD-to-PCM + PEQ Streamer' : 'rooPlayer Bit-Perfect DSD Streamer';
-      if (engineDesc) engineDesc.textContent = peqOn
-        ? `原生 DSD 即時降採樣至 24-bit 88.2kHz，並以參數化等化器處理（${countActivePeqBands()} 段作用中）`
+      if (engineTitle) engineTitle.textContent = procOn ? `rooPlayer DSD-to-PCM + ${procLabel} Streamer` : 'rooPlayer Bit-Perfect DSD Streamer';
+      if (engineDesc) engineDesc.textContent = procOn
+        ? `原生 DSD 即時降採樣至 24-bit 88.2kHz，並以${procLabel}處理${peqOn ? `（${countActivePeqBands()} 段 PEQ）` : ''}`
         : '原生 1-bit DSD (Sony DSF) 直通傳輸至網路渲染器，無重取樣或轉換';
       if (signalPathDot) signalPathDot.className = 'signal-dot dsd-gold';
     } else {
-      if (signalPathBadge) signalPathBadge.textContent = peqOn ? `PEQ | DSD ➔ 24/88.2kHz ⚡` : `ENHANCED | DSD ➔ 24/88.2kHz PCM`;
+      if (signalPathBadge) signalPathBadge.textContent = procOn ? `${procLabel} | DSD ➔ 24/88.2kHz ⚡` : `ENHANCED | DSD ➔ 24/88.2kHz PCM`;
       if (sourceTitle) sourceTitle.textContent = `DSD (1-bit / ${dsdRate}) — ${track.title}`;
-      if (statusPill) statusPill.textContent = peqOn ? 'ENHANCED (TRANSCODE + PEQ)' : 'ENHANCED (HIGH PRECISION TRANSCODE)';
+      if (statusPill) statusPill.textContent = procOn ? `ENHANCED (TRANSCODE + ${procLabel})` : 'ENHANCED (HIGH PRECISION TRANSCODE)';
       if (sourceDesc) sourceDesc.textContent = '原始 DSD 母帶碼流 (Bitstream 1-bit PDM)';
 
       if (signalSoxArrow) signalSoxArrow.style.display = 'none';
       if (signalSoxStage) signalSoxStage.style.display = 'none';
 
       if (engineTitle) engineTitle.textContent = 'rooPlayer DSD-to-PCM Audio Engine';
-      if (engineDesc) engineDesc.textContent = peqOn
-        ? `64-bit 浮點即時降採樣 (Decimation Filter) ＋ 參數化等化器 (${countActivePeqBands()} 段作用中) ➔ 24-bit 88.2kHz PCM`
+      if (engineDesc) engineDesc.textContent = procOn
+        ? `64-bit 浮點即時降採樣 (Decimation Filter) ＋ ${procLabel}${peqOn ? `（${countActivePeqBands()} 段 PEQ）` : ''} ➔ 24-bit 88.2kHz PCM`
         : '64-bit 浮點即時降採樣 (Decimation Filter) ➔ 24-bit 88.2kHz PCM';
       if (signalPathDot) signalPathDot.className = 'signal-dot purple';
     }
@@ -5971,20 +6006,26 @@ function updateSignalPathUI(track = null) {
     const isLossless = track.isLossless || ['WAV', 'FLAC', 'AIFF', 'ALAC', 'APE'].includes(trkFmt) || track.isTidal;
     const peqN = countActivePeqBands();
     const peqOn = peqN > 0;
+    const convOn = !!buildConvPayload();
+    const procParts = [];
+    if (peqOn) procParts.push(`PEQ (${peqN}段)`);
+    if (convOn) procParts.push('卷積 IR');
+    const procLabel = procParts.join(' + ');
+    const procOn = peqOn || convOn;
 
-    if (signalPathBadge) signalPathBadge.textContent = peqOn
-      ? `PEQ (${peqN}段) ⚡ | ${trkFmt} ${bitDepth}/${sampleKhz}`
+    if (signalPathBadge) signalPathBadge.textContent = procOn
+      ? `${procLabel} ⚡ | ${trkFmt} ${bitDepth}/${sampleKhz}`
       : `${isLossless ? 'LOSSLESS' : 'ENHANCED'} | ${trkFmt} ${bitDepth}/${sampleKhz}`;
     if (sourceTitle) sourceTitle.textContent = `${trkFmt} ${bitDepth}-bit / ${sampleKhz} (${track.title})`;
-    if (statusPill) statusPill.textContent = peqOn ? 'PEQ ACTIVE (NATIVE-RATE DSP)' : (isLossless ? 'LOSSLESS BIT-PERFECT' : 'ENHANCED');
+    if (statusPill) statusPill.textContent = convOn ? 'DSP ACTIVE (NATIVE-RATE DSP)' : (peqOn ? 'PEQ ACTIVE (NATIVE-RATE DSP)' : (isLossless ? 'LOSSLESS BIT-PERFECT' : 'ENHANCED'));
     if (sourceDesc) sourceDesc.textContent = customSourceDesc;
 
     if (signalSoxArrow) signalSoxArrow.style.display = 'none';
     if (signalSoxStage) signalSoxStage.style.display = 'none';
 
-    if (engineTitle) engineTitle.textContent = peqOn ? 'rooPlayer Native DSP (PEQ 原生率處理)' : 'rooPlayer Core Audio Engine';
-    if (engineDesc) engineDesc.textContent = peqOn
-      ? `參數化等化器即時處理中：原生 ${sampleKhz} 不升頻，${peqN} 段作用中（自動預降 ${peqHeadroomDb().toFixed(1)} dB）`
+    if (engineTitle) engineTitle.textContent = procOn ? 'rooPlayer Native DSP (原生率處理)' : 'rooPlayer Core Audio Engine';
+    if (engineDesc) engineDesc.textContent = procOn
+      ? `原生 ${sampleKhz} 不升頻即時處理：${procLabel}${peqOn ? `（自動預降 ${peqHeadroomDb().toFixed(1)} dB）` : ''}`
       : '64-bit 浮點無損混音核心，零採樣損失處理';
     if (signalPathDot) signalPathDot.className = 'signal-dot purple';
   }
@@ -6017,6 +6058,56 @@ function updateSignalPathUI(track = null) {
     } else {
       peqArrow.style.display = 'none';
       peqStage.style.display = 'none';
+    }
+  }
+
+  // Convolution (IR) stage node: always after PEQ where both are shown, EXCEPT in engine DSD
+  // modulation mode where the engine applies the IR on the source PCM before the worker's PEQ.
+  //  - engine on + PCM upsampling: after the upsampler stage (IR runs at the output rate)
+  //  - engine on + DSD modulation: before the PEQ node / modulation stage (IR runs on source PCM)
+  //  - engine off (conv-only): right after the source stage or after the PEQ node
+  const convStage = document.getElementById('signalConvStage');
+  const convArrow = document.getElementById('signalConvArrow');
+  const convActive = !!buildConvPayload();
+  if (convStage && convArrow) {
+    if (convActive) {
+      const stagesEl = convStage.parentElement;
+      const peqShown = peqActiveCount > 0 && peqStage && peqStage.parentElement === stagesEl && peqStage.style.display !== 'none';
+      let anchor = null;
+      if (isDspActive && !isDsdRateMode(curRateMode)) {
+        if (peqShown) {
+          anchor = peqStage.nextElementSibling;
+          if (anchor === convArrow) anchor = convStage.nextElementSibling; // already positioned here
+        } else {
+          anchor = signalSoxStage && signalSoxStage.parentElement === stagesEl ? signalSoxStage.nextElementSibling : null;
+          if (anchor === convArrow) anchor = convStage.nextElementSibling;
+        }
+      } else if (isDspActive && peqShown) {
+        // DSD modulation: IR before PEQ (matches the engine's actual order on the source PCM)
+        anchor = peqArrow;
+      }
+      if (!anchor || anchor.parentElement !== stagesEl) {
+        if (!isDspActive && peqShown) {
+          anchor = peqStage.nextElementSibling;
+          if (anchor === convArrow) anchor = convStage.nextElementSibling;
+        } else {
+          anchor = signalSoxArrow; // conv-only: right after the source stage
+        }
+      }
+      if (anchor && anchor.parentElement === stagesEl) {
+        stagesEl.insertBefore(convArrow, anchor);
+        stagesEl.insertBefore(convStage, anchor);
+      }
+      convArrow.style.display = 'block';
+      convStage.style.display = 'flex';
+      const convDesc = document.getElementById('signalConvDesc');
+      if (convDesc) {
+        const irName = (state.dsp.conv.irPath || '').replace(/\\/g, '/').split('/').pop();
+        convDesc.textContent = `卷積濾波器：分割式頻域處理（IR: ${irName}）`;
+      }
+    } else {
+      convArrow.style.display = 'none';
+      convStage.style.display = 'none';
     }
   }
 }
@@ -6053,7 +6144,7 @@ function peqScheduleReapply() {
   if (peqReapplyTimer) clearTimeout(peqReapplyTimer);
   peqReapplyTimer = setTimeout(() => {
     peqReapplyTimer = null;
-    if (!((state.dsp.enabled || countActivePeqBands() > 0) && state.isPlaying)) return;
+    if (!((state.dsp.enabled || countActivePeqBands() > 0 || buildConvPayload()) && state.isPlaying)) return;
     const track = state.queue[state.currentTrackIndex];
     if (!track || track.isDemo || !track.filePath) return;
     const curSec = getCurrentPlaybackTime();
@@ -6536,6 +6627,144 @@ function initPeqControls() {
   syncPeqModalUI();
 }
 
+// ========================================================
+// Convolution (IR) card UI: switch, IR file picker, info display.
+// The engine loads the IR itself from the stored path; only the path travels over IPC.
+// ========================================================
+let convInfoCache = null; // { path, info } - avoid re-reading the IR file on every modal sync
+
+function normalizeConvSettingsSafe(raw) {
+  return normalizeConvSettings(raw);
+}
+
+function syncConvModalUI() {
+  if (!state.dsp.conv) state.dsp.conv = normalizeConvSettingsSafe(null);
+  const conv = state.dsp.conv;
+  const cb = document.getElementById('toggleConv');
+  const card = document.getElementById('convCard');
+  const editor = document.getElementById('convEditor');
+  const badge = document.getElementById('dspActiveConvHint');
+  const removeBtn = document.getElementById('convRemoveIr');
+  const active = !!(conv.enabled && conv.irPath);
+
+  if (cb) cb.checked = !!conv.enabled;
+  if (card) card.classList.toggle('active', !!conv.enabled);
+  if (editor) editor.style.display = conv.enabled ? 'block' : 'none';
+  if (badge) {
+    badge.textContent = active ? '作用中' : (conv.enabled ? '未載入 IR' : '關閉');
+    badge.style.color = active ? '#fb923c' : '';
+  }
+  if (removeBtn) removeBtn.style.display = conv.irPath ? '' : 'none';
+  updateConvInfo();
+}
+
+async function updateConvInfo() {
+  const infoEl = document.getElementById('convInfo');
+  if (!infoEl) return;
+  const conv = state.dsp.conv;
+  if (!conv || !conv.irPath) {
+    convInfoCache = null;
+    infoEl.textContent = '尚未載入 IR。請選擇 16/24/32-bit WAV 脈衝響應檔（單聲道自動套用到左右聲道）。';
+    return;
+  }
+  if (convInfoCache && convInfoCache.path === conv.irPath) {
+    renderConvInfo(convInfoCache.info);
+    return;
+  }
+  infoEl.textContent = '讀取 IR 檔案資訊中…';
+  let info = null;
+  try {
+    if (window.electronAPI && window.electronAPI.getIrInfo) info = await window.electronAPI.getIrInfo(conv.irPath);
+  } catch (e) { info = { ok: false, error: String((e && e.message) || e) }; }
+  convInfoCache = { path: conv.irPath, info };
+  renderConvInfo(info);
+}
+
+function renderConvInfo(info) {
+  const infoEl = document.getElementById('convInfo');
+  const conv = state.dsp.conv;
+  if (!infoEl || !conv || !conv.irPath) return;
+  if (!info || !info.ok) {
+    infoEl.innerHTML = `<span class="conv-info-err">IR 無法讀取（${info && info.error ? info.error : '未知錯誤'}），播放將自動略過卷積：</span><br>${conv.irPath}`;
+    return;
+  }
+  const name = conv.irPath.replace(/\\/g, '/').split('/').pop();
+  const chText = info.channels === 1 ? '單聲道（自動套用左右）' : `${info.channels} 聲道`;
+  const peakNote = info.responsePeak > 1.0 ? ` ・ 響應峰值 ${info.responsePeak.toFixed(2)}（自動衰減 ${(-20 * Math.log10(info.responsePeak)).toFixed(1)} dB 防削頂）` : '';
+  infoEl.innerHTML = `<span class="conv-info-ok">✓ ${name}</span> ・ ${info.sampleRate} Hz ・ ${(info.durationMs / 1000).toFixed(1)} s ・ ${chText}${peakNote}<br><span style="color:var(--text-muted)">${conv.irPath}</span>`;
+}
+
+// Restart the active stream with the current DSP stage configuration (conv card controls).
+// Falls back to bit-perfect passthrough when nothing is active anymore.
+function restartCurrentStreamWithDsp() {
+  const track = state.queue[state.currentTrackIndex];
+  if (!track || track.isDemo || !track.filePath || !state.isPlaying) return;
+  const curSec = getCurrentPlaybackTime();
+  if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+    window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, getEnrichedTrack(track), Math.floor(curSec), buildDspOptions(track));
+    return;
+  }
+  const ext = (track.formatName || '').toUpperCase();
+  const isDsd = ext === 'DSF' || ext === 'DFF' || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
+  if (isDsd) { playDsdTrack(track, Math.floor(curSec)); return; }
+  if (localDspActive()) { playSoxTrack(track, Math.floor(curSec)); return; }
+  isCurrentSox = false;
+  currentSoxOffset = 0;
+  const mediaUrl = window.electronAPI ? window.electronAPI.getMediaUrl(track.filePath) : track.filePath;
+  nativeAudio.src = mediaUrl;
+  nativeAudio.currentTime = Math.floor(curSec);
+  nativeAudio.play().catch(e => console.error(e));
+}
+
+function initConvControls() {
+  const toggleConv = document.getElementById('toggleConv');
+  const pickBtn = document.getElementById('convPickIr');
+  const removeBtn = document.getElementById('convRemoveIr');
+
+  if (toggleConv) {
+    toggleConv.addEventListener('change', () => {
+      state.dsp.conv.enabled = toggleConv.checked;
+      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+      syncConvModalUI();
+      updateSignalPathUI();
+      if (state.isPlaying) restartCurrentStreamWithDsp();
+      showToast(state.dsp.conv.enabled ? '🌊 卷積濾波器已啟用' : '卷積濾波器已關閉');
+    });
+  }
+
+  if (pickBtn) {
+    pickBtn.addEventListener('click', async () => {
+      if (!window.electronAPI || !window.electronAPI.pickIrFile) return;
+      let picked = null;
+      try { picked = await window.electronAPI.pickIrFile(); } catch (e) { return; }
+      if (!picked) return;
+      state.dsp.conv.irPath = picked;
+      if (!state.dsp.conv.enabled) state.dsp.conv.enabled = true; // loading an IR implies wanting it active
+      convInfoCache = null;
+      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+      syncConvModalUI();
+      updateSignalPathUI();
+      if (state.isPlaying) restartCurrentStreamWithDsp();
+      showToast('🌊 卷積 IR 已載入');
+    });
+  }
+
+  if (removeBtn) {
+    removeBtn.addEventListener('click', () => {
+      state.dsp.conv.irPath = null;
+      state.dsp.conv.enabled = false;
+      convInfoCache = null;
+      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+      syncConvModalUI();
+      updateSignalPathUI();
+      if (state.isPlaying) restartCurrentStreamWithDsp();
+      showToast('卷積 IR 已移除');
+    });
+  }
+
+  syncConvModalUI();
+}
+
 function initDspControls() {
   const toggleSoxDsp = document.getElementById('toggleSoxDsp');
   const dspSoxCard = document.querySelector('.dsp-sox-card');
@@ -6582,8 +6811,8 @@ function initDspControls() {
         } else {
           if (state.dsp.enabled) {
             playSoxTrack(track, Math.floor(curSec));
-          } else if (countActivePeqBands() > 0) {
-            // PEQ-only processing: native-rate DSP stream (DSF via the decimate path)
+          } else if (countActivePeqBands() > 0 || buildConvPayload()) {
+            // PEQ / convolution-only processing: native-rate DSP stream (DSF via the decimate path)
             const ext = (track.formatName || '').toUpperCase();
             const isDsd = ext === 'DSF' || ext === 'DFF' || (track.filePath && /\.(dsf|dff)$/i.test(track.filePath));
             if (isDsd) playDsdTrack(track, Math.floor(curSec));
@@ -6684,6 +6913,9 @@ function initDspControls() {
 
   // Parametric Equalizer (PEQ) controls
   initPeqControls();
+
+  // Convolution (IR) controls (card below the PEQ card)
+  initConvControls();
 }
 
 // ========================================================
