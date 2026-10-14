@@ -632,6 +632,15 @@ ipcMain.handle('audio:getDsdStreamUrl', (event, filePath, startSec = 0, peqJson 
 });
 
 // Native DSP PCM Upsampling Stream URL helper IPC
+// 濾波器插件清單（供設定頁動態生成濾波器按鈕與聲音特色提示）
+ipcMain.handle('dsp:listFilterPlugins', () => {
+  try {
+    return require('./dsp-kernel').listFilterPlugins();
+  } catch (e) {
+    return [];
+  }
+});
+
 ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear', peqJson = '', convJson = '') => {
   if (!dsdStreamPort) return '';
   const params = new URLSearchParams();

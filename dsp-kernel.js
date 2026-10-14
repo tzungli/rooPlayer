@@ -234,62 +234,15 @@ function besselI0(x) {
 //   截斷上限與 gauss 相同：Lcap = 150e6/srcRate/2（≈150 MMAC/s/聲道）；
 //   截斷只使過渡帶變寬，止帶深度由窗決定（≈As）不受影響。
 // 非整數 ratio 用 S=8 子樣本网格 + 線性插值（與 gauss 相同）。
-// ---------------------------------------------------------------------------
-function buildPolyExt2Filter(fsOut, srcRate) {
-  const AS_DB = 140;
-  const fc = Math.min(1.27 * srcRate / 2, 0.45 * fsOut);
-  const trans = 0.136 * srcRate;
-  const beta = 0.1102 * (AS_DB - 8.7);
-  const Lcap = Math.floor(150e6 / srcRate / 2);
-  let L = Math.min(Math.ceil((AS_DB - 7.95) * fsOut / (2 * 14.347 * trans)), Lcap);
-  if (L < 8) L = 8;
-
-  const ratio = fsOut / srcRate;
-  const integerRatio = Math.abs(ratio - Math.round(ratio)) < 1e-9;
-  const S = integerRatio ? 1 : 8;
-
-  const i0beta = besselI0(beta);
-  const ext2Tap = (t) => {
-    if (Math.abs(t) > L) return 0;
-    const x = 2 * fc * t / fsOut;
-    const s = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
-    const u = t / L;
-    const w = besselI0(beta * Math.sqrt(Math.max(0, 1 - u * u))) / i0beta;
-    return (2 * fc / fsOut) * s * w;
-  };
-
-  const half = L * S;
-  const n = 2 * half + 2; // +1 guard tap for sub-sample interpolation edge
-  const h = new Float64Array(n);
-  for (let j = -half; j <= half; j++) h[j + half] = ext2Tap(j / S);
-  let sum = 0;
-  for (let i = 0; i < n - 1; i++) sum += h[i];
-  const g = ratio * S / sum; // 同 buildGaussFilter：S>1 時網格和需為 ratio·S
-  for (let i = 0; i < n; i++) h[i] *= g;
-  return { h, S, lo: -L, hi: L, ratio, integerRatio, fsOut, srcRate, minimumPhase: false, taps: 2 * half + 1 };
-}
-
-// ---------------------------------------------------------------------------
-// "poly-sinc-ext2" 直譯 FIR — 依公開規格描述重新實作（hqp-ps-ext2）
 //
-// 設計目標（依 poly-sinc-ext2 公開規格：線性相位多相正弦、陡峭滾降、極高止帶）：
-//   - 過渡帶精確從源 Nyquist 起始，延伸至 1.27×源Nyquist（「ext2」延伸）：
-//     通帶 [0, 源Nyquist] 完全平坦；源Nyquist..1.27×源Nyquist 為滾降帶
-//   - Kaiser 窗 As = 180dB（極高止帶衰減；poly-ext2 為 140dB）
-//   - 線性相位（對稱脈衝，同 gauss-long / poly-ext2）
-//   - 任意倍率：S=8 子樣本网格 + 線性插值（與 gauss/poly-ext2 相同）
-//   - 16× 兩階段架構（第一階段升頻至 16× 中間速率）是 poly-sinc-ext2 家族的計算效率
-//     實作；對線性相位濾波而言其複合頻率響應與本單級 FIR 等價，故本引擎以
-//     單級直接執行實作（執行成本與 poly-ext2 同級）。
-//   - 邊界情況：fsOut 太低（ratio < 1.27）時過渡帶無法完整位於源Nyquist之上，
-//     截止退回 0.45×fsOut（與 poly-ext2 相同處理）。
-// 非官方原廠係數；依公開技術規格描述的閉式直譯。
+// kaiserSincFir 為泛用化設計原語（供濾波器插件使用）；
+// buildPolyExt2Filter / buildHqpPsExt2Filter 為其固定參數特化（輸出與泛用化
+// 之前逐 bit 相同）。
 // ---------------------------------------------------------------------------
-function buildHqpPsExt2Filter(fsOut, srcRate) {
-  const AS_DB = 180;
-  // 過渡帶 [srcNyq, 1.27×srcNyq]：中心 1.135×srcNyq、寬 0.27×srcNyq = 0.135×srcRate
-  const fc = Math.min(1.135 * srcRate / 2, 0.45 * fsOut);
-  const trans = 0.135 * srcRate;
+function kaiserSincFir(fsOut, srcRate, opts) {
+  const AS_DB = opts.asDb;
+  const fc = Math.min(opts.fcFactor * srcRate / 2, 0.45 * fsOut);
+  const trans = opts.transFactor * srcRate;
   const beta = 0.1102 * (AS_DB - 8.7);
   const Lcap = Math.floor(150e6 / srcRate / 2);
   let L = Math.min(Math.ceil((AS_DB - 7.95) * fsOut / (2 * 14.347 * trans)), Lcap);
@@ -319,6 +272,185 @@ function buildHqpPsExt2Filter(fsOut, srcRate) {
   for (let i = 0; i < n; i++) h[i] *= g;
   return { h, S, lo: -L, hi: L, ratio, integerRatio, fsOut, srcRate, minimumPhase: false, taps: 2 * half + 1 };
 }
+
+// poly-ext2 特化：As 140dB、截止 1.27×源Nyquist、過渡寬 0.136×srcRate
+function buildPolyExt2Filter(fsOut, srcRate) {
+  return kaiserSincFir(fsOut, srcRate, { asDb: 140, fcFactor: 1.27, transFactor: 0.136 });
+}
+
+// ---------------------------------------------------------------------------
+// "poly-sinc-ext2" 直譯 FIR — 依公開規格描述重新實作（hqp-ps-ext2）
+//
+// 設計目標（依 poly-sinc-ext2 公開規格：線性相位多相正弦、陡峭滾降、極高止帶）：
+//   - 過渡帶精確從源 Nyquist 起始，延伸至 1.27×源Nyquist（「ext2」延伸）：
+//     通帶 [0, 源Nyquist] 完全平坦；源Nyquist..1.27×源Nyquist 為滾降帶
+//   - Kaiser 窗 As = 180dB（極高止帶衰減；poly-ext2 為 140dB）
+//   - 線性相位（對稱脈衝，同 gauss-long / poly-ext2）
+//   - 任意倍率：S=8 子樣本网格 + 線性插值（與 gauss/poly-ext2 相同）
+//   - 16× 兩階段架構（第一階段升頻至 16× 中間速率）是 poly-sinc-ext2 家族的計算效率
+//     實作；對線性相位濾波而言其複合頻率響應與本單級 FIR 等價，故本引擎以
+//     單級直接執行實作（執行成本與 poly-ext2 同級）。
+//   - 邊界情況：fsOut 太低（ratio < 1.27）時過渡帶無法完整位於源Nyquist之上，
+//     截止退回 0.45×fsOut（與 poly-ext2 相同處理）。
+// 非官方原廠係數；依公開技術規格描述的閉式直譯。
+// ---------------------------------------------------------------------------
+function buildHqpPsExt2Filter(fsOut, srcRate) {
+  return kaiserSincFir(fsOut, srcRate, { asDb: 180, fcFactor: 1.135, transFactor: 0.135 });
+}
+
+// ---------------------------------------------------------------------------
+// 泛用 windowed-sinc FIR 設計原語（供濾波器插件使用）：
+//   cutoffRel = 截止 / 源Nyquist（可 >1，extended 性格；上限 0.45·fsOut）
+//   taps      = 半寬 L（輸出樣本單位）
+//   window    = 'hann' | 'hamming' | 'blackman' | 'blackmanHarris' | 'kaiser'(需 asDb)
+// 增益正規化與子樣本网格慣例與內建 FIR 完全相同（Σh = ratio·S）。
+// ---------------------------------------------------------------------------
+function windowedSincFir(fsOut, srcRate, opts) {
+  const fc = Math.min((opts.cutoffRel || 1.135) * srcRate / 2, 0.45 * fsOut);
+  const L = Math.max(8, Math.round(opts.taps || 64));
+  const ratio = fsOut / srcRate;
+  const integerRatio = Math.abs(ratio - Math.round(ratio)) < 1e-9;
+  const S = integerRatio ? 1 : 8;
+
+  const winFns = {
+    hann: (u) => 0.5 + 0.5 * Math.cos(2 * Math.PI * u),
+    hamming: (u) => 0.54 + 0.46 * Math.cos(2 * Math.PI * u),
+    blackman: (u) => 0.42 + 0.5 * Math.cos(2 * Math.PI * u) + 0.08 * Math.cos(4 * Math.PI * u),
+    blackmanHarris: (u) => 0.35872 + 0.48804 * Math.cos(2 * Math.PI * u) + 0.14124 * Math.cos(4 * Math.PI * u) + 0.010564 * Math.cos(6 * Math.PI * u)
+  };
+  const wName = opts.window || 'blackmanHarris';
+  let winFn;
+  if (wName === 'kaiser') {
+    const asDb = opts.asDb || 100;
+    const beta = 0.1102 * (asDb - 8.7);
+    const i0b = besselI0(beta);
+    winFn = (u) => besselI0(beta * Math.sqrt(Math.max(0, 1 - u * u))) / i0b;
+  } else {
+    winFn = winFns[wName] || winFns.blackmanHarris;
+  }
+
+  const wTap = (t) => {
+    if (Math.abs(t) > L) return 0;
+    const x = 2 * fc * t / fsOut;
+    const s = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+    return (2 * fc / fsOut) * s * winFn(t / L);
+  };
+
+  const half = L * S;
+  const n = 2 * half + 2; // +1 guard tap（與內建 FIR 相同慣例）
+  const h = new Float64Array(n);
+  for (let j = -half; j <= half; j++) h[j + half] = wTap(j / S);
+  let sum = 0;
+  for (let i = 0; i < n - 1; i++) sum += h[i];
+  const g = ratio * S / sum;
+  for (let i = 0; i < n; i++) h[i] *= g;
+  return { h, S, lo: -L, hi: L, ratio, integerRatio, fsOut, srcRate, minimumPhase: false, taps: 2 * half + 1 };
+}
+
+// ---------------------------------------------------------------------------
+// 濾波器插件註冊表（Filter Plugin Registry）
+//
+// 插件位置：filter-plugins/*.js（與本檔同目錄；啟動時自動掃描註冊，worker 行程亦然）
+// 每個插件自帶描述卡：
+//   { id, label, sound, kind: 'fir' | 'interp', builtin?, design?, sample?, dsdSafe? }
+//   kind 'fir'   : design(fsOut, srcRate, kernel) 必須回傳 { h, S, lo, hi, ratio,
+//                  integerRatio, fsOut, srcRate, minimumPhase, taps }
+//                  （由 firSample / buildFirPhases 多相執行；kernel = 設計工具箱）
+//   kind 'interp': builtin 內建走 interpolateSample；自訂插件提供
+//                  sample(p0, p1, p2, p3, t) 回傳插值樣本
+// 同名 id 的插件檔案會覆寫內建設計（供實驗性替換）。
+// ---------------------------------------------------------------------------
+const path = require('path');
+const fs = require('fs');
+
+const FILTER_REGISTRY = new Map();
+
+// 提供給插件 design() 的設計工具箱（插件不需要 require 本檔）
+const FILTER_TOOLBOX = {
+  gaussSincFir: buildGaussFilter,
+  kaiserSincFir,
+  windowedSincFir,
+  besselI0,
+  fftRun
+};
+
+function registerFilterPlugin(desc) {
+  if (!desc || typeof desc.id !== 'string' || !desc.id || typeof desc.label !== 'string' || !desc.label) return false;
+  const kind = desc.kind === 'fir' ? 'fir' : (desc.kind === 'interp' ? 'interp' : null);
+  if (!kind) return false;
+  if (kind === 'fir' && typeof desc.design !== 'function') return false;
+  if (kind === 'interp' && desc.builtin !== true && typeof desc.sample !== 'function') return false;
+  FILTER_REGISTRY.set(desc.id, {
+    id: desc.id,
+    label: desc.label,
+    sound: typeof desc.sound === 'string' ? desc.sound : '',
+    kind,
+    builtin: desc.builtin === true,
+    dsdSafe: desc.dsdSafe !== false,
+    design: typeof desc.design === 'function' ? desc.design : null,
+    sample: typeof desc.sample === 'function' ? desc.sample : null
+  });
+  return true;
+}
+
+// 給 UI 的序列化描述（不含函數，可安全經 IPC 傳遞）
+function listFilterPlugins() {
+  return [...FILTER_REGISTRY.values()].map(p => ({ id: p.id, label: p.label, sound: p.sound, kind: p.kind, builtin: p.builtin, dsdSafe: p.dsdSafe }));
+}
+
+function getFilterPlugin(id) { return FILTER_REGISTRY.get(id) || null; }
+function isValidFilterPhase(id) { return FILTER_REGISTRY.has(id); }
+
+// 依相位 id 建立 FIR 濾波係數（非 FIR 插件 / 未知 id → null，呼叫端退回內插路徑）
+function buildFilterForPhase(fsOut, srcRate, phaseId) {
+  const p = FILTER_REGISTRY.get(phaseId);
+  if (!p || p.kind !== 'fir' || typeof p.design !== 'function') return null;
+  let gf;
+  try { gf = p.design(fsOut, srcRate, FILTER_TOOLBOX); } catch (e) { return null; }
+  if (!gf || !(gf.h instanceof Float64Array) || gf.h.length < 2) return null;
+  if (!Number.isInteger(gf.S) || gf.S < 1 || gf.S > 64) return null;
+  if (!Number.isInteger(gf.lo) || !Number.isInteger(gf.hi) || gf.hi < gf.lo) return null;
+  if (!Number.isFinite(gf.h[0]) || !Number.isFinite(gf.h[gf.h.length - 1])) return null;
+  return gf;
+}
+
+// 自訂內插插件的取樣函數（內建 linear/minimum/intermediate 回傳 null，
+// 呼叫端維持 interpolateSample 熱路徑零開銷）
+function resolveInterpFn(phaseId) {
+  const p = FILTER_REGISTRY.get(phaseId);
+  if (!p || p.kind !== 'interp' || p.builtin) return null;
+  return p.sample || null;
+}
+
+// 掃描插件目錄並註冊；回傳 { loaded, failed }（單一檔案損毀不影響其他插件）
+function loadFilterPlugins(dirOverride) {
+  const dirPath = dirOverride || path.join(__dirname, 'filter-plugins');
+  let names = [];
+  try { names = fs.readdirSync(dirPath).filter(f => f.endsWith('.js')).sort(); } catch (e) { return { loaded: 0, failed: [] }; }
+  let loaded = 0;
+  const failed = [];
+  for (const name of names) {
+    try {
+      const mod = require(path.join(dirPath, name));
+      if (registerFilterPlugin(mod)) loaded++; else failed.push(name);
+    } catch (e) { failed.push(name); }
+  }
+  return { loaded, failed };
+}
+
+// 安全網：插件目錄缺失/全毀時，核心內建的最小註冊（保證 'linear' 一定可用）
+function registerCoreFallbackFilters() {
+  registerFilterPlugin({ id: 'linear', label: '線性相位 (零相位失真)', sound: '零相位失真，定位精準', kind: 'interp', builtin: true });
+  registerFilterPlugin({ id: 'minimum', label: '最小相位 (零預響鈴)', sound: '零預響鈴，打擊瞬態凌厲爆發', kind: 'interp', builtin: true });
+  registerFilterPlugin({ id: 'intermediate', label: '混和 / 緩衰減 (溫潤類比)', sound: '極低預響鈴與自然高頻緩衰，溫潤類比聽感', kind: 'interp', builtin: true });
+  registerFilterPlugin({ id: 'gauss-long', label: '高斯長脈衝 FIR (極低鈴振)', sound: '通帶平坦、極低鈴振與鏡像能量', kind: 'fir', design: (fo, sr, k) => k.gaussSincFir(fo, sr, false) });
+  registerFilterPlugin({ id: 'gauss-min', label: '高斯最小相位 FIR (零預響鈴)', sound: '預響鈴嚴格為零、瞬態凌厲（些微後衝）', kind: 'fir', design: (fo, sr, k) => k.gaussSincFir(fo, sr, true) });
+  registerFilterPlugin({ id: 'poly-ext2', label: 'EXT2 近似 FIR (超寬過渡帶)', sound: '通帶完全平坦無漣波、高頻延伸自然；22k 以上有些許鏡像泄漏（不可聽）', kind: 'fir', design: (fo, sr, k) => k.kaiserSincFir(fo, sr, { asDb: 140, fcFactor: 1.27, transFactor: 0.136 }) });
+  registerFilterPlugin({ id: 'hqp-ps-ext2', label: 'PS-EXT2 直譯 FIR (陡峭滾降+極深止帶)', sound: '陡峭滾降、極深止帶；鏡像泄漏僅在超聲頻（不可聽）', kind: 'fir', design: (fo, sr, k) => k.kaiserSincFir(fo, sr, { asDb: 180, fcFactor: 1.135, transFactor: 0.135 }) });
+}
+
+loadFilterPlugins();
+if (!FILTER_REGISTRY.has('linear')) registerCoreFallbackFilters();
 
 // ---- Polyphase phase tables (integer AND rational upsampling ratios) ----
 // With ratio = P/Q in lowest terms, the FIR tap pattern for output index o depends
@@ -442,13 +574,10 @@ function buildDsfHeader(totalFileBytes, dsdRate, totalSamplesPerChannel, blockSi
 // 2nd order: classic Boser-Wooley CIFB (unchanged, proven good).
 // 5th / 7th order: synthesized CIFFR (cascade of integrators + feedforward taps +
 // ultrasonic resonator pairs, see CIFFR_5 / CIFFR_7 coefficient tables above).
-// Input upsampling: Linear / Minimum / Intermediate phase Hermite interpolation,
-// 'gauss-long' = Poly-Sinc-Gauss Long FIR (linear phase), 'gauss-min' = the
-// minimum-phase variant of the same design (zero pre-ringing), 'poly-ext2' =
-// extended-poly-sinc (EXT2) style Kaiser-windowed sinc (see buildPolyExt2Filter),
-// 'hqp-ps-ext2' = poly-sinc-ext2 direct-interpretation FIR (see buildHqpPsExt2Filter).
-// All FIR phases require a gaussFilter built by buildGaussFilter()/buildPolyExt2Filter()/
-// buildHqpPsExt2Filter(); falls back to linear Hermite when absent.
+// Input upsampling: phase id 由濾波器插件註冊表解析（見上方 Filter Plugin Registry）。
+// 內建：Linear / Minimum / Intermediate Hermite 內插；gauss-long / gauss-min /
+// poly-ext2 / hqp-ps-ext2 FIR（設計見 buildGaussFilter / kaiserSincFir）。
+// FIR 相位需要 buildFilterForPhase() 建立的係數；缺失時退回線性 Hermite。
 //
 // Stateful: internal integrator state persists across processBlocks() calls,
 // so one instance can drive both whole-file encoding and progressive batch encoding
@@ -456,10 +585,14 @@ function buildDsfHeader(totalFileBytes, dsdRate, totalSamplesPerChannel, blockSi
 class DsdModulator {
   constructor(dsdOrder = 5, filterPhase = 'linear', gaussFilter = null) {
     this.order = [2, 5, 7].includes(parseInt(dsdOrder, 10)) ? parseInt(dsdOrder, 10) : 5;
-    let phase = ['linear', 'minimum', 'intermediate', 'gauss-long', 'gauss-min', 'poly-ext2', 'hqp-ps-ext2'].includes(filterPhase) ? filterPhase : 'linear';
-    // FIR phases need coefficients from buildGaussFilter()/buildPolyExt2Filter()/buildHqpPsExt2Filter(); fall back to linear Hermite
-    if ((phase === 'gauss-long' || phase === 'gauss-min' || phase === 'poly-ext2' || phase === 'hqp-ps-ext2') && !gaussFilter) phase = 'linear';
+    const plugin = FILTER_REGISTRY.get(filterPhase) || null;
+    let phase = plugin ? filterPhase : 'linear';
+    let useFir = !!(plugin && plugin.kind === 'fir');
+    // FIR 插件需要 buildFilterForPhase() 提供的係數；缺失時退回線性 Hermite
+    if (useFir && !gaussFilter) { phase = 'linear'; useFir = false; }
     this.phase = phase;
+    this.useFir = useFir;
+    this.interpFn = (plugin && plugin.kind === 'interp' && plugin.builtin !== true) ? (plugin.sample || null) : null;
     this.gf = gaussFilter || null;
 
     // Modulator integrator states (per channel)
@@ -481,7 +614,8 @@ class DsdModulator {
     const out = Buffer.allocUnsafe(numBlocks * 2 * blockSize);
     const order = this.order;
     const phase = this.phase;
-    const useGauss = phase === 'gauss-long' || phase === 'gauss-min' || phase === 'poly-ext2' || phase === 'hqp-ps-ext2';
+    const useGauss = this.useFir;
+    const interpFn = this.interpFn; // 自訂內插插件（內建相位為 null，熱路徑不變）
     const ratio = 1 / invRatio;
     const gf = this.gf;
 
@@ -527,13 +661,13 @@ class DsdModulator {
             const p1L = idx < inLen ? left[idx] : 0;
             const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
             const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
-            rawL = interpolateSample(p0L, p1L, p2L, p3L, t, phase);
+            rawL = interpFn ? interpFn(p0L, p1L, p2L, p3L, t) : interpolateSample(p0L, p1L, p2L, p3L, t, phase);
 
             const p0R = idx > 0 ? right[idx - 1] : right[0];
             const p1R = idx < inLen ? right[idx] : 0;
             const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
             const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
-            rawR = interpolateSample(p0R, p1R, p2R, p3R, t, phase);
+            rawR = interpFn ? interpFn(p0R, p1R, p2R, p3R, t) : interpolateSample(p0R, p1R, p2R, p3R, t, phase);
           }
 
           if (order === 2) {
@@ -908,6 +1042,15 @@ module.exports = {
   buildGaussFilter,
   buildPolyExt2Filter,
   buildHqpPsExt2Filter,
+  kaiserSincFir,
+  windowedSincFir,
+  registerFilterPlugin,
+  listFilterPlugins,
+  getFilterPlugin,
+  isValidFilterPhase,
+  buildFilterForPhase,
+  resolveInterpFn,
+  loadFilterPlugins,
   firSample,
   getDsdRate,
   buildDsfHeader,

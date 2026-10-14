@@ -136,6 +136,67 @@ function localDspActive() {
   return !!(state.dsp && state.dsp.enabled) || countActivePeqBands() > 0 || !!buildConvPayload();
 }
 
+// ----------------- Filter plugin registry UI -----------------
+// 濾波器清單來自引擎的插件註冊表（main.js IPC dsp:listFilterPlugins）。
+// 設定頁的濾波器按鈕與滑鼠提示全部由插件描述卡動態生成；新增濾波器只需在
+// filter-plugins/ 放一個檔案，本檔不需要任何修改。IPC 不可用时退回內建清單。
+let filterPlugins = null;
+const FALLBACK_FILTER_PLUGINS = [
+  { id: 'linear', label: '線性相位 (零相位失真)', sound: '零相位失真，定位精準', kind: 'interp' },
+  { id: 'minimum', label: '最小相位 (零預響鈴)', sound: '零預響鈴，打擊瞬態凌厲爆發', kind: 'interp' },
+  { id: 'intermediate', label: '混和 / 緩衰減 (溫潤類比)', sound: '極低預響鈴與自然高頻緩衰，溫潤類比聽感', kind: 'interp' },
+  { id: 'gauss-long', label: '高斯長脈衝 FIR (極低鈴振)', sound: '通帶平坦、極低鈴振與鏡像能量', kind: 'fir' },
+  { id: 'gauss-min', label: '高斯最小相位 FIR (零預響鈴)', sound: '預響鈴嚴格為零、瞬態凌厲（些微後衝）', kind: 'fir' },
+  { id: 'poly-ext2', label: 'EXT2 近似 FIR (超寬過渡帶)', sound: '通帶完全平坦無漣波、高頻延伸自然；22k 以上有些許鏡像泄漏（不可聽）', kind: 'fir' },
+  { id: 'hqp-ps-ext2', label: 'PS-EXT2 直譯 FIR (陡峭滾降+極深止帶)', sound: '陡峭滾降、極深止帶；鏡像泄漏僅在超聲頻（不可聽）', kind: 'fir' }
+];
+
+function filterPluginList() {
+  return (filterPlugins && filterPlugins.length) ? filterPlugins : FALLBACK_FILTER_PLUGINS;
+}
+
+function isValidFilterPhaseId(id) {
+  return filterPluginList().some(p => p.id === id);
+}
+
+function filterLabel(id) {
+  const p = filterPluginList().find(x => x.id === id);
+  return p ? p.label : '線性相位';
+}
+
+// 由插件描述卡生成濾波器按鈕（含聲音特色提示）；active 依目前設定標示。
+function renderFilterPhaseSelector() {
+  const sel = document.getElementById('dspPhaseSelector');
+  if (!sel) return;
+  const curPhase = state.dsp.filterPhase || 'linear';
+  sel.innerHTML = '';
+  for (const p of filterPluginList()) {
+    const btn = document.createElement('button');
+    btn.className = 'dsp-pill' + (p.id === curPhase ? ' active' : '');
+    btn.setAttribute('data-phase', p.id);
+    if (p.sound) btn.title = p.sound;
+    btn.textContent = p.label;
+    sel.appendChild(btn);
+  }
+  const hint = document.getElementById('dspActivePhaseHint');
+  if (hint) hint.textContent = filterLabel(curPhase);
+}
+
+// 啟動時向引擎取得插件清單；若存定的濾波器已不存在（插件被移除）自動退回線性相位。
+async function loadFilterPluginsUI() {
+  if (window.electronAPI && typeof window.electronAPI.listFilterPlugins === 'function') {
+    try {
+      const list = await window.electronAPI.listFilterPlugins();
+      if (Array.isArray(list) && list.length) filterPlugins = list;
+    } catch (e) { /* 退回內建清單 */ }
+  }
+  if (!isValidFilterPhaseId(state.dsp.filterPhase || 'linear')) {
+    state.dsp.filterPhase = 'linear';
+    try { localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp)); } catch (e) {}
+  }
+  renderFilterPhaseSelector();
+}
+
 // Single builder for the engine dspOptions (DLNA playTrack). When the upsampling engine is
 // off but PEQ / convolution is active, sampleRate stays at the track's native rate
 // (native-rate-only processing).
@@ -204,7 +265,7 @@ const state = {
         enabled: saved.enabled === true,
         rateMode: saved.rateMode || '4x',
         dsdOrder: [2, 5, 7].includes(parseInt(saved.dsdOrder, 10)) ? parseInt(saved.dsdOrder, 10) : 5,
-        filterPhase: ['linear', 'minimum', 'intermediate', 'gauss-long', 'gauss-min', 'poly-ext2', 'hqp-ps-ext2'].includes(saved.filterPhase) ? saved.filterPhase : 'linear',
+        filterPhase: isValidFilterPhaseId(saved.filterPhase) ? saved.filterPhase : 'linear',
         peq: normalizePeqSettings(saved.peq),
         conv: normalizeConvSettings(saved.conv)
       };
@@ -578,6 +639,7 @@ async function initApp() {
   setupCoverSizeControls();
   setupResizableTables();
   initAudioZones();
+  await loadFilterPluginsUI();
   initDspControls();
   initKkboxStreaming();
   await initTidalStreaming();
@@ -5755,8 +5817,7 @@ async function playSoxTrack(track, startSec = 0) {
     nativeAudio.play().then(() => {
       state.isPlaying = true;
       btnPlayPause.textContent = '⏸';
-      const phaseNames = { linear: '線性相位', minimum: '最小相位', intermediate: '混和緩衰減', 'gauss-long': '高斯長脈衝FIR', 'gauss-min': '高斯最小相位FIR', 'poly-ext2': 'EXT2近似FIR', 'hqp-ps-ext2': 'PS-EXT2直譯FIR' };
-      const phaseText = phaseNames[filterPhase] || '線性相位';
+      const phaseText = filterLabel(filterPhase);
       if (isDsd) {
         const mhz = getDsdMhz(state.dsp.rateMode);
         showToast(`⚡ 1-bit DSD 調變: PCM ➔ ${state.dsp.rateMode.toUpperCase()} (${dsdOrder} 階 • ${phaseText} • ${mhz})`);
@@ -5915,16 +5976,7 @@ function updateSignalPathUI(track = null) {
     const targetKhz = formatKhz(targetRate);
 
     const orderNum = state.dsp.dsdOrder || 5;
-    const phaseNames = {
-      linear: '線性相位 (零相位失真)',
-      minimum: '最小相位 (零預響鈴)',
-      intermediate: '混和/緩衰減 (溫潤類比)',
-      'gauss-long': '高斯長脈衝 FIR (極低鈴振)',
-      'gauss-min': '高斯最小相位 FIR (零預響鈴)',
-      'poly-ext2': 'EXT2 近似 FIR (超寬過渡帶)',
-      'hqp-ps-ext2': 'PS-EXT2 直譯 FIR (陡峭滾降・極深止帶)'
-    };
-    const phaseDesc = phaseNames[curPhase] || '線性相位';
+    const phaseDesc = filterLabel(curPhase);
 
     if (isDsdRateMode(state.dsp.rateMode)) {
       const mhz = getDsdMhz(state.dsp.rateMode);

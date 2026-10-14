@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSoxStreamUrl: (filePath, startSec = 0, sampleRate = 192000, dsdMode = '', dsdOrder = 5, filterPhase = 'linear', peqJson = '', convJson = '') => ipcRenderer.invoke('audio:getSoxStreamUrl', filePath, startSec, sampleRate, dsdMode, dsdOrder, filterPhase, peqJson, convJson),
   pickIrFile: () => ipcRenderer.invoke('conv:pickIrFile'),
   getIrInfo: (irPath) => ipcRenderer.invoke('conv:getIrInfo', irPath),
+  listFilterPlugins: () => ipcRenderer.invoke('dsp:listFilterPlugins'),
   getAudioDuration: (filePath) => ipcRenderer.invoke('audio:getAudioDuration', filePath),
   translateToZhTw: (text) => ipcRenderer.invoke('util:translateToZhTw', text),
 

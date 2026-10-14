@@ -11,7 +11,7 @@ const stream = require('stream');
 const EventEmitter = require('events');
 const { Worker } = require('worker_threads');
 const nativeAudioEngine = require('./native-audio-engine');
-const { interpolateSample, buildGaussFilter, buildPolyExt2Filter, buildHqpPsExt2Filter, firSample, getDsdRate, buildDsfHeader, DSD_BLOCK_SIZE, DSD_SAMPLES_PER_BLOCK, createPeqChain, createPeqState, processPeqPair, applyPeqArrays, createConvolutionState, processConvolutionPair, applyConvolutionArrays, irResponsePeak } = require('./dsp-kernel');
+const { interpolateSample, buildGaussFilter, firSample, buildFilterForPhase, resolveInterpFn, getDsdRate, buildDsfHeader, DSD_BLOCK_SIZE, DSD_SAMPLES_PER_BLOCK, createPeqChain, createPeqState, processPeqPair, applyPeqArrays, createConvolutionState, processConvolutionPair, applyConvolutionArrays, irResponsePeak } = require('./dsp-kernel');
 
 // Progressive Streaming Reader with Backpressure Flow Control
 // Prevents downstream DLNA/UPnP renderers from reading unwritten / zero-padded blocks
@@ -403,17 +403,11 @@ class NativeDspStreamer {
     const ratio = targetSampleRate / srcRate;
     const outFrames = Math.floor(inLen * ratio);
 
-    // 'gauss-long' / 'gauss-min' 濾波相位：Poly-Sinc-Gauss Long FIR 升頻（線性或最小相位，設計見 dsp-kernel.js）
-    // 'poly-ext2'：extended poly sinc (EXT2) 風格 Kaiser 窗 sinc FIR（設計見 dsp-kernel.js）
-    // 'hqp-ps-ext2'：poly-sinc-ext2 直譯 FIR：陡峭滾降（過渡帶自源 Nyquist 起始）+ 極深止帶（設計見 dsp-kernel.js）
+    // 濾波器插件：FIR 插件經 buildFilterForPhase 建立係數（設計見 dsp-kernel.js 與
+    // filter-plugins/）；內建/自訂內插插件走 interpolateSample 或插件自取樣函數。
     let gaussFilter = null;
-    if (filterPhase === 'gauss-long' || filterPhase === 'gauss-min') {
-      try { gaussFilter = buildGaussFilter(targetSampleRate, srcRate, filterPhase === 'gauss-min'); } catch (e) { gaussFilter = null; }
-    } else if (filterPhase === 'poly-ext2') {
-      try { gaussFilter = buildPolyExt2Filter(targetSampleRate, srcRate); } catch (e) { gaussFilter = null; }
-    } else if (filterPhase === 'hqp-ps-ext2') {
-      try { gaussFilter = buildHqpPsExt2Filter(targetSampleRate, srcRate); } catch (e) { gaussFilter = null; }
-    }
+    try { gaussFilter = buildFilterForPhase(targetSampleRate, srcRate, filterPhase); } catch (e) { gaussFilter = null; }
+    const customInterp = gaussFilter ? null : resolveInterpFn(filterPhase);
 
     // PEQ at the output rate (applied after interpolation, before 24-bit packing). The biquad
     // state persists across chunks, so the EQ response is continuous over the whole stream.
@@ -504,13 +498,13 @@ class NativeDspStreamer {
         const p1L = inL[idx];
         const p2L = idx < inLen - 1 ? inL[idx + 1] : p1L;
         const p3L = idx < inLen - 2 ? inL[idx + 2] : p2L;
-        sL = interpolateSample(p0L, p1L, p2L, p3L, t, filterPhase);
+        sL = customInterp ? customInterp(p0L, p1L, p2L, p3L, t) : interpolateSample(p0L, p1L, p2L, p3L, t, filterPhase);
 
         const p0R = idx > 0 ? inR[idx - 1] : inR[0];
         const p1R = inR[idx];
         const p2R = idx < inLen - 1 ? inR[idx + 1] : p1R;
         const p3R = idx < inLen - 2 ? inR[idx + 2] : p2R;
-        sR = interpolateSample(p0R, p1R, p2R, p3R, t, filterPhase);
+        sR = customInterp ? customInterp(p0R, p1R, p2R, p3R, t) : interpolateSample(p0R, p1R, p2R, p3R, t, filterPhase);
         }
 
         if (peqChain) {

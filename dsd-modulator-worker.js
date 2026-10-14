@@ -26,9 +26,7 @@ const fs = require('fs');
 const { parentPort, workerData } = require('worker_threads');
 const {
   getDsdRate,
-  buildGaussFilter,
-  buildPolyExt2Filter,
-  buildHqpPsExt2Filter,
+  buildFilterForPhase,
   DsdModulator,
   DSD_BLOCK_SIZE,
   DSD_SAMPLES_PER_BLOCK,
@@ -82,16 +80,10 @@ function run() {
   // Data-only mode: the 92-byte DSF header was already written by the main thread.
   const fd = fs.openSync(tmpFile, 'r+');
 
-  // 'gauss-long' / 'gauss-min' / 'poly-ext2' / 'hqp-ps-ext2' filter phases: build the FIR
-  // coefficients for this exact (dsdRate, sampleRate) pair once (designs in dsp-kernel.js).
+  // 濾波器插件：FIR 插件經 buildFilterForPhase 建立此 (dsdRate, sampleRate) 的係數一次
+  // （設計見 dsp-kernel.js 與 filter-plugins/）。
   let gaussFilter = null;
-  if (filterPhase === 'gauss-long' || filterPhase === 'gauss-min') {
-    try { gaussFilter = buildGaussFilter(dsdRate, sampleRate, filterPhase === 'gauss-min'); } catch (e) { gaussFilter = null; }
-  } else if (filterPhase === 'poly-ext2') {
-    try { gaussFilter = buildPolyExt2Filter(dsdRate, sampleRate); } catch (e) { gaussFilter = null; }
-  } else if (filterPhase === 'hqp-ps-ext2') {
-    try { gaussFilter = buildHqpPsExt2Filter(dsdRate, sampleRate); } catch (e) { gaussFilter = null; }
-  }
+  try { gaussFilter = buildFilterForPhase(dsdRate, sampleRate, filterPhase); } catch (e) { gaussFilter = null; }
   const modulator = new DsdModulator(dsdOrder, filterPhase, gaussFilter);
 
   // PEQ (PCM domain, at source rate): applied once to this worker's view slice before
