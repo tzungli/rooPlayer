@@ -716,8 +716,23 @@ async function initApp() {
           const sectionShown = !!(document.getElementById('albumVersionsSection') && document.getElementById('albumVersionsSection').style.display === 'block');
           const excludedOk = !cards.some(t => t.includes('WAV'));        // B（Artist B 的 WAV）不得出現
           const includedDeluxe = cards.some(t => t.includes('24-bit'));  // D 必須出現
-          const pass = sectionShown && cards.length === 2 && excludedOk && includedDeluxe;
-          window.electronAPI.captureStep(9, `TEST-VERSIONS ${pass ? 'PASS' : 'FAIL'} count=${cards.length} excludedOk=${excludedOk} deluxe=${includedDeluxe} cards=${JSON.stringify(cards)}`);
+          // 點擊非目前版本：卡片位置必須保持不變，只有 active 標記移動
+          const specsOf = (t) => (t.match(/\d+-bit \/ [\d.]+kHz/) || [''])[0];
+          let orderStable = false, activeMoved = false;
+          if (cards.length >= 2) {
+            const order1 = cards.map(specsOf);
+            const clicked = [...grid.children].find(c => !c.className.includes('active'));
+            if (clicked) {
+              clicked.click();
+              await new Promise(r => setTimeout(r, 1500)); // 等 openAlbumDetail 重渲染
+              const cards2 = [...grid.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim());
+              const order2 = cards2.map(specsOf);
+              orderStable = order2.length === order1.length && order2.every((s, i) => s === order1[i] && s !== '');
+              activeMoved = [...grid.children].findIndex(c => c.className.includes('active')) === order1.length - 1;
+            }
+          }
+          const pass = sectionShown && cards.length === 2 && excludedOk && includedDeluxe && orderStable && activeMoved;
+          window.electronAPI.captureStep(9, `TEST-VERSIONS ${pass ? 'PASS' : 'FAIL'} count=${cards.length} excludedOk=${excludedOk} deluxe=${includedDeluxe} orderStable=${orderStable} activeMoved=${activeMoved} cards=${JSON.stringify(cards)}`);
         } catch (e) {
           if (window.electronAPI.captureStep) window.electronAPI.captureStep(9, 'TEST-VERSIONS ERROR ' + e.message);
         }
@@ -5119,6 +5134,16 @@ async function renderAlbumVersions(album) {
       console.warn('Online version search warning:', e);
     }
   }
+
+  // 穩定排序：版本卡片位置不隨「目前選取」改變——本機在前、依位元深度與取樣率遞升，TIDAL 在後。
+  // 點選其他版本只更換 active 標記，不調換卡片位置（避免越點越亂）。
+  const specRank = (v) => {
+    const m = /(\d+)\s*-bit\s*\/\s*([\d.]+)\s*kHz/i.exec(v.specs || '');
+    const bits = m ? parseInt(m[1], 10) : 0;
+    const khz = m ? parseFloat(m[2]) : 0;
+    return (v.isTidal ? 1e12 : 0) + bits * 1000000 + khz;
+  };
+  versions.sort((a, b) => (specRank(a) - specRank(b)) || (a.trackCount - b.trackCount) || String(a.year || '').localeCompare(String(b.year || '')));
 
   if (versions.length > 1) {
     if (versionsCountBadge) versionsCountBadge.textContent = `${versions.length} 個版本`;
