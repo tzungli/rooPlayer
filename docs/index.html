@@ -128,13 +128,13 @@
       </div>
       <div class="card">
         <h3><span class="ico">🎛️</span>參數化等化器（PEQ）</h3>
-        <p>六段參數化 EQ：峰／谷、低架／高架、 shelving 與通過濾波，播放中即時套用，並提供命名儲存槽一鍵載入。</p>
-        <span class="tag p">播放中即時套用</span>
+        <p>六段參數化 EQ：峰／谷、低架／高架、 shelving 與通過濾波，播放中即時套用；內建暖聲／明亮／人聲／低音四種預設，並提供命名儲存槽一鍵載入。</p>
+        <span class="tag p">播放中即時套用</span><span class="tag p">自動預降防削頂</span>
       </div>
       <div class="card">
         <h3><span class="ico">🌊</span>卷積濾波器（IR）</h3>
-        <p>載入脈衝響應檔案，以卷積重現音樂廳、經典硬體與效果器的空間特性，可插入訊號路徑的任意位置。</p>
-        <span class="tag a">IR 卷積</span>
+        <p>載入 16/24/32-bit WAV 脈衝響應檔案，以卷積重現音樂廳、經典硬體與效果器的空間特性；自動分析聲道與響應峰值，單聲道 IR 自動套用左右聲道。</p>
+        <span class="tag a">IR 卷積</span><span class="tag a">峰值自動衰減</span>
       </div>
       <div class="card">
         <h3><span class="ico">📡</span>DLNA 串流輸出</h3>
@@ -165,6 +165,21 @@
       <figure class="shot">
         <img src="img/toolbox.png" alt="自訂濾波器工具箱編輯器" loading="lazy">
         <figcaption class="cap">自訂濾波器編輯器：窗函數與參數滑桿全部附「對聲音的影響」滑鼠提示，右側為即時頻率響應預覽（通帶、源 Nyquist 標記、鏡像帶）</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>調音工具：PEQ 與卷積</h2>
+    <p class="sub">參數化等化器與脈衝響應卷積直接嵌在訊號路徑視窗內：播放中即時套用、自動預降保護電路、與升頻引擎自由串接。</p>
+    <div class="cols2">
+      <figure class="shot">
+        <img src="img/peq.png" alt="參數化等化器 PEQ 卡片" loading="lazy">
+        <figcaption class="cap">PEQ 卡片：六段峰／谷／低架／高架濾波，每段獨立開關與頻率、增益、Q 值滑桿；上方為合成頻響曲線與自動預降 dB 顯示（此圖套用內建「暖聲」預設）</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="img/conv.png" alt="卷積濾波器 IR 卡片" loading="lazy">
+        <figcaption class="cap">卷積卡片：載入 IR 脈衝響應檔即時顯示取樣率、長度、聲道與響應峰值分析（此圖以內建示範音樂廳 IR 展示；峰值超過 1.0 時自動衰減防削頂）</figcaption>
       </figure>
     </div>
   </section>

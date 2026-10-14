@@ -29,6 +29,7 @@ if (CAPTURE_MODE) {
   app.setPath('userData', capDir);
 }
 process.env.ROOPLAYER_USER_FILTERS = path.join(app.getPath('userData'), 'rooplayer_user_filters.json');
+const CAPTURE_DEMO_IR = CAPTURE_MODE ? path.join(app.getPath('userData'), 'demo-concert-hall-ir.wav') : null;
 
 const nativeAudioEngine = require('./native-audio-engine');
 const nativeDspStreamer = require('./native-dsp-streamer');
@@ -128,6 +129,33 @@ const LEGACY_LIBRARY_FILE = path.join(app.getPath('userData'), 'roon_library.jso
 // ----------------- 截圖模式（--capture）：自動擷取介面供 GitHub Pages 使用 -----------------
 const CAPTURE_OUT_DIR = path.join(__dirname, 'docs', 'img');
 
+// 示範 IR：合成小型音樂廳脈衝響應（PCM16 立體聲 WAV），供卷積卡片截圖展示
+function writeDemoIrWav(filePath) {
+  const sr = 44100, secs = 0.45, n = Math.round(sr * secs);
+  const data = Buffer.alloc(n * 2 * 2); // stereo int16
+  let rng = 12345;
+  const rand = () => { rng = (rng * 1103515245 + 12345) & 0x7fffffff; return rng / 0x7fffffff * 2 - 1; };
+  const reflections = [[0.011, 0.55], [0.017, 0.42], [0.023, 0.36], [0.031, 0.30], [0.047, 0.24], [0.067, 0.20]];
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    let direct = i === 0 ? 1 : 0;
+    for (const [dt, g] of reflections) { if (i === Math.round(dt * sr)) direct += g; }
+    const tail = (i > sr * 0.02 ? rand() * Math.exp(-(t - 0.02) / 0.11) * 0.22 : 0);
+    const l = Math.max(-1, Math.min(1, direct + tail));
+    const r = Math.max(-1, Math.min(1, direct * 0.92 + tail * 0.96 + (i > sr * 0.025 ? rand() * Math.exp(-(t - 0.025) / 0.10) * 0.18 : 0)));
+    data.writeInt16LE(Math.round(l * 24000), i * 4);
+    data.writeInt16LE(Math.round(r * 24000), i * 4 + 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0); header.writeUInt32LE(36 + data.length, 4); header.write('WAVE', 8);
+  header.write('fmt ', 12); header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); header.writeUInt16LE(2, 22); // PCM, stereo
+  header.writeUInt32LE(sr, 24); header.writeUInt32LE(sr * 4, 28);
+  header.writeUInt16LE(4, 32); header.writeUInt16LE(16, 34);
+  header.write('data', 36); header.writeUInt32LE(data.length, 40);
+  fs.writeFileSync(filePath, Buffer.concat([header, data]));
+}
+
 async function captureShot(name) {
   const img = await Promise.race([
     mainWindow.webContents.capturePage(),
@@ -172,6 +200,18 @@ function runCaptureSequence() {
       await sleep(1600); // 等響應預覽 IPC 回傳並繪製
       await captureShot('toolbox.png');
 
+      // PEQ 卡片（warm 預設曲線＋頻響繪製）
+      console.log('[capture] step 4: peq (waiting renderer signal)');
+      await waitRenderer(4, 25000);
+      await sleep(1200); // 等 PEQ 曲線 canvas 重繪
+      await captureShot('peq.png');
+
+      // 卷積卡片（已載入示範 IR：合成音樂廳脈衝響應）
+      console.log('[capture] step 5: conv (waiting renderer signal)');
+      await waitRenderer(5, 25000);
+      await sleep(1400); // 等 getIrInfo IPC 回傳並渲染
+      await captureShot('conv.png');
+
       console.log('[capture] done');
     } catch (e) {
       console.error('[capture] failed:', e);
@@ -210,7 +250,8 @@ function createWindow() {
   }
 
   if (CAPTURE_MODE) {
-    mainWindow.loadFile('index.html', { query: { rpCapture: '1' } });
+    try { writeDemoIrWav(CAPTURE_DEMO_IR); console.log('[capture] demo IR written:', CAPTURE_DEMO_IR); } catch (e) { console.warn('[capture] demo IR write failed:', e); }
+    mainWindow.loadFile('index.html', { query: { rpCapture: '1', demoIr: CAPTURE_DEMO_IR } });
   } else {
     mainWindow.loadFile('index.html');
   }

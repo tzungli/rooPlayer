@@ -716,6 +716,36 @@ async function initApp() {
         if (window.electronAPI && window.electronAPI.captureStep) window.electronAPI.captureStep(3, 'toolbox ready');
       } catch (e) { console.warn('[rpCapture] open toolbox failed:', e); }
     }, 8500);
+    setTimeout(() => {
+      try {
+        closeUfEditor(); // 收合工具箱，讓 PEQ 卡片畫面乾淨
+        const warm = (PEQ_PRESETS.warm || []).map(b => Object.assign({}, b));
+        state.dsp.peq = normalizePeqSettings({ enabled: true, preset: 'warm', bands: warm });
+        const cb = document.getElementById('togglePeq');
+        if (cb) cb.checked = true;
+        const peqCard = document.getElementById('peqCard');
+        if (peqCard) peqCard.classList.add('active');
+        const peqEditor = document.getElementById('peqEditor');
+        if (peqEditor) peqEditor.style.display = 'block';
+        buildPeqBandRows();
+        drawPeqCurve();
+        if (peqCard) peqCard.scrollIntoView({ block: 'center' });
+        if (window.electronAPI && window.electronAPI.captureStep) window.electronAPI.captureStep(4, 'peq ready');
+      } catch (e) { console.warn('[rpCapture] open peq failed:', e); }
+    }, 12000);
+    setTimeout(() => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const irPath = params.get('demoIr');
+        if (irPath) {
+          state.dsp.conv = { enabled: true, irPath };
+          syncConvModalUI();
+        }
+        const convCard = document.getElementById('convCard');
+        if (convCard) convCard.scrollIntoView({ block: 'center' });
+        if (window.electronAPI && window.electronAPI.captureStep) window.electronAPI.captureStep(5, 'conv ready');
+      } catch (e) { console.warn('[rpCapture] open conv failed:', e); }
+    }, 14500);
   }
 }
 
