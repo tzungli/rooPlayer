@@ -732,7 +732,17 @@ async function initApp() {
             }
           }
           const pass = sectionShown && cards.length === 2 && excludedOk && includedDeluxe && orderStable && activeMoved;
-          window.electronAPI.captureStep(9, `TEST-VERSIONS ${pass ? 'PASS' : 'FAIL'} count=${cards.length} excludedOk=${excludedOk} deluxe=${includedDeluxe} orderStable=${orderStable} activeMoved=${activeMoved} cards=${JSON.stringify(cards)}`);
+          // 附加檢查：專輯頁「推薦演出者」頭像尺寸必須跟隨演出者頁面的尺寸設定
+          const recGrid = document.getElementById('albumArtistRecommendationsGrid');
+          const mainGrid = document.getElementById('artistsGrid');
+          const sizeOf = (g) => [...g.classList].find(c => c.startsWith('artist-size-')) || 'none';
+          const sizeMatch = !!recGrid && !!mainGrid && sizeOf(recGrid) === sizeOf(mainGrid) && sizeOf(recGrid) !== 'none';
+          // 切換演出者頁尺寸到「大」：專輯頁推薦區必須即時同步
+          const largePill = document.querySelector('#artistSizePills .size-pill[data-artist-size="large"]');
+          if (largePill) largePill.click();
+          await new Promise(r => setTimeout(r, 400));
+          const sizeSync = sizeOf(recGrid) === 'artist-size-large' && sizeOf(mainGrid) === 'artist-size-large';
+          window.electronAPI.captureStep(9, `TEST-VERSIONS ${pass && sizeMatch && sizeSync ? 'PASS' : 'FAIL'} count=${cards.length} excludedOk=${excludedOk} deluxe=${includedDeluxe} orderStable=${orderStable} activeMoved=${activeMoved} sizeMatch=${sizeMatch} sizeSync=${sizeSync} recSize=${sizeOf(recGrid || { classList: [] })} mainSize=${sizeOf(mainGrid || { classList: [] })} cards=${JSON.stringify(cards)}`);
         } catch (e) {
           if (window.electronAPI.captureStep) window.electronAPI.captureStep(9, 'TEST-VERSIONS ERROR ' + e.message);
         }
@@ -4604,6 +4614,9 @@ function renderAlbumArtistRecommendations(album) {
 
   if (!container) return;
   container.innerHTML = '';
+  // 頭像尺寸跟隨「演出者頁面」的尺寸設定（小／中／大），兩頁視覺一致
+  container.classList.remove('artist-size-small', 'artist-size-medium', 'artist-size-large');
+  container.classList.add(`artist-size-${state.artistCardSize || 'medium'}`);
 
   const currentGenre = (album.genre || '').trim();
   if (genreTag) {
@@ -9228,7 +9241,8 @@ function applyArtistSize(size) {
   const artistGrids = [
     document.getElementById('artistsGrid'),
     document.getElementById('favArtistsGrid'),
-    document.getElementById('overviewArtistsGrid')
+    document.getElementById('overviewArtistsGrid'),
+    document.getElementById('albumArtistRecommendationsGrid')
   ];
 
   artistGrids.forEach(grid => {
