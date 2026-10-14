@@ -38,6 +38,71 @@ function interpolateSample(p0, p1, p2, p3, t, phase = 'linear') {
   return Math.max(-1.0, Math.min(1.0, yLin));
 }
 
+// Specialized single-phase interpolators for the modulator hot path.
+// Each body is an EXACT copy of the corresponding interpolateSample branch (same
+// operations, same grouping order) - the phase dispatch and string comparisons are
+// resolved once per batch by the caller instead of per sample. Bit-identical output.
+function interpolateLinear(p0, p1, p2, p3, t) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  const m1 = 0.5 * (p2 - p0);
+  const m2 = 0.5 * (p3 - p1);
+  const y = h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2;
+  return Math.max(-1.0, Math.min(1.0, y));
+}
+
+function interpolateMinimum(p0, p1, p2, p3, t) {
+  const d0 = p1 - p0;
+  const d1 = p2 - p1;
+  const y = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
+  return Math.max(-1.0, Math.min(1.0, y));
+}
+
+function interpolateIntermediate(p0, p1, p2, p3, t) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  const m1 = 0.5 * (p2 - p0);
+  const m2 = 0.5 * (p3 - p1);
+  const yLin = h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2;
+  const d0 = p1 - p0;
+  const d1 = p2 - p1;
+  const yMin = p1 + t * d1 + 0.5 * t * (t - 1.0) * (0.85 * d0 + 0.15 * d1);
+  const y = 0.35 * yLin + 0.65 * yMin;
+  return Math.max(-1.0, Math.min(1.0, y));
+}
+
+// Hermite weight tables for exact unit-fraction step sizes (44.1k -> DSD64/128/256/512:
+// invRatio = 1/64, 1/128, 1/256, 1/512 - all exact binary fractions). The interpolation
+// phase t then cycles through exactly `period` values; the table stores the identical
+// Float64 weights the inline Hermite code computes (same operation order), so using the
+// table is bit-identical while removing ~15 flops per output sample per channel.
+// Cached per period: weights depend only on period.
+const HERMITE_TABS = new Map();
+function getHermiteTab(period) {
+  let tab = HERMITE_TABS.get(period);
+  if (tab) return tab;
+  tab = new Float64Array(period * 4);
+  for (let k = 0; k < period; k++) {
+    const t = k / period;
+    const t2 = t * t, t3 = t2 * t;
+    const o = k << 2;
+    tab[o] = 2 * t3 - 3 * t2 + 1;
+    tab[o + 1] = t3 - 2 * t2 + t;
+    tab[o + 2] = -2 * t3 + 3 * t2;
+    tab[o + 3] = t3 - t2;
+  }
+  HERMITE_TABS.set(period, tab);
+  return tab;
+}
+
 // Standard Sony DSD carrier rates
 function getDsdRate(dsdMode = 'dsd64') {
   const mode = (dsdMode || 'dsd64').toLowerCase();
@@ -725,42 +790,79 @@ class DsdModulator {
     this.yL = 0; this.yR = 0;
   }
 
+  // Shared per-batch interpolation setup: resolved ONCE per batch (no per-sample phase
+  // string comparisons, no generic dispatcher). For exact unit-fraction ratios the Hermite
+  // weight table is used and the input index / phase are tracked incrementally
+  // (bit-identical to pos = outIdx * invRatio; idx = pos | 0 for the exact powers of two
+  // involved). For FIR phases the polyphase fast path is hoisted out of firSample (same
+  // arithmetic, tables cached on the filter object).
+  _interpCtx(invRatio) {
+    const phase = this.phase;
+    const useGauss = this.useFir;
+    const interpFn = this.interpFn; // 自訂內插插件（內建相位為 null，熱路徑不變）
+    const gf = this.gf;
+    const ratio = 1 / invRatio;
+    const mode = interpFn ? 3 : (phase === 'minimum' ? 1 : phase === 'intermediate' ? 2 : 0);
+    let wTab = null, wPeriod = 0;
+    if (!useGauss && mode === 0) {
+      const period = Math.round(ratio);
+      if (period >= 2 && period <= 8192 && (period & (period - 1)) === 0 && 1 / period === invRatio) {
+        wPeriod = period;
+        wTab = getHermiteTab(period);
+      }
+    }
+    let fPhases = null, fP = 0, fQ = 0;
+    if (useGauss && gf) {
+      let ph = gf.phases;
+      if (ph === undefined) ph = gf.phases = buildFirPhases(gf);
+      if (ph) { fPhases = ph.phases; fP = ph.P; fQ = ph.Q; }
+    }
+    return { mode, useGauss, wTab, wPeriod, fPhases, fP, fQ, ratio, interpFn };
+  }
+
   // Modulate output bit range [startBit, endBit) from normalized input Float32Arrays.
   // startBit / endBit must be multiples of DSD_SAMPLES_PER_BLOCK.
   // Returns a Buffer of numBlocks * 2 * DSD_BLOCK_SIZE bytes in DSF block-pair layout
   // (left block followed by right block for each block).
   // Optional outBuf: a caller-reused scratch buffer (>= needed size) to avoid per-batch
   // allocation churn / GC pauses in progressive worker loops. Ignored when too small.
+  //
+  // Per-order specialization: each run path is its own (much smaller) function. V8 tiers
+  // small hot functions up to its optimizing compiler quickly; the previous single generic
+  // mega-function (all three orders + all phases in one body) stayed at baseline tier for
+  // the first seconds of every worker thread - the startup chunk ran at 0.3-0.5x while the
+  // steady state ran at 1.0-1.3x. Bit-identical: the run paths contain the same statements.
   processBlocks(left, right, inLen, startBit, endBit, invRatio, outBuf) {
     const numBlocks = Math.round((endBit - startBit) / DSD_SAMPLES_PER_BLOCK);
     if (numBlocks <= 0) return Buffer.alloc(0);
+    const needBytes = numBlocks * 2 * DSD_BLOCK_SIZE;
+    const out = (outBuf && outBuf.length >= needBytes) ? outBuf : Buffer.allocUnsafe(needBytes);
+    if (this.order === 2) return this.runBlocks2(left, right, inLen, startBit, numBlocks, invRatio, out);
+    if (this.order === 7) return this.runBlocks7(left, right, inLen, startBit, numBlocks, invRatio, out);
+    return this.runBlocks5(left, right, inLen, startBit, numBlocks, invRatio, out);
+  }
 
+  runBlocks5(left, right, inLen, startBit, numBlocks, invRatio, out) {
     const blockSize = DSD_BLOCK_SIZE;
     const samplesPerBlock = DSD_SAMPLES_PER_BLOCK;
-    const needBytes = numBlocks * 2 * blockSize;
-    const out = (outBuf && outBuf.length >= needBytes) ? outBuf : Buffer.allocUnsafe(needBytes);
-    const order = this.order;
-    const phase = this.phase;
-    const useGauss = this.useFir;
-    const interpFn = this.interpFn; // 自訂內插插件（內建相位為 null，熱路徑不變）
-    const ratio = 1 / invRatio;
+    const ctx = this._interpCtx(invRatio);
+    const mode = ctx.mode, useGauss = ctx.useGauss, wTab = ctx.wTab, wPeriod = ctx.wPeriod, fPhases = ctx.fPhases, fP = ctx.fP, fQ = ctx.fQ, ratio = ctx.ratio, interpFn = ctx.interpFn;
     const gf = this.gf;
 
     // Hot-path hoisting: resolve coefficient table lookups once per batch, not per bit.
-    let c1 = 0, c2 = 0, c3 = 0, c4 = 0, c5 = 0, c6 = 0, c7 = 0;
-    let g1 = 0, g2 = 0, g3 = 0, a1 = 0, a2 = 0, a4 = 0, a6 = 0, scale = 0;
+    const c1 = CIFFR_5.c1, c2 = CIFFR_5.c2, c3 = CIFFR_5.c3, c4 = CIFFR_5.c4, c5 = CIFFR_5.c5;
+    const g1 = CIFFR_5.g1, g2 = CIFFR_5.g2, a1 = CIFFR_5.a1, a2 = CIFFR_5.a2, a4 = CIFFR_5.a4, scale = CIFFR_5.scale;
     const CLAMP = CIFFR_CLAMP;
-    if (order === 5) {
-      c1 = CIFFR_5.c1; c2 = CIFFR_5.c2; c3 = CIFFR_5.c3; c4 = CIFFR_5.c4; c5 = CIFFR_5.c5;
-      g1 = CIFFR_5.g1; g2 = CIFFR_5.g2; a1 = CIFFR_5.a1; a2 = CIFFR_5.a2; a4 = CIFFR_5.a4; scale = CIFFR_5.scale;
-    } else if (order === 7) {
-      c1 = CIFFR_7.c1; c2 = CIFFR_7.c2; c3 = CIFFR_7.c3; c4 = CIFFR_7.c4; c5 = CIFFR_7.c5; c6 = CIFFR_7.c6; c7 = CIFFR_7.c7;
-      g1 = CIFFR_7.g1; g2 = CIFFR_7.g2; g3 = CIFFR_7.g3; a1 = CIFFR_7.a1; a2 = CIFFR_7.a2; a4 = CIFFR_7.a4; a6 = CIFFR_7.a6; scale = CIFFR_7.scale;
-    }
 
     // Load persistent state into hot locals
-    let s1_L = this.s1L, s2_L = this.s2L, s3_L = this.s3L, s4_L = this.s4L, s5_L = this.s5L, s6_L = this.s6L, s7_L = this.s7L, y_L = this.yL;
-    let s1_R = this.s1R, s2_R = this.s2R, s3_R = this.s3R, s4_R = this.s4R, s5_R = this.s5R, s6_R = this.s6R, s7_R = this.s7R, y_R = this.yR;
+    let s1_L = this.s1L, s2_L = this.s2L, s3_L = this.s3L, s4_L = this.s4L, s5_L = this.s5L, y_L = this.yL;
+    let s1_R = this.s1R, s2_R = this.s2R, s3_R = this.s3R, s4_R = this.s4R, s5_R = this.s5R, y_R = this.yR;
+
+    let curIdx = 0, curPhi = 0;
+    if (wTab) {
+      curIdx = Math.floor(startBit / wPeriod);
+      curPhi = startBit - curIdx * wPeriod;
+    }
 
     for (let b = 0; b < numBlocks; b++) {
       const leftOff = b * 2 * blockSize;
@@ -776,9 +878,49 @@ class DsdModulator {
           const outIdx = baseSample + bit;
           let rawL, rawR;
           if (useGauss) {
-            // Poly-Sinc-Gauss Long FIR（見 buildGaussFilter 設計註解）
-            rawL = firSample(left, inLen, outIdx, ratio, gf);
-            rawR = firSample(right, inLen, outIdx, ratio, gf);
+            // Poly-Sinc-Gauss / polyphase FIR fast path, hoisted from firSample
+            // (identical arithmetic; phase tables cached on the filter object).
+            let done = false;
+            if (fPhases) {
+              const phi = outIdx % fP;
+              const entry = fPhases[phi];
+              if (entry) {
+                const kBase = entry.k0 + Math.floor(outIdx / fP) * fQ;
+                const T = entry.T;
+                if (kBase >= 0 && kBase + T <= inLen) {
+                  const G = entry.G;
+                  let accL = 0, accR = 0;
+                  for (let j = 0; j < T; j++) { const k = kBase + j; accL += left[k] * G[j]; accR += right[k] * G[j]; }
+                  rawL = accL; rawR = accR;
+                  done = true;
+                }
+              }
+            }
+            if (!done) {
+              rawL = firSample(left, inLen, outIdx, ratio, gf);
+              rawR = firSample(right, inLen, outIdx, ratio, gf);
+            }
+          } else if (wTab) {
+            // Exact unit-fraction ratio (44.1k -> DSD64/128/256/512): input index and
+            // interpolation phase tracked incrementally; Hermite weights from the table.
+            // Bit-identical to the generic path for the exact binary fractions involved.
+            const idx = curIdx;
+            const o = curPhi << 2;
+            curPhi++; if (curPhi === wPeriod) { curPhi = 0; curIdx++; }
+
+            const p1L = idx < inLen ? left[idx] : 0;
+            const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
+            const p0L = idx > 0 ? left[idx - 1] : left[0];
+            const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
+            const yL = wTab[o] * p1L + wTab[o + 1] * (0.5 * (p2L - p0L)) + wTab[o + 2] * p2L + wTab[o + 3] * (0.5 * (p3L - p1L));
+            rawL = Math.max(-1.0, Math.min(1.0, yL));
+
+            const p1R = idx < inLen ? right[idx] : 0;
+            const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
+            const p0R = idx > 0 ? right[idx - 1] : right[0];
+            const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
+            const yR = wTab[o] * p1R + wTab[o + 1] * (0.5 * (p2R - p0R)) + wTab[o + 2] * p2R + wTab[o + 3] * (0.5 * (p3R - p1R));
+            rawR = Math.max(-1.0, Math.min(1.0, yR));
           } else {
             const pos = outIdx * invRatio;
             const idx = pos | 0;
@@ -788,33 +930,22 @@ class DsdModulator {
             const p1L = idx < inLen ? left[idx] : 0;
             const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
             const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
-            rawL = interpFn ? interpFn(p0L, p1L, p2L, p3L, t) : interpolateSample(p0L, p1L, p2L, p3L, t, phase);
+            rawL = mode === 3 ? interpFn(p0L, p1L, p2L, p3L, t)
+                 : mode === 1 ? interpolateMinimum(p0L, p1L, p2L, p3L, t)
+                 : mode === 2 ? interpolateIntermediate(p0L, p1L, p2L, p3L, t)
+                 : interpolateLinear(p0L, p1L, p2L, p3L, t);
 
             const p0R = idx > 0 ? right[idx - 1] : right[0];
             const p1R = idx < inLen ? right[idx] : 0;
             const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
             const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
-            rawR = interpFn ? interpFn(p0R, p1R, p2R, p3R, t) : interpolateSample(p0R, p1R, p2R, p3R, t, phase);
+            rawR = mode === 3 ? interpFn(p0R, p1R, p2R, p3R, t)
+                 : mode === 1 ? interpolateMinimum(p0R, p1R, p2R, p3R, t)
+                 : mode === 2 ? interpolateIntermediate(p0R, p1R, p2R, p3R, t)
+                 : interpolateLinear(p0R, p1R, p2R, p3R, t);
           }
 
-          if (order === 2) {
-            // 2nd-Order Boser-Wooley SDM with Anti-Windup Clamping
-            const uL = rawL * 0.75;
-            s1_L += uL - y_L;
-            if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
-            s2_L += s1_L - 0.5 * y_L;
-            if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
-            y_L = (s2_L >= 0) ? 1.0 : -1.0;
-            if (y_L > 0) byteValL |= (1 << (7 - bit)); // DSF spec: MSB-first
-
-            const uR = rawR * 0.75;
-            s1_R += uR - y_R;
-            if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
-            s2_R += s1_R - 0.5 * y_R;
-            if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
-            y_R = (s2_R >= 0) ? 1.0 : -1.0;
-            if (y_R > 0) byteValR |= (1 << (7 - bit)); // DSF spec: MSB-first
-          } else if (order === 5) {
+          {
             // 5th-Order CIFFR: 1 DC zero + 2 ultrasonic resonator zero pairs (see CIFFR_5; coefficients hoisted above)
             const uL = rawL * scale;
             s1_L += c1 * (uL - y_L);
@@ -829,7 +960,7 @@ class DsdModulator {
             if (s5_L > CLAMP) s5_L = CLAMP; else if (s5_L < -CLAMP) s5_L = -CLAMP;
             const sigma_L = uL + a1 * s1_L + a2 * s2_L + a4 * s4_L;
             y_L = (sigma_L >= 0) ? 1.0 : -1.0;
-            if (y_L > 0) byteValL |= (1 << (7 - bit)); // DSF spec: MSB-first
+            byteValL = (byteValL << 1) | (y_L > 0 ? 1 : 0); // DSF spec: MSB-first
 
             const uR = rawR * scale;
             s1_R += c1 * (uR - y_R);
@@ -844,8 +975,246 @@ class DsdModulator {
             if (s5_R > CLAMP) s5_R = CLAMP; else if (s5_R < -CLAMP) s5_R = -CLAMP;
             const sigma_R = uR + a1 * s1_R + a2 * s2_R + a4 * s4_R;
             y_R = (sigma_R >= 0) ? 1.0 : -1.0;
-            if (y_R > 0) byteValR |= (1 << (7 - bit)); // DSF spec: MSB-first
+            byteValR = (byteValR << 1) | (y_R > 0 ? 1 : 0); // DSF spec: MSB-first
+          }
+        }
+
+        out[leftOff + byteIdx] = byteValL;
+        out[rightOff + byteIdx] = byteValR;
+      }
+    }
+
+    // Persist state back for the next batch
+    this.s1L = s1_L; this.s2L = s2_L; this.s3L = s3_L; this.s4L = s4_L; this.s5L = s5_L; this.yL = y_L;
+    this.s1R = s1_R; this.s2R = s2_R; this.s3R = s3_R; this.s4R = s4_R; this.s5R = s5_R; this.yR = y_R;
+
+    return out;
+  }
+
+  runBlocks2(left, right, inLen, startBit, numBlocks, invRatio, out) {
+    const blockSize = DSD_BLOCK_SIZE;
+    const samplesPerBlock = DSD_SAMPLES_PER_BLOCK;
+    const ctx = this._interpCtx(invRatio);
+    const mode = ctx.mode, useGauss = ctx.useGauss, wTab = ctx.wTab, wPeriod = ctx.wPeriod, fPhases = ctx.fPhases, fP = ctx.fP, fQ = ctx.fQ, ratio = ctx.ratio, interpFn = ctx.interpFn;
+    const gf = this.gf;
+
+    // Load persistent state into hot locals
+    let s1_L = this.s1L, s2_L = this.s2L, y_L = this.yL;
+    let s1_R = this.s1R, s2_R = this.s2R, y_R = this.yR;
+
+    let curIdx = 0, curPhi = 0;
+    if (wTab) {
+      curIdx = Math.floor(startBit / wPeriod);
+      curPhi = startBit - curIdx * wPeriod;
+    }
+
+    for (let b = 0; b < numBlocks; b++) {
+      const leftOff = b * 2 * blockSize;
+      const rightOff = leftOff + blockSize;
+      const startSampleIdx = startBit + b * samplesPerBlock;
+
+      for (let byteIdx = 0; byteIdx < blockSize; byteIdx++) {
+        let byteValL = 0;
+        let byteValR = 0;
+        const baseSample = startSampleIdx + (byteIdx << 3);
+
+        for (let bit = 0; bit < 8; bit++) {
+          const outIdx = baseSample + bit;
+          let rawL, rawR;
+          if (useGauss) {
+            let done = false;
+            if (fPhases) {
+              const phi = outIdx % fP;
+              const entry = fPhases[phi];
+              if (entry) {
+                const kBase = entry.k0 + Math.floor(outIdx / fP) * fQ;
+                const T = entry.T;
+                if (kBase >= 0 && kBase + T <= inLen) {
+                  const G = entry.G;
+                  let accL = 0, accR = 0;
+                  for (let j = 0; j < T; j++) { const k = kBase + j; accL += left[k] * G[j]; accR += right[k] * G[j]; }
+                  rawL = accL; rawR = accR;
+                  done = true;
+                }
+              }
+            }
+            if (!done) {
+              rawL = firSample(left, inLen, outIdx, ratio, gf);
+              rawR = firSample(right, inLen, outIdx, ratio, gf);
+            }
+          } else if (wTab) {
+            const idx = curIdx;
+            const o = curPhi << 2;
+            curPhi++; if (curPhi === wPeriod) { curPhi = 0; curIdx++; }
+
+            const p1L = idx < inLen ? left[idx] : 0;
+            const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
+            const p0L = idx > 0 ? left[idx - 1] : left[0];
+            const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
+            const yL = wTab[o] * p1L + wTab[o + 1] * (0.5 * (p2L - p0L)) + wTab[o + 2] * p2L + wTab[o + 3] * (0.5 * (p3L - p1L));
+            rawL = Math.max(-1.0, Math.min(1.0, yL));
+
+            const p1R = idx < inLen ? right[idx] : 0;
+            const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
+            const p0R = idx > 0 ? right[idx - 1] : right[0];
+            const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
+            const yR = wTab[o] * p1R + wTab[o + 1] * (0.5 * (p2R - p0R)) + wTab[o + 2] * p2R + wTab[o + 3] * (0.5 * (p3R - p1R));
+            rawR = Math.max(-1.0, Math.min(1.0, yR));
           } else {
+            const pos = outIdx * invRatio;
+            const idx = pos | 0;
+            const t = pos - idx;
+
+            const p0L = idx > 0 ? left[idx - 1] : left[0];
+            const p1L = idx < inLen ? left[idx] : 0;
+            const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
+            const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
+            rawL = mode === 3 ? interpFn(p0L, p1L, p2L, p3L, t)
+                 : mode === 1 ? interpolateMinimum(p0L, p1L, p2L, p3L, t)
+                 : mode === 2 ? interpolateIntermediate(p0L, p1L, p2L, p3L, t)
+                 : interpolateLinear(p0L, p1L, p2L, p3L, t);
+
+            const p0R = idx > 0 ? right[idx - 1] : right[0];
+            const p1R = idx < inLen ? right[idx] : 0;
+            const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
+            const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
+            rawR = mode === 3 ? interpFn(p0R, p1R, p2R, p3R, t)
+                 : mode === 1 ? interpolateMinimum(p0R, p1R, p2R, p3R, t)
+                 : mode === 2 ? interpolateIntermediate(p0R, p1R, p2R, p3R, t)
+                 : interpolateLinear(p0R, p1R, p2R, p3R, t);
+          }
+
+          {
+            // 2nd-Order Boser-Wooley SDM with Anti-Windup Clamping
+            const uL = rawL * 0.75;
+            s1_L += uL - y_L;
+            if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
+            s2_L += s1_L - 0.5 * y_L;
+            if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
+            y_L = (s2_L >= 0) ? 1.0 : -1.0;
+            byteValL = (byteValL << 1) | (y_L > 0 ? 1 : 0); // DSF spec: MSB-first
+
+            const uR = rawR * 0.75;
+            s1_R += uR - y_R;
+            if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
+            s2_R += s1_R - 0.5 * y_R;
+            if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
+            y_R = (s2_R >= 0) ? 1.0 : -1.0;
+            byteValR = (byteValR << 1) | (y_R > 0 ? 1 : 0); // DSF spec: MSB-first
+          }
+        }
+
+        out[leftOff + byteIdx] = byteValL;
+        out[rightOff + byteIdx] = byteValR;
+      }
+    }
+
+    // Persist state back for the next batch
+    this.s1L = s1_L; this.s2L = s2_L; this.yL = y_L;
+    this.s1R = s1_R; this.s2R = s2_R; this.yR = y_R;
+
+    return out;
+  }
+
+  runBlocks7(left, right, inLen, startBit, numBlocks, invRatio, out) {
+    const blockSize = DSD_BLOCK_SIZE;
+    const samplesPerBlock = DSD_SAMPLES_PER_BLOCK;
+    const ctx = this._interpCtx(invRatio);
+    const mode = ctx.mode, useGauss = ctx.useGauss, wTab = ctx.wTab, wPeriod = ctx.wPeriod, fPhases = ctx.fPhases, fP = ctx.fP, fQ = ctx.fQ, ratio = ctx.ratio, interpFn = ctx.interpFn;
+    const gf = this.gf;
+
+    // Hot-path hoisting: resolve coefficient table lookups once per batch, not per bit.
+    const c1 = CIFFR_7.c1, c2 = CIFFR_7.c2, c3 = CIFFR_7.c3, c4 = CIFFR_7.c4, c5 = CIFFR_7.c5, c6 = CIFFR_7.c6, c7 = CIFFR_7.c7;
+    const g1 = CIFFR_7.g1, g2 = CIFFR_7.g2, g3 = CIFFR_7.g3, a1 = CIFFR_7.a1, a2 = CIFFR_7.a2, a4 = CIFFR_7.a4, a6 = CIFFR_7.a6, scale = CIFFR_7.scale;
+    const CLAMP = CIFFR_CLAMP;
+
+    // Load persistent state into hot locals
+    let s1_L = this.s1L, s2_L = this.s2L, s3_L = this.s3L, s4_L = this.s4L, s5_L = this.s5L, s6_L = this.s6L, s7_L = this.s7L, y_L = this.yL;
+    let s1_R = this.s1R, s2_R = this.s2R, s3_R = this.s3R, s4_R = this.s4R, s5_R = this.s5R, s6_R = this.s6R, s7_R = this.s7R, y_R = this.yR;
+
+    let curIdx = 0, curPhi = 0;
+    if (wTab) {
+      curIdx = Math.floor(startBit / wPeriod);
+      curPhi = startBit - curIdx * wPeriod;
+    }
+
+    for (let b = 0; b < numBlocks; b++) {
+      const leftOff = b * 2 * blockSize;
+      const rightOff = leftOff + blockSize;
+      const startSampleIdx = startBit + b * samplesPerBlock;
+
+      for (let byteIdx = 0; byteIdx < blockSize; byteIdx++) {
+        let byteValL = 0;
+        let byteValR = 0;
+        const baseSample = startSampleIdx + (byteIdx << 3);
+
+        for (let bit = 0; bit < 8; bit++) {
+          const outIdx = baseSample + bit;
+          let rawL, rawR;
+          if (useGauss) {
+            let done = false;
+            if (fPhases) {
+              const phi = outIdx % fP;
+              const entry = fPhases[phi];
+              if (entry) {
+                const kBase = entry.k0 + Math.floor(outIdx / fP) * fQ;
+                const T = entry.T;
+                if (kBase >= 0 && kBase + T <= inLen) {
+                  const G = entry.G;
+                  let accL = 0, accR = 0;
+                  for (let j = 0; j < T; j++) { const k = kBase + j; accL += left[k] * G[j]; accR += right[k] * G[j]; }
+                  rawL = accL; rawR = accR;
+                  done = true;
+                }
+              }
+            }
+            if (!done) {
+              rawL = firSample(left, inLen, outIdx, ratio, gf);
+              rawR = firSample(right, inLen, outIdx, ratio, gf);
+            }
+          } else if (wTab) {
+            const idx = curIdx;
+            const o = curPhi << 2;
+            curPhi++; if (curPhi === wPeriod) { curPhi = 0; curIdx++; }
+
+            const p1L = idx < inLen ? left[idx] : 0;
+            const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
+            const p0L = idx > 0 ? left[idx - 1] : left[0];
+            const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
+            const yL = wTab[o] * p1L + wTab[o + 1] * (0.5 * (p2L - p0L)) + wTab[o + 2] * p2L + wTab[o + 3] * (0.5 * (p3L - p1L));
+            rawL = Math.max(-1.0, Math.min(1.0, yL));
+
+            const p1R = idx < inLen ? right[idx] : 0;
+            const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
+            const p0R = idx > 0 ? right[idx - 1] : right[0];
+            const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
+            const yR = wTab[o] * p1R + wTab[o + 1] * (0.5 * (p2R - p0R)) + wTab[o + 2] * p2R + wTab[o + 3] * (0.5 * (p3R - p1R));
+            rawR = Math.max(-1.0, Math.min(1.0, yR));
+          } else {
+            const pos = outIdx * invRatio;
+            const idx = pos | 0;
+            const t = pos - idx;
+
+            const p0L = idx > 0 ? left[idx - 1] : left[0];
+            const p1L = idx < inLen ? left[idx] : 0;
+            const p2L = idx < inLen - 1 ? left[idx + 1] : p1L;
+            const p3L = idx < inLen - 2 ? left[idx + 2] : p2L;
+            rawL = mode === 3 ? interpFn(p0L, p1L, p2L, p3L, t)
+                 : mode === 1 ? interpolateMinimum(p0L, p1L, p2L, p3L, t)
+                 : mode === 2 ? interpolateIntermediate(p0L, p1L, p2L, p3L, t)
+                 : interpolateLinear(p0L, p1L, p2L, p3L, t);
+
+            const p0R = idx > 0 ? right[idx - 1] : right[0];
+            const p1R = idx < inLen ? right[idx] : 0;
+            const p2R = idx < inLen - 1 ? right[idx + 1] : p1R;
+            const p3R = idx < inLen - 2 ? right[idx + 2] : p2R;
+            rawR = mode === 3 ? interpFn(p0R, p1R, p2R, p3R, t)
+                 : mode === 1 ? interpolateMinimum(p0R, p1R, p2R, p3R, t)
+                 : mode === 2 ? interpolateIntermediate(p0R, p1R, p2R, p3R, t)
+                 : interpolateLinear(p0R, p1R, p2R, p3R, t);
+          }
+
+          {
             // 7th-Order CIFFR: 1 DC zero + 3 ultrasonic resonator zero pairs (see CIFFR_7; coefficients hoisted above)
             const uL = rawL * scale;
             s1_L += c1 * (uL - y_L);
@@ -864,7 +1233,7 @@ class DsdModulator {
             if (s7_L > CLAMP) s7_L = CLAMP; else if (s7_L < -CLAMP) s7_L = -CLAMP;
             const sigma_L = uL + a1 * s1_L + a2 * s2_L + a4 * s4_L + a6 * s6_L;
             y_L = (sigma_L >= 0) ? 1.0 : -1.0;
-            if (y_L > 0) byteValL |= (1 << (7 - bit)); // DSF spec: MSB-first
+            byteValL = (byteValL << 1) | (y_L > 0 ? 1 : 0); // DSF spec: MSB-first
 
             const uR = rawR * scale;
             s1_R += c1 * (uR - y_R);
@@ -883,7 +1252,7 @@ class DsdModulator {
             if (s7_R > CLAMP) s7_R = CLAMP; else if (s7_R < -CLAMP) s7_R = -CLAMP;
             const sigma_R = uR + a1 * s1_R + a2 * s2_R + a4 * s4_R + a6 * s6_R;
             y_R = (sigma_R >= 0) ? 1.0 : -1.0;
-            if (y_R > 0) byteValR |= (1 << (7 - bit)); // DSF spec: MSB-first
+            byteValR = (byteValR << 1) | (y_R > 0 ? 1 : 0); // DSF spec: MSB-first
           }
         }
 
