@@ -3301,6 +3301,24 @@ body.table-col-resizing * {
   cursor: pointer;
 }
 
+/* 淺色主題：播放列為白底，白色滑桿／軌道必須反轉成深色才可辨識 */
+[data-theme="light"] .volume-slider {
+  background: rgba(15, 23, 42, 0.18);
+}
+
+[data-theme="light"] .volume-slider::-webkit-slider-thumb {
+  background-color: #7c3aed;
+}
+
+[data-theme="light"] .scrubber-bar {
+  background-color: rgba(15, 23, 42, 0.14);
+}
+
+[data-theme="light"] .scrubber-handle {
+  background-color: #7c3aed;
+  box-shadow: 0 0 6px rgba(124, 58, 237, 0.5);
+}
+
 /* Scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
