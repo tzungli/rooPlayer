@@ -67,6 +67,104 @@ class DlnaManager extends EventEmitter {
     this._playOpCounter = 0;
     this._activePlayPromise = null;
     this._pollSessionCounter = 0;
+
+    // 串流準備進度（送給渲染端顯示「記憶體緩衝中」提示，避免使用者以為失敗而一直按播放鍵）
+    this._prepareTimer = null;
+    this._prepareT0 = 0;
+    this._prepareSession = null;
+    this._prepareStage = '';
+    this._prepareTrack = null;
+    this._playAnnounced = false;
+    this.PREPARE_TARGET_SEC = 6;   // Play 之前先在記憶體裡緩衝這麼多秒音訊
+    this.PREPARE_MAX_WAIT_MS = 12000; // 再慢的引擎也不讓使用者等超過這個時間
+  }
+
+  // ---- 串流準備階段事件（stage: preparing / buffer / opening / playing / failed） ----
+  emitPrepare(extra) {
+    if (!this._prepareT0) return;
+    const payload = Object.assign({
+      stage: this._prepareStage,
+      elapsedMs: Date.now() - this._prepareT0,
+      title: (this._prepareTrack && (this._prepareTrack.title || this._prepareTrack.fileName)) || '',
+    }, extra || {});
+    this.emit('prepare-status', payload);
+  }
+
+  // 目前引擎 session 已緩衝多少（換算成秒與 MB，給 UI 用）
+  prepareBufferStats() {
+    const s = this._prepareSession || this.currentStreamSession;
+    if (!s) return null;
+    const total = Number(s.totalFileBytes) || 0;
+    const written = Number(s.bytesWritten) || 0;
+    const dur = Number(s.durationSec) || 0;
+    if (total <= 0 || dur <= 0) return null;
+    const ratio = Math.max(0, Math.min(1, written / total));
+    return {
+      bufferedSec: dur * ratio,
+      bufferedMB: written / 1048576,
+      totalMB: total / 1048576,
+      totalSec: dur,
+      ratio,
+      done: !!s.isCompleted,
+    };
+  }
+
+  startPrepareTracking(track, dev) {
+    this.stopPrepareTracking();
+    this._prepareT0 = Date.now();
+    this._prepareSession = null;
+    this._prepareTrack = track;
+    this._prepareStage = 'preparing';
+    this._playAnnounced = false;
+    this.emitPrepare({ deviceName: (dev && dev.friendlyName) || (dev && dev.name) || '' });
+    // 每 250ms 回報一次：引擎 session 一出現就改成回報實際緩衝量
+    this._prepareTimer = setInterval(() => {
+      const stats = this.prepareBufferStats();
+      if (stats) {
+        this._prepareStage = 'buffer';
+        this.emitPrepare({
+          bufferedSec: Number(stats.bufferedSec.toFixed(2)),
+          bufferedMB: Number(stats.bufferedMB.toFixed(1)),
+          totalMB: Number(stats.totalMB.toFixed(1)),
+          targetSec: Math.min(this.PREPARE_TARGET_SEC, Number(stats.totalSec.toFixed(2))),
+          ratio: Number(stats.ratio.toFixed(4)),
+        });
+      } else {
+        this.emitPrepare();
+      }
+    }, 250);
+  }
+
+  stopPrepareTracking(finalStage, extra) {
+    if (this._prepareTimer) {
+      clearInterval(this._prepareTimer);
+      this._prepareTimer = null;
+    }
+    if (finalStage) {
+      this._prepareStage = finalStage;
+      this.emitPrepare(extra);
+    }
+    this._prepareT0 = 0;
+    this._prepareStage = '';
+    this._prepareSession = null;
+    this._prepareTrack = null;
+  }
+
+  // Play 之前的記憶體緩衝：等引擎把目標秒數寫進 session（或引擎較慢時最多等 PREPARE_MAX_WAIT_MS）
+  async waitForPrepareBuffer(opId) {
+    const targetSec = Math.min(this.PREPARE_TARGET_SEC, (this.currentStreamSession && this.currentStreamSession.durationSec) || this.PREPARE_TARGET_SEC);
+    const t0 = Date.now();
+    while (Date.now() - t0 < this.PREPARE_MAX_WAIT_MS) {
+      if (opId !== this._playOpCounter) return false;
+      const s = this.currentStreamSession;
+      if (!s || s.isCancelled || s.isCompleted) return true;
+      const stats = this.prepareBufferStats();
+      if (!stats) return true; // 非漸進式 session（直通串流）：沒有緩衝可等
+      if (stats.bufferedSec >= targetSec) return true;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    console.warn(`[DLNA] 準備緩衝等待逾時（${this.PREPARE_MAX_WAIT_MS}ms），直接開始播放`);
+    return false;
   }
 
   // Determine machine's local LAN IPv4 address
@@ -836,9 +934,15 @@ class DlnaManager extends EventEmitter {
         // A newer track selection superseded this one while waiting for previous SOAP call to finish
         return { success: false, cancelled: true };
       }
-      return await this._doPlayTrack(deviceId, track, startSec, dspOptions, opId);
+      const result = await this._doPlayTrack(deviceId, track, startSec, dspOptions, opId);
+      if (!result || !result.success) {
+        const cancelled = !!(result && result.cancelled);
+        this.stopPrepareTracking(cancelled ? '' : 'failed', cancelled ? undefined : { error: (result && result.error) || '串流播放失敗' });
+      }
+      return result;
     } catch (err) {
       console.error('[DLNA] PlayTrack error:', err);
+      this.stopPrepareTracking('failed', { error: err.message });
       return { success: false, error: err.message };
     } finally {
       releaseLock();
@@ -864,6 +968,12 @@ class DlnaManager extends EventEmitter {
     this.trackPlayTimestamp = Date.now();
     this.hasStartedPlaying = false;
     this.playbackState = 'PLAYING';
+
+    // 從这一刻起回報準備進度（引擎建立 session、記憶體緩衝、裝置開播）
+    this.startPrepareTracking(track, dev);
+    if (this.nativeDspStreamer && typeof this.nativeDspStreamer === 'object') {
+      this.nativeDspStreamer.onSessionInitProgress = (session) => { this._prepareSession = session; };
+    }
 
     // 2. Explicitly send Stop to renderer and allow 150ms to clear previous media state
     // This resolves UPnP SOAP Fault 705 (TRANSITION_NOT_AVAILABLE) on track change
@@ -1009,6 +1119,13 @@ class DlnaManager extends EventEmitter {
 
     this.currentStreamToken = streamToken;
 
+    // 正式播放前先把音訊寫進記憶體緩衝（引擎 session 的初始緩衝只有 3–4 秒）：
+    // 裝置拿到 URI 之後就不容易因為引擎落後而卡住，同時這段時間會回報給 UI 顯示。
+    if (this.currentStreamSession && !this.currentStreamSession.isCompleted) {
+      this._prepareStage = 'buffer';
+      await this.waitForPrepareBuffer(opId);
+    }
+
     // Proactively pre-resolve and cache album artwork buffer for instantaneous serving to DLNA renderer
     this.resolveCoverBuffer(track, activeFilePath, streamToken).catch(err => {
       console.warn('[DLNA] Proactive resolveCoverBuffer error:', err.message);
@@ -1096,6 +1213,8 @@ class DlnaManager extends EventEmitter {
     const escapedDidl = escapeXml(didl);
 
     // 3. SetAVTransportURI with retry loop and metadata fallback
+    this._prepareStage = 'seturi';
+    this.emitPrepare();
     let uriSuccess = false;
     let lastUriError = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -1127,6 +1246,8 @@ class DlnaManager extends EventEmitter {
     }
 
     // 4. Play with retry loop
+    this._prepareStage = 'play';
+    this.emitPrepare();
     let playSuccess = false;
     let lastPlayError = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -1159,6 +1280,12 @@ class DlnaManager extends EventEmitter {
     if (startSec > 0 && !isNativeDsd && !isDsdUpsample && (!dspOptions || (!dspOptions.enabled && !dspOptions.peq && !dspOptions.conv))) {
       await new Promise(r => setTimeout(r, 300));
       await this.seek(deviceId, startSec).catch(() => {});
+    }
+
+    // 指令都送出去了，但裝置真正開始發出聲音還要時間：繼續回報「opening」直到位置開始前進
+    if (this._prepareT0) {
+      this._prepareStage = 'opening';
+      this.emitPrepare();
     }
 
     this.playbackState = 'PLAYING';
@@ -1203,6 +1330,7 @@ class DlnaManager extends EventEmitter {
     if (!dev) return;
 
     this.stopPositionPolling();
+    this.stopPrepareTracking();
     if (this.currentStreamSession) {
       this.currentStreamSession.cancel();
       this.currentStreamSession = null;
@@ -1349,6 +1477,12 @@ class DlnaManager extends EventEmitter {
 
         // Mark that device has successfully transitioned into PLAYING
         if (stateUpper === 'PLAYING') {
+          // 準備提示要等到「真的開始發出聲音」（位置開始前進）才關掉：
+          // 很多裝置會先回報 PLAYING 但位置還停在 0（開播前的 ramp-up）。
+          if (actualSec > 0 && this._prepareT0) {
+            this._playAnnounced = true;
+            this.stopPrepareTracking('playing', { positionSec: Number(actualSec.toFixed(2)) });
+          }
           this.hasStartedPlaying = true;
         }
 

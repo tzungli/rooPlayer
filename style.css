@@ -3310,7 +3310,78 @@ body.table-col-resizing * {
   display: flex;
   align-items: center;
   gap: 10px;
+  position: relative;
 }
+
+/* DLNA 串流準備中：覆蓋進度條的記憶體緩衝提示（引擎調變 / 緩衝 / 裝置開播） */
+.dlna-buffer-strip {
+  position: absolute;
+  top: -7px;
+  bottom: 6px;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  border-radius: 9px;
+  background-color: rgba(13, 14, 22, 0.94);
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+.dlna-buffer-stage {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #e9d5ff;
+  white-space: nowrap;
+}
+
+.dlna-buffer-bar {
+  flex: 1;
+  min-width: 80px;
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.dlna-buffer-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #06b6d4, #8b5cf6, #ec4899);
+  transition: width 0.25s ease-out;
+}
+
+.dlna-buffer-strip.indeterminate .dlna-buffer-fill {
+  width: 30%;
+  transition: none;
+  animation: rpBufferSweep 1.1s linear infinite;
+}
+
+@keyframes rpBufferSweep {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(360%); }
+}
+
+.dlna-buffer-meta {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--text-sub);
+  white-space: nowrap;
+}
+
+[data-theme="light"] .dlna-buffer-strip {
+  background-color: rgba(255, 255, 255, 0.97);
+  border-color: rgba(124, 58, 237, 0.35);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.16);
+}
+
+[data-theme="light"] .dlna-buffer-stage { color: #6d28d9; }
+[data-theme="light"] .dlna-buffer-bar { background-color: rgba(15, 23, 42, 0.12); }
+[data-theme="light"] .dlna-buffer-meta { color: #475569; }
 
 .time-label {
   font-size: 11px;

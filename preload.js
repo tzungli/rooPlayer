@@ -67,6 +67,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onDlnaTrackEnded: (callback) => {
     ipcRenderer.on('dlna:trackEnded', () => callback());
   },
+  onDlnaPrepareStatus: (callback) => {
+    ipcRenderer.on('dlna:prepareStatus', (_event, info) => callback(info));
+  },
+  getFakeDlnaRendererActions: () => ipcRenderer.invoke('dlna:fakeRendererActions'),
 
   // WASAPI 獨佔輸出（Windows 聲音獨佔模式）
   exclusiveProbe: (force = false) => ipcRenderer.invoke('exclusive:probe', force),

@@ -28,7 +28,9 @@ const TEST_RECOMMEND = process.argv.includes('--test-recommend'); // 執行期�
 const TEST_UF_LAYOUT = process.argv.includes('--test-uf-layout'); // 執行期測試自訂濾波器編輯器的左右配置
 const TEST_QUEUE_CONTRAST = process.argv.includes('--test-queue-contrast'); // 執行期測試播放佇列在淺色／深色的文字對比度
 const TEST_SPECTRUM_SMOOTH = process.argv.includes('--test-spectrum-smooth'); // 執行期測試 NOW PLAYING 頻譜的播放位置是否連續推進
-if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH) {
+const TEST_DLNA_HINT = process.argv.includes('--test-dlna-hint'); // 執行期測試 DLNA 串流準備（記憶體緩衝）提示與重複按播放的保護
+const FAKE_DLNA_PORT = 49152; // 測試用假 UPnP MediaRenderer _listen port（probeIp 的候選位址之一）
+if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT) {
   // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
   // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -59,6 +61,7 @@ function getDurationWithNativeHeader(filePath) {
 
 const DlnaManager = require('./dlna-manager');
 let dlnaManager = null;
+let fakeDlnaRenderer = null; // --test-dlna-hint 用的假 MediaRenderer（tools/fake-dlna-renderer.js）
 
 // ==========================================================
 // WASAPI 獨佔輸出（Windows 內建 csc 編譯的 tools/rp-wasapi-exclusive.cs）
@@ -365,6 +368,24 @@ function runCaptureSequence() {
         app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
         return;
       }
+      if (TEST_DLNA_HINT) {
+        console.log('[test-dlna-hint] waiting for renderer DLNA prepare-hint self-test result');
+        // 渲染端先發 25（提示正在顯示中，截取畫面），最後發 26（測試報告）
+        const shotSignal = new Promise((resolve) => { captureSignals[25] = (info) => { captureSignals[25] = null; resolve(info); }; });
+        const reportPromise = waitRendererInfo(26, 120000);
+        const shotInfo = await shotSignal;
+        try {
+          const img = await mainWindow.webContents.capturePage();
+          const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'dlna-buffer-hint.png');
+          fs.writeFileSync(shotPath, img.toPNG());
+          console.log('[test-dlna-hint] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
+        } catch (e) { console.warn('[test-dlna-hint] screenshot failed:', e); }
+        const report = await reportPromise;
+        console.log('[test-dlna-hint] renderer report: ' + report);
+        console.log('[test] done');
+        app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
+        return;
+      }
       await sleep(4500); // 等 initApp / demo 展示渲染完成
       console.log('[capture] step 1: home');
       await captureShot('home.png');
@@ -455,6 +476,12 @@ function createWindow() {
   } else if (TEST_LABELS) {
     // 不帶 rpCapture：截圖流程的 UI 自動化會開 modal / 注入示範專輯，干擾本測試的 DOM 計數
     mainWindow.loadFile('index.html', { query: { testLabels: '1' } });
+  } else if (TEST_DLNA_HINT) {
+    try {
+      writeExclusiveTestFixture(EXCLUSIVE_TEST_FIXTURE, 14);
+      console.log('[test-dlna-hint] fixture written:', EXCLUSIVE_TEST_FIXTURE);
+    } catch (e) { console.warn('[test-dlna-hint] fixture write failed:', e); }
+    mainWindow.loadFile('index.html', { query: { testDlnaHint: '1', fakeDlnaPort: String(FAKE_DLNA_PORT), fixture: EXCLUSIVE_TEST_FIXTURE } });
   } else if (TEST_SPECTRUM_SMOOTH) {
     // 較長的測試音（14s）：本測試要連續取樣約 5 秒，6 秒的音檔會在結尾前就結束
     try {
@@ -480,10 +507,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH) runCaptureSequence();
+    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT) runCaptureSequence();
   });
 
-  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH) {
+  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT) {
     // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {
@@ -503,7 +530,7 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   app.on('web-contents-created', (event, contents) => {
     if (contents.getType() === 'webview') {
       contents.setWindowOpenHandler(({ url }) => {
@@ -555,6 +582,27 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('dlna:trackEnded');
     }
   });
+
+  // 串流準備進度（引擎建立 session、正式播放前的記憶體緩衝、裝置開播）→ 渲染端顯示提示
+  dlnaManager.on('prepare-status', (info) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('dlna:prepareStatus', info);
+    }
+  });
+
+  if (TEST_DLNA_HINT) {
+    // 假 MediaRenderer：位置在 Play 後先停在 0 三秒，模擬真實裝置開播前的 ramp-up
+    try {
+      const { createFakeDlnaRenderer } = require('./tools/fake-dlna-renderer');
+      fakeDlnaRenderer = createFakeDlnaRenderer({ port: FAKE_DLNA_PORT, holdPlayingSec: 3.0, trackDurationSec: 14 });
+      await fakeDlnaRenderer.start();
+      console.log(`[test-dlna-hint] fake MediaRenderer listening on 127.0.0.1:${FAKE_DLNA_PORT}`);
+      const dev = await dlnaManager.probeIp('127.0.0.1');
+      console.log('[test-dlna-hint] probe device:', dev ? dev.name : 'none');
+    } catch (e) {
+      console.warn('[test-dlna-hint] fake renderer setup failed:', e);
+    }
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1918,6 +1966,11 @@ ipcMain.handle('tidal:probeAuth', async () => {
 // DLNA / UPnP MediaRenderer IPC handlers
 ipcMain.handle('dlna:getDevices', () => {
   return dlnaManager ? dlnaManager.getDeviceList() : [{ id: 'local', name: '本機音訊 (此電腦)', active: true }];
+});
+
+// --test-dlna-hint：取得假裝置實際收到的 SOAP 動作序列（斷言重複按播放不會重送指令）
+ipcMain.handle('dlna:fakeRendererActions', () => {
+  return fakeDlnaRenderer ? fakeDlnaRenderer.actions.map(a => ({ action: a.action, t: a.t, uri: a.uri || '' })) : [];
 });
 
 ipcMain.handle('dlna:scan', async () => {

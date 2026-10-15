@@ -2303,6 +2303,12 @@
           <div class="scrubber-handle" id="scrubberHandle"></div>
         </div>
         <span class="time-label" id="totalTimeLabel">0:00</span>
+        <!-- DLNA 串流準備中：顯示引擎記憶體緩衝進度與已等待時間，避免使用者以為失敗而一直按播放鍵 -->
+        <div class="dlna-buffer-strip" id="dlnaBufferStrip" style="display: none;">
+          <span class="dlna-buffer-stage" id="dlnaBufferStage">⏳ 串流準備中</span>
+          <div class="dlna-buffer-bar"><div class="dlna-buffer-fill" id="dlnaBufferFill"></div></div>
+          <span class="dlna-buffer-meta" id="dlnaBufferMeta"></span>
+        </div>
       </div>
     </div>
 

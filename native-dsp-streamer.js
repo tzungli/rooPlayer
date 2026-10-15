@@ -438,6 +438,12 @@ class NativeDspStreamer {
 
     tryAssign(); // kick off chunk 0 immediately
 
+    // 讓呼叫端（DLNA 串流準備流程）能在等待初始緩衝期間就看到進度：session 先交出去，
+    // 之後 bytesWritten 的 progress 事件就能被用來顯示「記憶體緩衝中 x 秒音訊」。
+    if (typeof this.onSessionInitProgress === 'function') {
+      try { this.onSessionInitProgress(session); } catch (e) {}
+    }
+
     try {
       await initPromise;
     } catch (err) {

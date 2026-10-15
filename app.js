@@ -6690,6 +6690,7 @@ async function playCurrentTrack() {
       const dspOptions = buildDspOptions(track);
 
       const enrichedTrack = getEnrichedTrack(track);
+      beginDlnaPrepareUi(state.activeDlnaDevice.name); // 立刻顯示準備提示（引擎調變、記憶體緩衝、裝置開播）
       window.electronAPI.playDlnaTrack(state.activeDlnaDevice.id, enrichedTrack, 0, dspOptions).then(res => {
         if (res && res.success) {
           state.isPlaying = true;
@@ -6705,15 +6706,18 @@ async function playCurrentTrack() {
           }
           prefetchNextTidalTracks();
         } else if (res && res.cancelled) {
+          clearDlnaPrepareUi();
           console.log('[DLNA] Play superseded by newer track selection');
         } else {
           console.error('DLNA playTrack error:', res);
+          clearDlnaPrepareUi();
           showToast(`❌ DLNA 播放失敗: ${res ? res.error : '未知錯誤'}`);
           state.isPlaying = false;
           updatePlayPauseBtnUI();
         }
       }).catch(err => {
         console.error('DLNA play error:', err);
+        clearDlnaPrepareUi();
         showToast(`❌ 串流發送失敗: ${err.message}`);
         state.isPlaying = false;
         updatePlayPauseBtnUI();
@@ -9241,6 +9245,109 @@ function closeNowPlayingModal() {
   }
 }
 
+// ----------------- DLNA 串流準備提示（正式播放前的記憶體緩衝） -----------------
+// 主行程在 playTrack 各階段回報 prepare-status：preparing → buffer → seturi → play → opening → playing。
+// 原本這段時間 UI 完全沒反應，使用者會以為失敗而一直按播放鍵（每按一次就變成暫停／重新播放）。
+let dlnaPreparing = false;
+let dlnaPrepareInfo = null;
+let dlnaArtistBackup = '';
+let dlnaPrepareWatchdog = null;
+const DLNA_PREPARE_WATCHDOG_MS = 45000;
+
+function dlnaPrepareCopy(info) {
+  const elapsed = ((Number(info.elapsedMs) || 0) / 1000).toFixed(1);
+  const buffered = Number(info.bufferedSec) || 0;
+  const target = Number(info.targetSec) || 0;
+  const mb = Number(info.bufferedMB) || 0;
+  const device = info.deviceName || state.activeDlnaDevice?.name || '串流裝置';
+  switch (info.stage) {
+    case 'buffer':
+      return {
+        stage: `⏳ 串流至 ${device}：記憶體緩衝中`,
+        meta: `已緩衝 ${buffered.toFixed(1)} 秒音訊 / 目標 ${target.toFixed(1)} 秒 · ${mb.toFixed(1)} MB · 已等 ${elapsed} 秒`,
+        ratio: target > 0 ? Math.max(0, Math.min(1, buffered / target)) : null,
+        artist: `⏳ 正在為 ${device} 緩衝音訊（${buffered.toFixed(1)} 秒）…`,
+      };
+    case 'seturi':
+      return { stage: `📡 已連上 ${device}，正在送出曲目…`, meta: `已等 ${elapsed} 秒 · 無需再按播放鍵`, ratio: null, artist: `⏳ 正在通知 ${device} 播放…` };
+    case 'play':
+      return { stage: `📡 已送出播放指令，${device} 正在開播…`, meta: `已等 ${elapsed} 秒 · 無需再按播放鍵`, ratio: null, artist: `⏳ ${device} 正在開播…` };
+    case 'opening':
+      return {
+        stage: `📡 ${device} 開播中`,
+        meta: buffered > 0
+          ? `已緩衝 ${buffered.toFixed(1)} 秒音訊 · 已等 ${elapsed} 秒 · 無需再按播放鍵`
+          : `已等 ${elapsed} 秒 · 無需再按播放鍵`,
+        ratio: null,
+        artist: `⏳ ${device} 開播中…`,
+      };
+    default:
+      return { stage: `⏳ 正在準備串流至 ${device}…`, meta: `已等 ${elapsed} 秒 · 無需再按播放鍵`, ratio: null, artist: `⏳ 正在準備串流至 ${device}…` };
+  }
+}
+
+function updateDlnaPrepareStrip(info) {
+  const strip = document.getElementById('dlnaBufferStrip');
+  const stageEl = document.getElementById('dlnaBufferStage');
+  const fillEl = document.getElementById('dlnaBufferFill');
+  const metaEl = document.getElementById('dlnaBufferMeta');
+  if (!strip || !stageEl || !fillEl || !metaEl) return;
+  const copy = dlnaPrepareCopy(info);
+  strip.style.display = 'flex';
+  strip.classList.toggle('indeterminate', copy.ratio === null);
+  stageEl.textContent = copy.stage;
+  metaEl.textContent = copy.meta;
+  fillEl.style.width = copy.ratio === null ? '0%' : `${Math.round(copy.ratio * 100)}%`;
+  if (playerArtist && copy.artist) playerArtist.textContent = copy.artist;
+}
+
+function beginDlnaPrepareUi(deviceName) {
+  dlnaPreparing = true;
+  dlnaPrepareInfo = { stage: 'preparing', elapsedMs: 0, deviceName: deviceName || '' };
+  if (playerArtist && !dlnaArtistBackup) dlnaArtistBackup = playerArtist.textContent;
+  updateDlnaPrepareStrip(dlnaPrepareInfo);
+  if (dlnaPrepareWatchdog) clearTimeout(dlnaPrepareWatchdog);
+  // 安全網：裝置一直沒有回報開播就不要讓提示卡住，並明確告訴使用者下一步該做什麼
+  dlnaPrepareWatchdog = setTimeout(() => {
+    dlnaPrepareWatchdog = null;
+    if (!dlnaPreparing) return;
+    const waited = ((Number(dlnaPrepareInfo && dlnaPrepareInfo.elapsedMs) || 0) / 1000).toFixed(1);
+    clearDlnaPrepareUi();
+    showToast(`⚠️ 串流準備超過 ${(DLNA_PREPARE_WATCHDOG_MS / 1000).toFixed(0)} 秒（已等 ${waited} 秒）仍未開播：請確認 ${dlnaPrepareInfo && dlnaPrepareInfo.deviceName ? dlnaPrepareInfo.deviceName : '該裝置'} 是否允許外部串流，或再按一次播放鍵重新送出曲目。`);
+  }, DLNA_PREPARE_WATCHDOG_MS);
+}
+
+function clearDlnaPrepareUi() {
+  dlnaPreparing = false;
+  dlnaPrepareInfo = null;
+  if (dlnaPrepareWatchdog) {
+    clearTimeout(dlnaPrepareWatchdog);
+    dlnaPrepareWatchdog = null;
+  }
+  const strip = document.getElementById('dlnaBufferStrip');
+  if (strip) {
+    strip.style.display = 'none';
+    strip.classList.remove('indeterminate');
+    const fillEl = document.getElementById('dlnaBufferFill');
+    if (fillEl) fillEl.style.width = '0%';
+  }
+  if (playerArtist && dlnaArtistBackup) {
+    playerArtist.textContent = dlnaArtistBackup;
+    dlnaArtistBackup = '';
+  }
+}
+
+if (window.electronAPI && window.electronAPI.onDlnaPrepareStatus) {
+  window.electronAPI.onDlnaPrepareStatus((info) => {
+    if (!info) return;
+    if (info.stage === 'playing' || info.stage === 'failed') { clearDlnaPrepareUi(); return; }
+    // 主行程回報即代表正在準備（seek／換下一首也會走同一條路徑）
+    if (!dlnaPreparing) beginDlnaPrepareUi(info.deviceName);
+    dlnaPrepareInfo = Object.assign({}, dlnaPrepareInfo || {}, info);
+    updateDlnaPrepareStrip(dlnaPrepareInfo);
+  });
+}
+
 function togglePlayPause() {
   if (state.currentTrackIndex === -1) {
     if (state.tracks.length > 0) {
@@ -9253,6 +9360,17 @@ function togglePlayPause() {
 
   // If active audio zone is DLNA
   if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
+    if (dlnaPreparing) {
+      // 串流還在準備（引擎調變／記憶體緩衝／裝置開播中）：重複按播放只會讓它暫停或重新播放
+      const info = dlnaPrepareInfo || {};
+      const buffered = Number(info.bufferedSec) || 0;
+      const waited = ((Number(info.elapsedMs) || 0) / 1000).toFixed(1);
+      showToast(buffered > 0
+        ? `⏳ 串流正在準備中：已在記憶體緩衝 ${buffered.toFixed(1)} 秒音訊（已等 ${waited} 秒），開始播放時會自動提示，請先不要再按播放鍵。`
+        : `⏳ 串流正在準備中（已等 ${waited} 秒），開始播放時會自動提示，請先不要再按播放鍵。`);
+      updateDlnaPrepareStrip(Object.assign({ stage: info.stage || 'preparing', elapsedMs: Number(info.elapsedMs) || 0 }, info));
+      return;
+    }
     if (state.isPlaying) {
       state.isPlaying = false;
       updatePlayPauseBtnUI();
@@ -9574,6 +9692,7 @@ function stopPlaybackAtEnd() {
   }
   if (state.activeAudioZone !== 'local' && state.activeDlnaDevice && window.electronAPI && window.electronAPI.stopDlna) {
     window.electronAPI.stopDlna(state.activeDlnaDevice.id).catch(() => {});
+    clearDlnaPrepareUi();
   }
   scrubberFill.style.width = '100%';
   currentTimeLabel.textContent = totalTimeLabel.textContent;
@@ -10396,6 +10515,148 @@ try {
   const rpSpecParams = new URLSearchParams(window.location.search || '');
   if (rpSpecParams.get('testSpectrumSmooth') === '1' && window.electronAPI && window.electronAPI.captureStep) {
     setTimeout(() => { runSpectrumSmoothSelfTest(rpSpecParams.get('fixture') || ''); }, 2600);
+  }
+} catch (err) {}
+
+// ----------------- DLNA 串流準備提示自我測試（main.js --test-dlna-hint） -----------------
+// 用 tools/fake-dlna-renderer.js 的假 MediaRenderer（Play 後位置停在 0 三秒，模擬裝置 ramp-up），
+// 走完整的 playCurrentTrack 流程，斷言：提示立即出現、顯示實際記憶體緩衝、
+// 準備中連按三次播放鍵不會重送串流指令、裝置開播後提示自動消失。
+async function runDlnaPrepareHintSelfTest(fixturePath) {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const waitUntil = async (pred, ms) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      try { if (pred()) return true; } catch (err) {}
+      await sleep(150);
+    }
+    return false;
+  };
+  const saved = {
+    zone: state.activeAudioZone, dev: state.activeDlnaDevice, dsp: state.dsp,
+    queue: state.queue, idx: state.currentTrackIndex, playing: state.isPlaying,
+    dlnaSec: state.dlnaCurrentSec,
+  };
+  const restore = () => {
+    try {
+      if (state.activeDlnaDevice && window.electronAPI && window.electronAPI.stopDlna) {
+        window.electronAPI.stopDlna(state.activeDlnaDevice.id).catch(() => {});
+      }
+    } catch (err) {}
+    state.activeAudioZone = saved.zone;
+    state.activeDlnaDevice = saved.dev;
+    state.dsp = saved.dsp;
+    state.queue = saved.queue;
+    state.currentTrackIndex = saved.idx;
+    state.isPlaying = saved.playing;
+    state.dlnaCurrentSec = saved.dlnaSec;
+    clearDlnaPrepareUi();
+  };
+  const finish = () => {
+    restore();
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(26, report); } catch (err) {}
+  };
+
+  try {
+    if (!fixturePath || !window.electronAPI || !window.electronAPI.getDlnaDevices) {
+      bad('fixture / DLNA IPC 可用', 'fixture=' + fixturePath); finish(); return;
+    }
+    const strip = document.getElementById('dlnaBufferStrip');
+    const metaEl = document.getElementById('dlnaBufferMeta');
+    const fillEl = document.getElementById('dlnaBufferFill');
+    if (!strip || !metaEl || !fillEl) { bad('準備提示 DOM 存在', 'dlnaBufferStrip / 文字 / 進度條'); finish(); return; }
+
+    let dev = null;
+    for (let i = 0; i < 80 && !dev; i++) {
+      const list = await window.electronAPI.getDlnaDevices().catch(() => []);
+      dev = (list || []).find(d => String(d.name || '').includes('rooPlayer 測試串流器'));
+      if (!dev) await sleep(250);
+    }
+    if (!dev) { bad('假 UPnP 裝置已上線（127.0.0.1:49152）', '找不到測試串流器'); finish(); return; }
+    ok('假 UPnP 裝置已上線', dev.name);
+
+    // 開引擎（漸進式 PCM session）才有「記憶體緩衝」階段；選它為輸出裝置
+    state.dsp = Object.assign({}, state.dsp, { enabled: true, rateMode: '96k', filterPhase: 'linear', dsdOrder: 5 });
+    await window.electronAPI.selectDlnaDevice(dev.id).catch(() => {});
+    state.activeAudioZone = dev.id;
+    state.activeDlnaDevice = dev;
+
+    const track = {
+      title: 'DLNA Buffer Hint Test', artist: 'rooPlayer 自我測試', album: 'Self Test', albumArtist: 'rooPlayer 自我測試',
+      fileName: 'exclusive-test-tone.wav', filePath: fixturePath, duration: 14, sampleRate: 44100, bitsPerSample: 24, formatName: 'WAV',
+    };
+    state.queue = [track];
+    state.currentTrackIndex = 0;
+    state.isPlaying = true;
+    state.dlnaCurrentSec = 0;
+
+    playCurrentTrack(); // 不 await：準備階段的斷言要在它 resolve 之前發生
+
+    if (await waitUntil(() => strip.style.display !== 'none', 8000)) ok('按下播放後立即出現準備提示', strip.style.display);
+    else bad('按下播放後立即出現準備提示', 'display=' + strip.style.display);
+
+    let bufferInfo = null;
+    for (let i = 0; i < 50 && !bufferInfo; i++) {
+      if (dlnaPrepareInfo && dlnaPrepareInfo.stage === 'buffer' && Number(dlnaPrepareInfo.bufferedSec) > 0) {
+        bufferInfo = Object.assign({}, dlnaPrepareInfo);
+      } else await sleep(200);
+    }
+    if (bufferInfo) ok('提示顯示記憶體緩衝進度', `已緩衝 ${Number(bufferInfo.bufferedSec).toFixed(1)} 秒 / 目標 ${Number(bufferInfo.targetSec).toFixed(1)} 秒 · ${bufferInfo.bufferedMB} MB`);
+    else bad('提示顯示記憶體緩衝進度', '沒有取得 buffer 階段');
+
+    const metaText = metaEl.textContent || '';
+    if (/秒音訊/.test(metaText) && /已等/.test(metaText)) ok('提示文字寫出緩衝量與已等待時間', metaText.slice(0, 90));
+    else bad('提示文字寫出緩衝量與已等待時間', metaText.slice(0, 90) || '(空)');
+
+    const fillW = parseFloat(fillEl.style.width) || 0;
+    if (fillW > 0 && fillW <= 100) ok('進度條呈現緩衝比例', `${fillW}%`);
+    else bad('進度條呈現緩衝比例', 'width=' + fillEl.style.width);
+
+    try { window.electronAPI.captureStep(25, 'DLNA prepare hint visible'); } catch (err) {}
+    await sleep(500);
+
+    const before = await window.electronAPI.getFakeDlnaRendererActions().catch(() => []);
+    const countOf = (list, action) => (list || []).filter(a => a.action === action).length;
+    const uriBefore = countOf(before, 'SetAVTransportURI');
+    const playBefore = countOf(before, 'Play');
+
+    const btnPlay = document.getElementById('btnPlayPause');
+    for (let i = 0; i < 3; i++) { btnPlay.click(); await sleep(250); }
+
+    if (dlnaPreparing) ok('準備中連按三次播放鍵仍維持準備狀態');
+    else bad('準備中連按三次播放鍵仍維持準備狀態', 'dlnaPreparing=false');
+    if (strip.style.display !== 'none') ok('連按播放鍵後提示仍在畫面上');
+    else bad('連按播放鍵後提示仍在畫面上', '提示被關掉了');
+
+    const after = await window.electronAPI.getFakeDlnaRendererActions().catch(() => []);
+    const uriAfter = countOf(after, 'SetAVTransportURI');
+    const playAfter = countOf(after, 'Play');
+    if (uriAfter === uriBefore && playAfter === playBefore && uriAfter >= 1) {
+      ok('重複按播放鍵不會重送串流指令', `SetAVTransportURI=${uriAfter} Play=${playAfter}（連按三次後相同）`);
+    } else {
+      bad('重複按播放鍵不會重送串流指令', `SetAVTransportURI ${uriBefore}→${uriAfter}、Play ${playBefore}→${playAfter}`);
+    }
+
+    if (await waitUntil(() => strip.style.display === 'none', 30000)) ok('裝置開播後提示自動消失');
+    else bad('裝置開播後提示自動消失', '仍顯示：' + (document.getElementById('dlnaBufferStage') || {}).textContent);
+
+    if ((Number(state.dlnaCurrentSec) || 0) > 0) ok('位置已開始前進', `${Number(state.dlnaCurrentSec).toFixed(2)}s`);
+    else bad('位置已開始前進', 'dlnaCurrentSec=' + state.dlnaCurrentSec);
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  }
+  finish();
+}
+
+try {
+  const rpDlnaParams = new URLSearchParams(window.location.search || '');
+  if (rpDlnaParams.get('testDlnaHint') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runDlnaPrepareHintSelfTest(rpDlnaParams.get('fixture') || ''); }, 2600);
   }
 } catch (err) {}
 
@@ -12143,6 +12404,7 @@ function setupPlayerControls() {
     if (state.activeAudioZone !== 'local' && state.activeDlnaDevice && window.electronAPI && window.electronAPI.stopDlna) {
       window.electronAPI.stopDlna(state.activeDlnaDevice.id).catch(() => {});
     }
+    clearDlnaPrepareUi();
     state.isPlaying = false;
     updatePlayPauseBtnUI();
     playerTitle.textContent = '未播放曲目';
@@ -12413,6 +12675,7 @@ async function switchAudioZone(target) {
       }
       state.activeAudioZone = 'local';
       state.activeDlnaDevice = null;
+      clearDlnaPrepareUi();
       if (window.electronAPI && window.electronAPI.selectDlnaDevice) {
         window.electronAPI.selectDlnaDevice('local').catch(() => {});
       }
@@ -12451,6 +12714,7 @@ async function switchAudioZone(target) {
 
       state.activeAudioZone = dev.id;
       state.activeDlnaDevice = dev;
+      clearDlnaPrepareUi();
       if (window.electronAPI && window.electronAPI.selectDlnaDevice) {
         window.electronAPI.selectDlnaDevice(dev.id).catch(() => {});
       }
