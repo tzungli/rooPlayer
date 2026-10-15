@@ -2314,20 +2314,22 @@
       </button>
       <button id="btnVolumeIcon" class="icon-btn" title="靜音切換">🔊</button>
       <input type="range" id="volumeSlider" min="0" max="1" step="0.01" value="1" class="volume-slider">
-      <button id="btnLineOut" class="icon-btn line-out-btn" title="Line Out：最大音量輸出鎖定（鎖定時不可調音量）">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 2v6"/><path d="M15 2v6"/>
-          <path d="M7 8h10v4a5 5 0 0 1-10 0z"/>
-          <path d="M12 17v5"/>
-        </svg>
-        <span class="line-out-label">LINE OUT</span>
-      </button>
-      <button id="btnExclusive" class="icon-btn exclusive-out-btn" title="WASAPI 獨佔模式：繞過 Windows 混音器，直接以裝置支援的最高取樣率 24-bit 輸出（獨佔期間系統音效暫停、音量鎖定最大）">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 12h2l2-7 3 14 3-11 2 4h6"/>
-        </svg>
-        <span class="exclusive-out-label">EXCLUSIVE</span>
-      </button>
+      <div class="output-mode-stack">
+        <button id="btnLineOut" class="icon-btn line-out-btn" title="Line Out：最大音量輸出鎖定（鎖定時不可調音量）">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 2v6"/><path d="M15 2v6"/>
+            <path d="M7 8h10v4a5 5 0 0 1-10 0z"/>
+            <path d="M12 17v5"/>
+          </svg>
+          <span class="line-out-label">LINE OUT</span>
+        </button>
+        <button id="btnExclusive" class="icon-btn exclusive-out-btn" title="WASAPI 獨佔模式：繞過 Windows 混音器，直接以裝置支援的最高取樣率 24-bit 輸出（獨佔期間系統音效暫停、音量鎖定最大）">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12h2l2-7 3 14 3-11 2 4h6"/>
+          </svg>
+          <span class="exclusive-out-label">EXCLUSIVE</span>
+        </button>
+      </div>
       <button id="btnToggleQueue" class="icon-btn" title="播放清單隊列">
         <span class="queue-icon">☰</span>
       </button>

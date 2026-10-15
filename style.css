@@ -3976,6 +3976,22 @@ body.table-col-resizing * {
   color: #d8b4fe;
 }
 
+/* LINE OUT 與 EXCLUSIVE 上下排列在同一欄：節省播放列橫向空間，兩個開關狀態仍一眼可辨 */
+.output-mode-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.output-mode-stack .line-out-btn,
+.output-mode-stack .exclusive-out-btn {
+  padding: 3px 8px;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
 /* Line Out 鎖定按鈕（最大音量輸出鎖定） */
 .line-out-btn {
   display: inline-flex;
