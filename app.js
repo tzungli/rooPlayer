@@ -6596,7 +6596,7 @@ async function playCurrentTrack() {
     isCurrentSox = false;
     currentDsdOffset = 0;
     currentSoxOffset = 0;
-    state.dlnaCurrentSec = 0;
+    dlnaResetPosClock(0);
     state.dlnaTotalSec = track.duration || 0;
     stopVirtualProgress();
     stopDemoSynth();
@@ -9043,7 +9043,7 @@ function updateNowPlayingPlaybackProgress() {
 
 function getCurrentPlaybackTime() {
   if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
-    return state.dlnaCurrentSec || 0;
+    return dlnaSmoothedPosSec(); // DLNA：連續推算的位置（裝置位置輪詢每 1 秒才一次）
   }
   if (exclusiveActive) return exclusiveSmoothedPosSec() || 0; // 獨佔輸出：連續推算的位置（helper 事件每 250ms 才一次）
   if (isCurrentDsd) {
@@ -9865,7 +9865,7 @@ scrubberBar.addEventListener('click', (e) => {
     if (window.electronAPI && window.electronAPI.seekDlna) {
       window.electronAPI.seekDlna(state.activeDlnaDevice.id, targetSec);
     }
-    state.dlnaCurrentSec = targetSec;
+    dlnaSetAuthoritativePos(targetSec);
     currentTimeLabel.textContent = formatDuration(targetSec);
     scrubberFill.style.width = `${ratio * 100}%`;
     return;
@@ -10371,6 +10371,62 @@ try {
   }
 } catch (err) {}
 
+// 以 rAF 取樣某個時間來源，並分析它是否連續推進（頻譜卡頓的直接原因之一就是時間階梯）
+function sampleClockRaf(getValue, ms) {
+  return new Promise((resolve) => {
+    const samples = [];
+    const t0 = performance.now();
+    const tick = () => {
+      samples.push({ t: performance.now() - t0, v: Number(getValue()) || 0 });
+      if (performance.now() - t0 >= ms) { resolve(samples); return; }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  });
+}
+
+function analyzeClockSamples(samples) {
+  let maxFreezeMs = 0, lastChangeT = samples[0].t, lastV = samples[0].v, changes = 0, backwards = 0;
+  for (const s of samples) {
+    if (s.v < lastV - 1e-6) backwards++;
+    if (Math.abs(s.v - lastV) > 1e-6) {
+      maxFreezeMs = Math.max(maxFreezeMs, s.t - lastChangeT);
+      lastChangeT = s.t; lastV = s.v; changes++;
+    }
+  }
+  const spanMs = samples[samples.length - 1].t - samples[0].t;
+  const advancedSec = samples[samples.length - 1].v - samples[0].v;
+  return { n: samples.length, maxFreezeMs, changes, backwards, spanMs, advancedSec, ratio: advancedSec / (spanMs / 1000) };
+}
+
+// 停滯的成因診斷：取樣本身有沒有斷掉（rAF 沒跑）vs 時間來源真的沒動
+function describeClockGaps(samples, topN = 3) {
+  const gaps = [];
+  for (let i = 1; i < samples.length; i++) {
+    gaps.push({ gapMs: samples[i].t - samples[i - 1].t, from: samples[i - 1].v, to: samples[i].v });
+  }
+  gaps.sort((a, b) => b.gapMs - a.gapMs);
+  return gaps.slice(0, topN).map(g => `${Math.round(g.gapMs)}ms(${g.from.toFixed(3)}→${g.to.toFixed(3)})`).join(' ');
+}
+
+// 連續取頻譜窗：相鄰兩窗內容完全相同 = 頻譜卡頓（取到的還是同一個窗）
+async function sampleSpectrumWindows(getTime, getToken, count, gapMs) {
+  const wins = [];
+  for (let i = 0; i < count; i++) {
+    const t = getTime();
+    let res = null;
+    try { res = await window.electronAPI.getAudioSpectrum(getToken(), t); } catch (err) {}
+    const key = (res && res.left && res.left.length >= 16)
+      ? Array.from(res.left.slice(res.left.length - 8)).map(x => x.toFixed(6)).join(',') : 'null';
+    wins.push({ t, key });
+    await new Promise(r => setTimeout(r, gapMs));
+  }
+  const got = wins.filter(w => w.key !== 'null');
+  let repeats = 0;
+  for (let i = 1; i < got.length; i++) if (got[i].key === got[i - 1].key) repeats++;
+  return { got: got.length, repeats, pairs: Math.max(1, got.length - 1) };
+}
+
 // ----------------- 頻譜順滑度自我測試（main.js --test-spectrum-smooth） -----------------
 // helper 的 pos 事件最快 250ms 一次；若播放位置只跟著事件走，NOW PLAYING 頻譜會連續幾次
 // 取到同一個窗再突然跳一格（卡頓）。這裡直接量「播放位置推進是否連續」與「頻譜窗是否重複」。
@@ -10397,29 +10453,10 @@ async function runSpectrumSmoothSelfTest(fixturePath) {
     };
     tick();
   });
-  const sampleClock = (getValue, ms) => new Promise((resolve) => {
-    const samples = [];
-    const t0 = performance.now();
-    const tick = () => {
-      samples.push({ t: performance.now() - t0, v: Number(getValue()) || 0 });
-      if (performance.now() - t0 >= ms) { resolve(samples); return; }
-      requestAnimationFrame(tick);
-    };
-    tick();
-  });
-  const analyzeClock = (samples) => {
-    let maxFreezeMs = 0, lastChangeT = samples[0].t, lastV = samples[0].v, changes = 0, backwards = 0;
-    for (const s of samples) {
-      if (s.v < lastV - 1e-6) backwards++;
-      if (Math.abs(s.v - lastV) > 1e-6) {
-        maxFreezeMs = Math.max(maxFreezeMs, s.t - lastChangeT);
-        lastChangeT = s.t; lastV = s.v; changes++;
-      }
-    }
-    const spanMs = samples[samples.length - 1].t - samples[0].t;
-    const advancedSec = samples[samples.length - 1].v - samples[0].v;
-    return { n: samples.length, maxFreezeMs, changes, backwards, spanMs, advancedSec, ratio: advancedSec / (spanMs / 1000) };
-  };
+  const sampleClock = sampleClockRaf;
+  const analyzeClock = analyzeClockSamples;
+  const sampleWindows = (count, gapMs) => sampleSpectrumWindows(
+    () => getCurrentPlaybackTime(), () => null, count, gapMs);
 
   const events = [];
   let savedQueue = null, savedIndex = -1, savedPlaying = false, savedIsSox = false, npOpened = false;
@@ -10489,22 +10526,9 @@ async function runSpectrumSmoothSelfTest(fixturePath) {
 
     // 頻譜窗：相鄰兩次取窗若內容完全相同，就是頻譜卡頓的直接原因
     try { window.electronAPI.captureStep(23, 'spectrum windows sampling'); } catch (err) {}
-    const wins = [];
-    for (let i = 0; i < 16; i++) {
-      const t = getCurrentPlaybackTime();
-      let res = null;
-      try { res = await window.electronAPI.getAudioSpectrum(null, t); } catch (err) {}
-      const key = (res && res.left && res.left.length >= 16)
-        ? Array.from(res.left.slice(res.left.length - 8)).map(x => x.toFixed(6)).join(',') : 'null';
-      wins.push({ t, key });
-      await sleep(90);
-    }
-    const got = wins.filter(w => w.key !== 'null');
-    let repeats = 0;
-    for (let i = 1; i < got.length; i++) if (got[i].key === got[i - 1].key) repeats++;
-    const pairs = Math.max(1, got.length - 1);
-    if (got.length >= 12 && repeats / pairs <= 0.1) ok('頻譜窗持續前進（不會重複取同一窗）', `${got.length} 次取窗、相鄰重複 ${repeats} 次`);
-    else bad('頻譜窗持續前進（不會重複取同一窗）', `取得 ${got.length} 次、相鄰重複 ${repeats}/${pairs}`);
+    const winStats = await sampleWindows(16, 90);
+    if (winStats.got >= 12 && winStats.repeats / winStats.pairs <= 0.1) ok('頻譜窗持續前進（不會重複取同一窗）', `${winStats.got} 次取窗、相鄰重複 ${winStats.repeats} 次`);
+    else bad('頻譜窗持續前進（不會重複取同一窗）', `取得 ${winStats.got} 次、相鄰重複 ${winStats.repeats}/${winStats.pairs}`);
   } catch (err) {
     bad('self-test threw', String((err && err.message) || err));
   }
@@ -10552,7 +10576,7 @@ async function runDlnaPrepareHintSelfTest(fixturePath) {
     state.queue = saved.queue;
     state.currentTrackIndex = saved.idx;
     state.isPlaying = saved.playing;
-    state.dlnaCurrentSec = saved.dlnaSec;
+    dlnaResetPosClock(saved.dlnaSec);
     clearDlnaPrepareUi();
   };
   const finish = () => {
@@ -10593,7 +10617,7 @@ async function runDlnaPrepareHintSelfTest(fixturePath) {
     state.queue = [track];
     state.currentTrackIndex = 0;
     state.isPlaying = true;
-    state.dlnaCurrentSec = 0;
+    dlnaResetPosClock(0);
 
     playCurrentTrack(); // 不 await：準備階段的斷言要在它 resolve 之前發生
 
@@ -10645,8 +10669,49 @@ async function runDlnaPrepareHintSelfTest(fixturePath) {
     if (await waitUntil(() => strip.style.display === 'none', 30000)) ok('裝置開播後提示自動消失');
     else bad('裝置開播後提示自動消失', '仍顯示：' + (document.getElementById('dlnaBufferStage') || {}).textContent);
 
+    await waitUntil(() => (Number(state.dlnaCurrentSec) || 0) > 0, 8000);
     if ((Number(state.dlnaCurrentSec) || 0) > 0) ok('位置已開始前進', `${Number(state.dlnaCurrentSec).toFixed(2)}s`);
     else bad('位置已開始前進', 'dlnaCurrentSec=' + state.dlnaCurrentSec);
+
+    // 頻譜順滑度（DLNA）：裝置位置每 1000ms 才輪詢一次，只照著輪詢走就會出現 1 秒階梯
+    dlnaPosTrace = [];
+    const dlnaSamples = [];
+    await new Promise((resolve) => {
+      const t0s = performance.now();
+      const tick = () => {
+        dlnaSamples.push({
+          t: performance.now() - t0s, v: Number(getCurrentPlaybackTime()) || 0,
+          a: Number(state.dlnaCurrentSec) || 0, p: state.isPlaying ? 1 : 0,
+          g: Math.round(dlnaPosRate * 100) / 100, c: Math.round(performance.now() - dlnaPosAuthMs),
+        });
+        if (performance.now() - t0s >= 2500) { resolve(); return; }
+        requestAnimationFrame(tick);
+      };
+      tick();
+    });
+    const trace = dlnaPosTrace; dlnaPosTrace = null;
+    const a = analyzeClockSamples(dlnaSamples);
+    const traceTxt = trace.map((p, i) => {
+      const prev = trace[i - 1];
+      return `${((p.t - trace[0].t) / 1000).toFixed(2)}s:${p.sec.toFixed(2)}${prev ? `(Δ${(p.sec - prev.sec).toFixed(2)}/${((p.t - prev.t) / 1000).toFixed(2)}s)` : ''}`;
+    }).join(' ');
+    const every100 = [];
+    for (let ms = 0; ms <= a.spanMs; ms += 250) {
+      const s = dlnaSamples.find(x => x.t >= ms) || dlnaSamples[dlnaSamples.length - 1];
+      every100.push(`${s.v.toFixed(2)}(a${s.a.toFixed(2)},r${s.g})`);
+    }
+    lines.push(`NOTE DLNA 推算軌跡（每250ms，括號內為裝置回報位置與學出的播放速度）：${every100.join(' ')}｜權威位置更新 ${traceTxt}`);
+    if (a.maxFreezeMs <= 120) ok('DLNA 播放位置連續推進（沒有 1 秒階梯）', `最大停滯 ${Math.round(a.maxFreezeMs)}ms、更新 ${a.changes} 次 / ${(a.spanMs / 1000).toFixed(1)}s`);
+    else bad('DLNA 播放位置連續推進（沒有 1 秒階梯）', `最大停滯 ${Math.round(a.maxFreezeMs)}ms（需要 ≤120ms）`);
+    if (a.ratio > 0.9 && a.ratio < 1.1) ok('DLNA 推算位置與牆鐘一致', `比例 ${a.ratio.toFixed(3)}（推進 ${a.advancedSec.toFixed(2)}s / ${a.spanMs.toFixed(0)}ms）`);
+    else bad('DLNA 推算位置與牆鐘一致', `比例 ${a.ratio.toFixed(3)}`);
+    if (a.backwards === 0) ok('DLNA 推算位置不回跳');
+    else bad('DLNA 推算位置不回跳', `回跳 ${a.backwards} 次`);
+
+    const winStats = await sampleSpectrumWindows(
+      () => getCurrentPlaybackTime(), () => state.activeSpectrumToken || null, 14, 90);
+    if (winStats.got >= 10 && winStats.repeats / winStats.pairs <= 0.1) ok('DLNA 頻譜窗持續前進（不會重複取同一窗）', `${winStats.got} 次取窗、相鄰重複 ${winStats.repeats} 次`);
+    else bad('DLNA 頻譜窗持續前進（不會重複取同一窗）', `取得 ${winStats.got} 次、相鄰重複 ${winStats.repeats}/${winStats.pairs}`);
   } catch (err) {
     bad('self-test threw', String((err && err.message) || err));
   }
@@ -12751,6 +12816,94 @@ async function switchAudioZone(target) {
   if (modal) modal.style.display = 'none';
 }
 
+// ----------------- DLNA 播放位置的連續推算 -----------------
+// 位置輪詢每 1000ms 才一次（dlna-manager.startPositionPolling）。播放位置若只跟著輪詢走，
+// NOW PLAYING 頻譜會連續十幾次取到同一窗、然後突然跳一秒（卡頓），進度條也跳格。
+// 做法：從連續兩次裝置回報學出裝置實際的播放速度（開播前 ramp-up、暫停時就是 0），
+// 用它推算連續位置；推算落後就加速、超前就減速（速度限制 0.35x–1.8x），
+// 所以既不會跳、也不會停住，也不會假設「裝置一定跟著牆鐘前進」而超前一大截。
+let dlnaPosEstSec = 0;         // 目前推算出来的位置
+let dlnaPosEstMs = 0;          // 它最後更新的時刻
+let dlnaPosAuthMs = 0;         // 權威位置（裝置回報的 state.dlnaCurrentSec）到達的時刻
+let dlnaPosAuthSec = 0;        // 那次權威位置的值
+let dlnaPosRate = 0;           // 學出來的裝置播放速度（位置秒 / 牆鐘秒）
+let dlnaPosPollGapMs = 1000;   // 實際輪詢間隔：外推範圍跟著它走
+const DLNA_POS_EXTRAPOLATE_MIN_SEC = 2.0;
+const DLNA_POS_EXTRAPOLATE_MAX_SEC = 6.0;
+const DLNA_POS_RATE_GAIN = 1.2; // 每秒吸收 120% 的誤差（0.3 秒的誤差約 0.3 秒收斂，看不出來）
+const DLNA_POS_ERR_DEADBAND_SEC = 0.05; // 50 毫秒以內的誤差不修正（避免在目標附近来回抖）
+const DLNA_POS_RATE_MIN = -0.25; // 允許慢慢往回收（不可允許一直往前，那會在裝置沒在動時超前一大截）
+const DLNA_POS_RATE_MAX = 1.8;
+const DLNA_POS_RATE_EMA_NEW = 0.7; // 學速度時新樣本權重：兩次輪詢內就能跟上，同時抵銷單次異常值
+const DLNA_POS_JUMP_SEC = 2.5;  // 超過這個量就當成 seek／換曲：直接採用，不平滑吸收
+
+// 外推涵蓋「實際輪詢間隔 × 3」：輪詢比名義間隔慢（SOAP 很慢的裝置、LAN 抖動）時也不會推算到頂停住
+function dlnaPosCapSec() {
+  const gap = Math.min(4000, Math.max(0, dlnaPosPollGapMs)) / 1000;
+  return Math.min(DLNA_POS_EXTRAPOLATE_MAX_SEC, Math.max(DLNA_POS_EXTRAPOLATE_MIN_SEC, gap * 3));
+}
+
+let dlnaPosTrace = null; // 自我測試用：記錄權威位置的更新節奏
+
+function dlnaSetAuthoritativePos(sec) {
+  const now = performance.now();
+  if (dlnaPosTrace) dlnaPosTrace.push({ t: now, sec });
+  const prevSec = Number(dlnaPosAuthSec) || 0;
+  const prevMs = dlnaPosAuthMs;
+  if (prevMs) dlnaPosPollGapMs = now - prevMs;
+
+  const gapSec = prevMs ? (now - prevMs) / 1000 : 0;
+  if (prevMs && gapSec >= 0.2) {
+    if (Math.abs(sec - prevSec) > DLNA_POS_JUMP_SEC) {
+      // seek、跳播、換曲：直接採用新位置，速度假設回到正常播放
+      dlnaPosEstSec = sec;
+      dlnaPosEstMs = now;
+      dlnaPosRate = 1.0;
+    } else {
+      const instRate = Math.max(0, Math.min(2, (sec - prevSec) / gapSec));
+      dlnaPosRate = dlnaPosRate * (1 - DLNA_POS_RATE_EMA_NEW) + instRate * DLNA_POS_RATE_EMA_NEW;
+    }
+  }
+
+  state.dlnaCurrentSec = sec;
+  dlnaPosAuthSec = sec;
+  dlnaPosAuthMs = now;
+}
+
+function dlnaSmoothedPosSec() {
+  const auth = Number(state.dlnaCurrentSec) || 0;
+  const now = performance.now();
+  if (!state.isPlaying || !dlnaPosAuthMs) { // 暫停／尚未開始：不推算，停在裝置回報的位置
+    dlnaPosEstSec = auth;
+    dlnaPosEstMs = now;
+    return Math.max(0, auth);
+  }
+  const dt = Math.min(1.0, (now - dlnaPosEstMs) / 1000);
+  const sinceAuth = Math.min(dlnaPosCapSec(), (now - dlnaPosAuthMs) / 1000);
+  if (dlnaPosEstSec < auth) dlnaPosEstSec = auth; // 推算不可以落後於裝置實際回報的位置（只能往前對齊）
+  const target = auth + dlnaPosRate * sinceAuth; // 裝置沒有在前進時 rate = 0，目標就是真實位置
+  const err = target - dlnaPosEstSec;
+  // 以裝置實際學出来的速度為基準，再用誤差微調（落後加速、超前減速），
+  // 這樣裝置真的在播就一直前進、裝置停在 0 時也不會自己往前跑。
+  // 50 毫秒以內的誤差不修正：否則控制器會在目標附近来回抖（肉眼看不出來但位置會倒退）。
+  const errAdj = Math.abs(err) < DLNA_POS_ERR_DEADBAND_SEC ? 0 : err;
+  const rate = Math.max(DLNA_POS_RATE_MIN, Math.min(DLNA_POS_RATE_MAX, dlnaPosRate + errAdj * DLNA_POS_RATE_GAIN));
+  dlnaPosEstSec = Math.max(0, dlnaPosEstSec + dt * rate);
+  dlnaPosEstMs = now;
+  return dlnaPosEstSec;
+}
+
+function dlnaResetPosClock(sec) {
+  state.dlnaCurrentSec = Number(sec) || 0;
+  const now = performance.now();
+  dlnaPosEstSec = state.dlnaCurrentSec;
+  dlnaPosEstMs = now;
+  dlnaPosAuthSec = state.dlnaCurrentSec;
+  dlnaPosAuthMs = 0;
+  dlnaPosRate = 0;
+  dlnaPosPollGapMs = 1000;
+}
+
 function handleDlnaProgress(prog) {
   if (state.activeAudioZone === 'local' || !prog) return;
 
@@ -12758,13 +12911,14 @@ function handleDlnaProgress(prog) {
   const track = state.queue[state.currentTrackIndex];
   const totalSec = prog.durationSec > 0 ? prog.durationSec : (track ? track.duration : 0);
 
-  state.dlnaCurrentSec = currentSec;
+  dlnaSetAuthoritativePos(currentSec); // state.dlnaCurrentSec = 權威值（頻譜與進度用推算值）
   state.dlnaTotalSec = totalSec;
 
   if (totalSec > 0) {
-    const percent = Math.min(100, (currentSec / totalSec) * 100);
+    const shownSec = dlnaSmoothedPosSec();
+    const percent = Math.min(100, (shownSec / totalSec) * 100);
     scrubberFill.style.width = `${percent}%`;
-    currentTimeLabel.textContent = formatDuration(currentSec);
+    currentTimeLabel.textContent = formatDuration(shownSec);
     totalTimeLabel.textContent = formatDuration(totalSec);
 
     // Front-end safety guard: only trigger when playback is active, past mid-track, and truly reached end

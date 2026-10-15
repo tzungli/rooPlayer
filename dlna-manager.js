@@ -1475,22 +1475,23 @@ class DlnaManager extends EventEmitter {
 
         const stateUpper = (info.state || '').toUpperCase();
 
+        this.emit('playback-progress', {
+          currentSec: actualSec,
+          durationSec: this.currentDurationSec,
+          state: info.state
+        });
+
         // Mark that device has successfully transitioned into PLAYING
         if (stateUpper === 'PLAYING') {
           // 準備提示要等到「真的開始發出聲音」（位置開始前進）才關掉：
           // 很多裝置會先回報 PLAYING 但位置還停在 0（開播前的 ramp-up）。
+          // 位置先送出去、提示後關掉，UI 才不會出現「提示消失但進度還在 0」的空檔。
           if (actualSec > 0 && this._prepareT0) {
             this._playAnnounced = true;
             this.stopPrepareTracking('playing', { positionSec: Number(actualSec.toFixed(2)) });
           }
           this.hasStartedPlaying = true;
         }
-
-        this.emit('playback-progress', {
-          currentSec: actualSec,
-          durationSec: this.currentDurationSec,
-          state: info.state
-        });
 
         // Robust Track Ended Guard:
         // A track has genuinely finished only when it was playing AND:
