@@ -33,6 +33,17 @@
       <button id="btnThemeToggle" class="icon-btn theme-toggle-btn" title="切換深色 / 淺色主題">
         <span id="themeIcon">🌙</span> <span id="themeLabel">深色</span>
       </button>
+      <!-- 介面語言選擇（繁體中文 / English）：選單、按鈕、表格與說明頁全部跟著切換 -->
+      <div class="language-control" id="languageControl" data-i18n-skip>
+        <button id="btnLanguageToggle" class="icon-btn language-toggle-btn" title="選擇介面語言 Language">
+          <span id="languageIcon">🌐</span> <span id="languageLabel">繁體中文</span> <span class="lang-caret">▾</span>
+        </button>
+        <div class="language-menu" id="languageMenu">
+          <div class="language-menu-title">介面語言 / Interface language</div>
+          <button class="language-option" data-lang-option="zh-TW">繁體中文</button>
+          <button class="language-option" data-lang-option="en">English</button>
+        </div>
+      </div>
       <div class="window-controls">
         <button id="btnMinimize" class="win-btn" title="最小化">─</button>
         <button id="btnMaximize" class="win-btn" title="最大化">□</button>
@@ -1462,17 +1473,21 @@
 
           <!-- 2. Detailed Menu User Manual -->
           <div id="aboutSectionManual" class="about-card">
-            <div class="about-card-title">
+            <div class="about-card-title" data-i18n-html="about.manual.title">
               <span class="title-icon">📖</span>
               <h3>各選單功能與操作手冊</h3>
             </div>
-            <p class="section-intro-text">
+            <p class="section-intro-text" data-i18n-html="about.manual.intro">
               rooPlayer 採用直覺的模組化架構，將本地無損音樂收藏與先進 DSP 升頻、參數化等化、卷積濾波與網路串流設備深度融合。以下為各選單的詳細操作說明：
+            </p>
+
+            <p class="section-intro-text" data-i18n-html="about.manual.langnote">
+              <strong>介面語言</strong>：右上角「深色/淺色」按鈕右方的 <strong>🌐 語言選擇</strong>，可切換「繁體中文 / English」；選單、按鈕、表格欄頭、滑鼠提示與本說明頁全部跟著切換，並記憶個人偏好。曲目名稱、演出者名稱、檔案路徑與自訂濾波器名稱屬資料，一律保持原文。
             </p>
 
             <div class="manual-modules-grid">
               <!-- Module 1: 我的音樂庫 -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m1">
                 <div class="manual-item-header">
                   <span class="item-badge">總覽</span>
                   <h4>首頁總覽 (Overview)</h4>
@@ -1490,7 +1505,7 @@
               </div>
 
               <!-- Module 2: 專輯與演出者 -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m2">
                 <div class="manual-item-header">
                   <span class="item-badge">曲庫瀏覽</span>
                   <h4>專輯、演出者與曲目清單 (Albums / Artists / Tracks)</h4>
@@ -1507,7 +1522,7 @@
               </div>
 
               <!-- Module 3: 我的最愛 -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m3">
                 <div class="manual-item-header">
                   <span class="item-badge">收藏管理</span>
                   <h4>我的最愛 (Favorites: 專輯 / 歌曲 / 演出者)</h4>
@@ -1523,7 +1538,7 @@
               </div>
 
               <!-- Module 3B: 播放清單 Playlists -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m4">
                 <div class="manual-item-header">
                   <span class="item-badge" style="background: rgba(139, 92, 246, 0.16); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.35);">播放清單</span>
                   <h4>播放清單 (Playlists: 儲存 / 匯入 / 編輯 / 刪除)</h4>
@@ -1541,7 +1556,7 @@
               </div>
 
               <!-- Module 4: TIDAL Hi-Res 串流探索中心 -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m5">
                 <div class="manual-item-header">
                   <span class="item-badge" style="background: rgba(0, 229, 255, 0.15); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.3);">Hi-Res 串流</span>
                   <h4>TIDAL 串流探索中心 (TIDAL Hi-Res Explorer)</h4>
@@ -1560,7 +1575,7 @@
               </div>
 
               <!-- Module 5: KKBOX 線上串流 -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m6">
                 <div class="manual-item-header">
                   <span class="item-badge" style="background: rgba(37, 213, 255, 0.15); color: #25d5ff; border: 1px solid rgba(37, 213, 255, 0.3);">線上串流</span>
                   <h4>KKBOX 串流中心 (KKBOX Streaming)</h4>
@@ -1577,7 +1592,7 @@
               </div>
 
               <!-- Module 6: 本機資料夾管理與資料庫匯入匯出 -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m7">
                 <div class="manual-item-header">
                   <span class="item-badge">儲存與維護</span>
                   <h4>本機資料夾管理與資料庫維護 (Storage)</h4>
@@ -1593,7 +1608,7 @@
               </div>
 
               <!-- Module 7: 訊號路徑與 DSP 升頻引擎 -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m8">
                 <div class="manual-item-header">
                   <span class="item-badge">核心發燒功能</span>
                   <h4>音訊路徑與升頻引擎 (Signal Path & DSP Engine)</h4>
@@ -1615,7 +1630,7 @@
               </div>
 
               <!-- Module 8: DLNA / UPnP 區域網路串流 -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m9">
                 <div class="manual-item-header">
                   <span class="item-badge">串流端點</span>
                   <h4>音訊輸出裝置與網路串流 (Audio Zones / DLNA / UPnP)</h4>
@@ -1634,7 +1649,7 @@
               </div>
 
               <!-- Module 9: 全域即時搜尋 -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m10">
                 <div class="manual-item-header">
                   <span class="item-badge">智慧檢索</span>
                   <h4>全域即時搜尋 (Global Audiophile Search)</h4>
@@ -1650,7 +1665,7 @@
               </div>
 
               <!-- Module 10: 底欄播放控制與動態全螢幕 -->
-              <div class="manual-item">
+              <div class="manual-item" data-i18n-html="about.manual.m11">
                 <div class="manual-item-header">
                   <span class="item-badge">播放體驗</span>
                   <h4>發燒底欄控制器與動態全螢幕 (Player Controls & Modal)</h4>
@@ -1670,18 +1685,18 @@
 
           <!-- 3. License Terms -->
           <div id="aboutSectionLicense" class="about-card">
-            <div class="about-card-title">
+            <div class="about-card-title" data-i18n-html="about.license.title">
               <span class="title-icon">📜</span>
               <h3>使用授權範圍 (License & Scope of Use)</h3>
             </div>
             <div class="legal-content">
-              <div class="legal-block">
+              <div class="legal-block" data-i18n-html="about.license.b1">
                 <h4>1. 個人與非商業使用授權</h4>
                 <p>
                   rooPlayer 遵循 MIT 授權條款精神開發，供個人愛樂者、發燒音響玩家於個人電腦或家用網路環境中進行非商業性質之音訊播放、母帶數位檔案管理與數位訊號處理（DSP）。
                 </p>
               </div>
-              <div class="legal-block">
+              <div class="legal-block" data-i18n-html="about.license.b2">
                 <h4>2. 第三方元件與開放原始碼宣告</h4>
                 <p>本軟體整合了業界先進的開放原始碼專案與數位訊號處理演算法，相關智財權歸屬其原作者所有：</p>
                 <ul>
@@ -1691,7 +1706,7 @@
                   <li><strong>rooPlayer Native DSP Kernel</strong>：自研 64-bit 浮點多相 FIR 升頻濾波器、參數化等化器 biquad 鏈、分割式頻域卷積引擎與高階 1-bit Delta-Sigma 調變器，全數由本程式自行實作，不使用外部 DSP 函式庫。</li>
                 </ul>
               </div>
-              <div class="legal-block">
+              <div class="legal-block" data-i18n-html="about.license.b3">
                 <h4>3. 串流平台 API 授權遵循</h4>
                 <p>
                   本軟體之線上曲庫功能係透過 KKBOX Open API 開放平台公開介面界接。所有曲目權利、封面圖片及 30 秒音樂試聽片段版權均屬 KKBOX 及各合作唱片公司所有。本程式嚴格遵守其條款，不對 Widevine DRM 加密之付費音訊進行破解或未授權側錄。
@@ -1702,24 +1717,24 @@
 
           <!-- 4. Disclaimer -->
           <div id="aboutSectionDisclaimer" class="about-card">
-            <div class="about-card-title">
+            <div class="about-card-title" data-i18n-html="about.disclaimer.title">
               <span class="title-icon">⚖️</span>
               <h3>免責聲明 (Disclaimer)</h3>
             </div>
             <div class="legal-content">
-              <div class="legal-block">
+              <div class="legal-block" data-i18n-html="about.disclaimer.b1">
                 <h4>1. 音訊硬體輸出與音量防護</h4>
                 <p>
                   本軟體提供發燒級 DSP 升頻超取樣、1-bit DSD 調變以及 DLNA/UPnP 網路端點推送功能。由於高取樣率（如 384 kHz、DSD256、DSD512）會產生極寬頻率響應與高頻能量，使用者在切換升頻模式或更換 DAC 解碼裝置前，<strong>請務必先將音響擴大機或前級音量調至適當大小</strong>，以避免因硬體設備相容性或突波造成揚聲器、耳機或聽力損傷。開發團隊不對因音響器材操作不當所致之硬體損壞承擔責任。
                 </p>
               </div>
-              <div class="legal-block">
+              <div class="legal-block" data-i18n-html="about.disclaimer.b2">
                 <h4>2. 本機音訊檔案安全性</h4>
                 <p>
                   rooPlayer 在執行音樂庫掃描、資料庫匯入/匯出及播放時，皆以<strong>唯讀 (Read-Only)</strong> 方式讀取您的原始無損音訊檔案。從資料庫移除資料夾僅刪除軟體內部的索引快取，不會刪除您實體硬碟中的任何音訊檔案。然而，使用者仍應對重要音樂母帶檔案建立常規備份。
                 </p>
               </div>
-              <div class="legal-block">
+              <div class="legal-block" data-i18n-html="about.disclaimer.b3">
                 <h4>3. 軟體現況提供 (AS-IS)</h4>
                 <p>
                   本軟體依「現況」(AS-IS) 提供，不附帶任何明示或暗示之擔保，包括但不限於特定目的之適用性、不中斷性或無錯誤運作。在適用法律允許的最大範圍內，開發者均不對因使用或無法使用本軟體所產生之任何直接、間接或衍生性損害負責。
@@ -1730,36 +1745,36 @@
 
           <!-- 5. Technical Specifications -->
           <div id="aboutSectionTech" class="about-card">
-            <div class="about-card-title">
+            <div class="about-card-title" data-i18n-html="about.tech.title">
               <span class="title-icon">⚙️</span>
               <h3>核心技術與發燒音訊規格 (Audiophile Specifications)</h3>
             </div>
             <div class="tech-spec-grid">
-              <div class="spec-row">
+              <div class="spec-row" data-i18n-html="about.tech.s1">
                 <span class="spec-label">支援音訊格式</span>
                 <span class="spec-value">FLAC (24/192), WAV (32-bit Float), AIFF, DSF (DSD64/128/256/512), DFF, MP3, M4A, AAC, OGG</span>
               </div>
-              <div class="spec-row">
+              <div class="spec-row" data-i18n-html="about.tech.s2">
                 <span class="spec-label">PCM 升頻引擎</span>
                 <span class="spec-value">自研 64-bit 浮點 Native DSP Kernel：高階 Hermite 插值與七種濾波器相位（線性 / 最小 / 緩衰減混和、高斯窗長脈衝、高斯最小相位、EXT2 近似、PS-EXT2 直譯 FIR，止帶最深 -180 dB）；多相預計算加速架構；支援 2x / 4x 整數倍頻、96k、192k、384k DXD</span>
               </div>
-              <div class="spec-row">
+              <div class="spec-row" data-i18n-html="about.tech.s3">
                 <span class="spec-label">DSD 調變器</span>
                 <span class="spec-value">2 / 5 / 7 階諧振噪聲整形 1-bit Delta-Sigma Modulator (2.8224 MHz ~ 22.5792 MHz，標準 Sony DSF 封裝、規格正確 MSB-first 位元順序)；最多 8 工作核心平行調變，段與段之間以真實暖機音訊無縫接續</span>
               </div>
-              <div class="spec-row">
+              <div class="spec-row" data-i18n-html="about.tech.s4">
                 <span class="spec-label">參數化等化器 (PEQ)</span>
                 <span class="spec-value">6 段全參數化 biquad（低架 / 峰值 / 高架 / 低通 / 高通 / 陷波，20 Hz ~ 20 kHz）；5 種音色預設與 6 組自訂命名儲存槽；自動預降防削頂保護；獨立於升頻引擎作用，引擎關閉時於原生採樣率處理</span>
               </div>
-              <div class="spec-row">
+              <div class="spec-row" data-i18n-html="about.tech.s5">
                 <span class="spec-label">卷積濾波器 (IR)</span>
                 <span class="spec-value">分割式頻域卷積（FFT 4096 / 區塊 2048，支援脈衝響應長度達 262,144  taps）；IR WAV 自動重採樣至播放取樣率、單聲道自動套用雙聲道、響應峰值 &gt; 1 自動衰減防削頂；於 PEQ 之後以 64-bit 浮點處理，線性相位特性完整保留</span>
               </div>
-              <div class="spec-row">
+              <div class="spec-row" data-i18n-html="about.tech.s6">
                 <span class="spec-label">網路串流架構</span>
                 <span class="spec-value">UPnP A/V Architecture v1.0, DLNA MediaRenderer, HTTP Progressive Streaming with Range & Backpressure Flow Control（邊生成邊推送，轉換慢於實時也不中斷）</span>
               </div>
-              <div class="spec-row">
+              <div class="spec-row" data-i18n-html="about.tech.s7">
                 <span class="spec-label">本地資料庫</span>
                 <span class="spec-value">高速 JSON 快取、路徑/元資料多重自動去重、完整我的最愛與播放計數同步機制</span>
               </div>
@@ -2513,6 +2528,8 @@
 
   <script src="genre-utils.js"></script>
   <script src="tidal-service.js"></script>
+  <script src="i18n.js"></script>
+  <script src="i18n-docs-en.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

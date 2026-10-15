@@ -3571,6 +3571,117 @@ body.table-col-resizing * {
   border-color: var(--accent-purple);
 }
 
+/* ----------------- 介面語言選擇（Language switcher：繁體中文 / English） ----------------- */
+.language-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.language-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background-color: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 12px;
+  color: var(--text-main);
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+[data-theme="light"] .language-toggle-btn {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.language-toggle-btn:hover {
+  background-color: rgba(139, 92, 246, 0.15);
+  border-color: var(--accent-purple);
+}
+
+.language-toggle-btn .lang-caret {
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+.language-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 12px;
+  min-width: 210px;
+  background: var(--modal-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 6px;
+  z-index: 4000;
+  box-shadow: var(--card-shadow);
+}
+
+.language-menu-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: 6px 8px 8px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 6px;
+}
+
+.language-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.language-option:hover {
+  background: rgba(139, 92, 246, 0.14);
+  border-color: var(--border-highlight);
+}
+
+.language-option.active {
+  background: rgba(139, 92, 246, 0.22);
+  border-color: var(--accent-purple);
+}
+
+.language-option .lang-check {
+  font-size: 12px;
+  color: var(--accent-purple);
+}
+
+[data-theme="light"] .language-menu {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.14);
+}
+
+[data-theme="light"] .language-option {
+  color: #0f172a;
+}
+
+/* 英文介面時側欄與標題的字串較短，保持既有字級即可；這裡只微調英文的字母間距避免擁擠 */
+[data-lang="en"] .nav-label {
+  letter-spacing: 0.01em;
+}
+
+[data-lang="en"] .page-title {
+  letter-spacing: 0.01em;
+}
+
 [data-theme="light"] .brand-text {
   color: #0f172a;
 }

@@ -628,8 +628,65 @@ function applyRandomHeroGradient() {
   heroBanner.style.background = selectedGradient;
 }
 
+// ----------------- 介面語言選擇（繁體中文 / English） -----------------
+// 語言切換只動介面：選單、按鈕、表格欄頭、提示與說明頁全部跟著換；
+// 曲目名稱、演出者名稱、檔案路徑與使用者自訂濾波器名稱屬資料，一律保持原文。
+const LANGUAGE_LABELS = { 'zh-TW': '繁體中文', 'en': 'English' };
+
+function updateLanguageControlUI() {
+  const lang = (window.I18N && window.I18N.getLanguage()) || 'zh-TW';
+  const label = document.getElementById('languageLabel');
+  if (label) label.textContent = LANGUAGE_LABELS[lang] || '繁體中文';
+  const options = document.querySelectorAll('#languageMenu .language-option');
+  options.forEach((opt) => {
+    const active = opt.getAttribute('data-lang-option') === lang;
+    opt.classList.toggle('active', active);
+    const check = opt.querySelector('.lang-check');
+    if (check) check.textContent = active ? '✓' : '';
+  });
+}
+
+function setupLanguageControls() {
+  if (!window.I18N) return;
+  const btn = document.getElementById('btnLanguageToggle');
+  const menu = document.getElementById('languageMenu');
+
+  if (btn && menu) {
+    menu.style.display = 'none';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menu.style.display = (menu.style.display === 'none' || !menu.style.display) ? 'block' : 'none';
+    });
+    menu.addEventListener('click', (e) => e.stopPropagation());
+    document.querySelectorAll('#languageMenu .language-option').forEach((opt) => {
+      opt.addEventListener('click', () => {
+        menu.style.display = 'none';
+        const lang = opt.getAttribute('data-lang-option');
+        if (lang === 'en' || lang === 'zh-TW') window.I18N.setLanguage(lang);
+      });
+    });
+    document.addEventListener('click', () => {
+      if (menu.style.display !== 'none') menu.style.display = 'none';
+    });
+  }
+
+  // 先把既有介面換成上次選擇的語言（不觸發重新渲染）
+  window.I18N.applyLanguage(window.I18N.getLanguage(), { notify: false });
+  updateLanguageControlUI();
+}
+
+// i18n.js 在語言改變後會呼叫這裡：把各檢視標脏並重新渲染，動態內容立刻是新語言。
+window.onAppLanguageChanged = function () {
+  updateLanguageControlUI();
+  try { Object.keys(viewDirtyState).forEach((k) => { viewDirtyState[k] = true; }); } catch (e) {}
+  try { renderViewIfNeeded(state.currentView || 'overview'); } catch (e) {}
+  try { renderQueue(); } catch (e) {}
+  setTimeout(() => { try { window.I18N.refresh(); } catch (e) {} }, 80);
+};
+
 // ----------------- Initialization -----------------
 async function initApp() {
+  setupLanguageControls();
   initTheme();
   applyRandomHeroGradient();
   initFavorites();
@@ -8343,6 +8400,12 @@ async function runUfLayoutSelfTest() {
   });
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+  // 升頻引擎關閉時 SOX 卡片本體是隱藏的（.dsp-sox-card:not(.active) .dsp-sox-body），
+  // 而自訂濾波器列就在裡面；測試需要它可見，所以先把引擎開啟，結束時原樣還原。
+  const dspEnabledBefore = !!(state.dsp && state.dsp.enabled);
+  const soxToggleEl = document.getElementById('toggleSoxDsp');
+  const soxCardEl = document.querySelector('.dsp-sox-card');
+
   try {
     if (!window.electronAPI || !window.electronAPI.captureStep) { bad('capture IPC available'); finish(); return; }
 
@@ -8352,6 +8415,11 @@ async function runUfLayoutSelfTest() {
     if (!modal || !strip || !panel) { bad('訊號路徑視窗與自訂濾波器面板存在'); finish(); return; }
     const modalWasOpen = (modal.style.display || '') === 'flex';
     modal.style.display = 'flex';
+
+    state.dsp = Object.assign({}, state.dsp, { enabled: true });
+    if (soxToggleEl) soxToggleEl.checked = true;
+    if (soxCardEl) soxCardEl.classList.add('active');
+    try { updateSignalPathUI(); } catch (e) {}
 
     openUfEditor();
     const ready = await waitFor(() => {
@@ -8495,6 +8563,12 @@ async function runUfLayoutSelfTest() {
       closeUfEditor();
       const m = document.getElementById('signalPathModal');
       if (m && (m.style.display || '') === 'flex' && !window.__ufLayoutKeepModalOpen) m.style.display = 'none';
+    } catch (e) {}
+    try {
+      state.dsp = Object.assign({}, state.dsp, { enabled: dspEnabledBefore });
+      if (soxToggleEl) soxToggleEl.checked = dspEnabledBefore;
+      if (soxCardEl) soxCardEl.classList.toggle('active', dspEnabledBefore);
+      updateSignalPathUI();
     } catch (e) {}
   }
   finish();
@@ -11011,6 +11085,142 @@ try {
   const rpPlParams = new URLSearchParams(window.location.search || '');
   if (rpPlParams.get('testPlaylists') === '1' && window.electronAPI && window.electronAPI.captureStep) {
     setTimeout(() => { runPlaylistsSelfTest(); }, 2600);
+  }
+} catch (err) {}
+
+// ----------------- 介面語言自我測試（main.js --test-language） -----------------
+// 檢查：語言選擇按鈕在深色/淺色按鈕右方、選 English 後選單/表格/說明頁都變成英文、
+// 曲目與演出者名稱不被翻譯、偏好會記住、換回中文可完整還原。
+async function runLanguageSelfTest() {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(35, report); } catch (err) {}
+  };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const CJK = /[\u3400-\u9fff]/;
+  const textOf = (sel) => {
+    const el = document.querySelector(sel);
+    return el ? String(el.textContent || '').replace(/\s+/g, ' ').trim() : null;
+  };
+  const langBefore = (window.I18N && window.I18N.getLanguage()) || 'zh-TW';
+
+  try {
+    if (!window.I18N) {
+      bad('i18n.js 已載入', 'window.I18N 不存在');
+      finish();
+      return;
+    }
+
+    // --- 1. 語言按鈕在主題切換按鈕的右方 ---
+    const themeBtn = document.getElementById('btnThemeToggle');
+    const langBtn = document.getElementById('btnLanguageToggle');
+    const menu = document.getElementById('languageMenu');
+    const toRight = !!(themeBtn && langBtn && (themeBtn.compareDocumentPosition(langBtn) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const inTitlebar = !!(langBtn && langBtn.closest('.titlebar-right'));
+    const opts = Array.from(document.querySelectorAll('#languageMenu .language-option')).map(b => b.getAttribute('data-lang-option'));
+    if (toRight && inTitlebar && opts.join(',') === 'zh-TW,en') {
+      ok('語言選擇在深色/淺色按鈕右方，選項為 繁體中文 / English', `順序 主題→語言、位置 .titlebar-right、選項 ${opts.join('/')}`);
+    } else {
+      bad('語言選擇在深色/淺色按鈕右方，選項為 繁體中文 / English', `toRight=${toRight} inTitlebar=${inTitlebar} opts=${opts.join(',')}`);
+    }
+
+    // --- 2. 選 English：選單、表格、說明頁都變成英文 ---
+    const navAlbumsZh = textOf('#sidebar .nav-item[data-view="albums"] .nav-label');
+    const demoTrackName = (() => {
+      const t = (state.tracks && state.tracks[0]) ? String(state.tracks[0].title || '') : '';
+      return t;
+    })();
+    window.I18N.setLanguage('en');
+    await sleep(700);
+
+    const navAlbumsEn = textOf('#sidebar .nav-item[data-view="albums"] .nav-label');
+    const navGenresEn = textOf('#sidebar .nav-item[data-view="genres"] .nav-label');
+    const navPlaylistsEn = textOf('#sidebar .nav-item[data-view="playlists"] .nav-label');
+    const themeLabelEn = textOf('#themeLabel');
+    const langLabelEn = textOf('#languageLabel');
+    const navLeft = Array.from(document.querySelectorAll('#sidebar .nav-label')).map(el => String(el.textContent || '').trim());
+    const leftChinese = navLeft.filter(t => CJK.test(t));
+    if (navAlbumsEn === 'Albums' && navGenresEn === 'Genres' && navPlaylistsEn === 'Playlists' && leftChinese.length === 0) {
+      ok('選 English 後左側選單全部變成英文', `Albums / Genres / Playlists，殘留中文 ${leftChinese.length} 筆`);
+    } else {
+      bad('選 English 後左側選單全部變成英文', `albums=${navAlbumsEn} genres=${navGenresEn} playlists=${navPlaylistsEn} 殘留=${leftChinese.join(' | ')}`);
+    }
+    if (themeLabelEn === 'Dark' || themeLabelEn === 'Light') ok('主題按鈕文字也跟著換英文', themeLabelEn);
+    else bad('主題按鈕文字也跟著換英文', String(themeLabelEn));
+    if (langLabelEn === 'English') ok('語言按鈕顯示目前語言名稱（不翻譯）', langLabelEn);
+    else bad('語言按鈕顯示目前語言名稱（不翻譯）', String(langLabelEn));
+
+    // 表格欄頭（動態渲染出來的內容也要翻）
+    navigateTo('tracks');
+    await sleep(900);
+    const trackHeaders = Array.from(document.querySelectorAll('#allTracksTable thead th')).map(th => String(th.textContent || '').replace(/\s+/g, ' ').trim());
+    const subtitleEn = textOf('#viewTracks .page-subtitle');
+    const pageTitleEn = textOf('#viewTracks .page-title');
+    if (trackHeaders.length >= 3 && !trackHeaders.some(h => CJK.test(h))) {
+      ok('曲目頁表格欄頭與頁面副標變成英文', `欄頭 ${trackHeaders.join(' / ')}、副標 ${subtitleEn}、標題 ${pageTitleEn}`);
+    } else {
+      bad('曲目頁表格欄頭與頁面副標變成英文', `欄頭 ${trackHeaders.join(' / ')}、副標 ${subtitleEn}、標題 ${pageTitleEn}`);
+    }
+
+    // 曲目與演出者名稱屬資料，不可被翻譯
+    const rowTitles = Array.from(document.querySelectorAll('#allTracksTable tbody .track-name-span')).slice(0, 5).map(el => String(el.textContent || '').trim());
+    const stillData = rowTitles.length > 0 && (!demoTrackName || rowTitles.some(t => t === demoTrackName || t.includes(demoTrackName)));
+    if (stillData) ok('曲目名稱與演出者名稱保持原文（不被翻譯）', `${rowTitles.length} 筆列舉：${rowTitles.slice(0, 2).join(' / ')}`);
+    else bad('曲目名稱與演出者名稱保持原文（不被翻譯）', `列舉 ${rowTitles.join(' / ')}（期望含 ${demoTrackName}）`);
+
+    // 說明頁整段英文
+    navigateTo('about');
+    await sleep(700);
+    const aboutTitleEn = textOf('#aboutSectionManual .about-card-title h3');
+    const moduleEn = textOf('#aboutSectionManual .manual-item[data-i18n-html="about.manual.m4"] h4');
+    const moduleBodyEn = textOf('#aboutSectionManual .manual-item[data-i18n-html="about.manual.m4"] li');
+    const specEn = textOf('#aboutSectionTech .spec-row .spec-label');
+    if (aboutTitleEn && /Menu features/i.test(aboutTitleEn) && /Playlists/i.test(moduleEn || '') && /Save/i.test(moduleBodyEn || '') && /Supported audio formats/i.test(specEn || '')) {
+      ok('說明頁各段落整段換成英文', `${aboutTitleEn} / ${moduleEn} / ${specEn}`);
+    } else {
+      bad('說明頁各段落整段換成英文', `${aboutTitleEn} / ${moduleEn} / ${moduleBodyEn} / ${specEn}`);
+    }
+
+    const storedEn = localStorage.getItem('rooplayer_language');
+    if (storedEn === 'en') ok('語言偏好寫入 localStorage', `rooplayer_language=${storedEn}`);
+    else bad('語言偏好寫入 localStorage', `stored=${storedEn}`);
+
+    try { window.electronAPI.captureStep(33, 'English UI'); } catch (err) {}
+    await sleep(200);
+
+    // --- 3. 換回中文：完整還原 ---
+    window.I18N.setLanguage('zh-TW');
+    await sleep(900);
+    const navAlbumsBack = textOf('#sidebar .nav-item[data-view="albums"] .nav-label');
+    const debugProbe = (() => {
+      try { return JSON.stringify(window.I18N.__debugNode('#sidebar .nav-item[data-view="albums"] .nav-label')); } catch (e) { return 'debug failed: ' + String(e); }
+    })();
+    const moduleBack = textOf('#aboutSectionManual .manual-item[data-i18n-html="about.manual.m4"] h4');
+    const headerBack = Array.from(document.querySelectorAll('#allTracksTable thead th')).map(th => String(th.textContent || '').trim());
+    if (navAlbumsBack === navAlbumsZh && /播放清單/.test(moduleBack || '') && headerBack.some(h => CJK.test(h))) {
+      ok('換回繁體中文後選單與說明頁完整還原', `${navAlbumsBack} / ${moduleBack} / ${headerBack.slice(0, 3).join(' ')}`);
+    } else {
+      bad('換回繁體中文後選單與說明頁完整還原', `選單=${navAlbumsBack}（原 ${navAlbumsZh}）說明=${moduleBack} 欄頭=${headerBack.join(' ')} debug=${debugProbe}`);
+    }
+    try { window.electronAPI.captureStep(34, 'Chinese UI'); } catch (err) {}
+    await sleep(200);
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  } finally {
+    try { window.I18N.setLanguage(langBefore); } catch (e) {}
+    await sleep(300);
+  }
+  finish();
+}
+
+try {
+  const rpLangParams = new URLSearchParams(window.location.search || '');
+  if (rpLangParams.get('testLanguage') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runLanguageSelfTest(); }, 2600);
   }
 } catch (err) {}
 
