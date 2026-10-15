@@ -5935,6 +5935,54 @@ body.table-col-resizing * {
   text-overflow: ellipsis;
 }
 
+/* 歌名右側欄位：比對到本機 / TIDAL 的同一首歌時顯示圖示，點擊圖示連結到該專輯頁 */
+.kkbox-track-match-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 84px;
+  flex-shrink: 0;
+  margin-right: 12px; /* 與右側時間／播放按鈕保持距離 */
+}
+
+.kkbox-match-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.kkbox-match-local {
+  color: var(--accent-green, #10b981);
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.kkbox-match-local:hover {
+  background: rgba(16, 185, 129, 0.26);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.35);
+}
+
+.kkbox-match-tidal {
+  color: #00e5ff;
+  background: rgba(0, 229, 255, 0.10);
+  border-color: rgba(0, 229, 255, 0.35);
+}
+
+.kkbox-match-tidal:hover {
+  background: rgba(0, 229, 255, 0.22);
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.3);
+}
+
 .kkbox-track-row-right {
   display: flex;
   align-items: center;
@@ -6259,6 +6307,18 @@ body.table-col-resizing * {
 
 [data-theme="light"] .kkbox-track-artist {
   color: var(--text-muted);
+}
+
+[data-theme="light"] .kkbox-match-local {
+  color: #047857;
+  background: rgba(5, 150, 105, 0.12);
+  border-color: rgba(5, 150, 105, 0.4);
+}
+
+[data-theme="light"] .kkbox-match-tidal {
+  color: #0e7490;
+  background: rgba(8, 145, 178, 0.10);
+  border-color: rgba(8, 145, 178, 0.35);
 }
 
 [data-theme="light"] .kkbox-playlist-card {

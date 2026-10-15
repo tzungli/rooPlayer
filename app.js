@@ -1640,7 +1640,11 @@ function matchItemGenre(item, genreName) {
 }
 
 // Group Tracks into Albums, Artists, Genres
+// 曲庫每次重建就遞增；歌曲層級比對索引以此判斷是否需要重建
+let libraryCollectionVersion = 0;
+
 function rebuildLibraryCollections() {
+  libraryCollectionVersion++;
   const albumMap = new Map();
   const artistMap = new Map();
   const genreSet = new Set();
@@ -11528,6 +11532,419 @@ function formatDuration(sec) {
 }
 
 // ============================================================
+// 歌曲層級比對：KKBOX 歌曲清單 ➔ 本機曲庫 / TIDAL 的同一首歌
+// 基準：正規化歌名完全相同（去括號、去 " - Remastered 2011" 這類尾註、去 feat. 之後文字），
+// 且演出者相同或以合作串接方式包含（"Queen + David Bowie" 可，"Beatles Cover Band" 不可）。
+// 命中後在歌名右側顯示「本機」或「TIDAL」圖示，點擊連結到該專輯頁面。
+// ============================================================
+const SONG_MATCH_TITLE_NOISE = /\s*[-–—]\s*(\d{4}\s*)?(remaster\w*|remix\w*|mix|edit|version|live|acoustic|mono|stereo|single|radio edit|deluxe|bonus\w*|instrumental|demo|karaoke|cover)\b.*$/i;
+const SONG_MATCH_COLLAB_SEP = /^\s*[,&\/+／＆]|feat|vs\.|\sand\s|＆/i;
+
+function normalizeSongKey(text) {
+  return String(text || '')
+    .toLowerCase()
+    // 重音符拆成基字＋組合記號後再移除：Beyoncé ➔ beyonce、Sigur Rós ➔ sigur ros
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+    .replace(/\b(feat\.?|ft\.?|featuring|with|vs\.?|pres\.?)\b.*$/i, '')
+    .replace(SONG_MATCH_TITLE_NOISE, '')
+    .replace(/[^0-9a-z\u4e00-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function artistKeysMatch(rawA, rawB) {
+  const a = normalizeSongKey(rawA);
+  const b = normalizeSongKey(rawB);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  const rawShorter = a.length <= b.length ? rawA : rawB;
+  const rawLonger = a.length <= b.length ? rawB : rawA;
+  if (shorter.length < 2 || !longer.startsWith(shorter)) return false;
+  // 多出來的部分必須像合作串接，否則可能是翻唱團體／致敬專輯等不同演出者
+  const rest = String(rawLonger || '').toLowerCase();
+  const head = String(rawShorter || '').toLowerCase();
+  const at = rest.indexOf(head);
+  if (at < 0) return false;
+  return SONG_MATCH_COLLAB_SEP.test(rest.slice(at + head.length));
+}
+
+function songMatchKeyOf(title, artist) {
+  return `${normalizeSongKey(title)}|||${normalizeSongKey(artist)}`;
+}
+
+// 依正規化歌名索引整庫（同名的不同演出者寫法在比對階段再判定）；曲庫重建時自動失效
+let songMatchIndex = null;
+let songMatchIndexVersion = -1;
+
+function getSongMatchIndex() {
+  if (songMatchIndex && songMatchIndexVersion === libraryCollectionVersion) return songMatchIndex;
+  const map = new Map();
+  state.albums.forEach(alb => {
+    (alb.tracks || []).forEach(t => {
+      const titleKey = normalizeSongKey(t.title);
+      if (!titleKey) return;
+      let list = map.get(titleKey);
+      if (!list) { list = []; map.set(titleKey, list); }
+      if (list.length >= 24 || list.some(e => e.albumId === alb.id)) return;
+      list.push({ albumId: alb.id, rawArtist: t.artist || alb.artist || '', isTidal: !!alb.isTidal, album: alb });
+    });
+  });
+  songMatchIndex = map;
+  songMatchIndexVersion = libraryCollectionVersion;
+  return map;
+}
+
+// 回傳 [{ kind: 'local' | 'tidal', album }]：同一來源只取一張（優先曲目較多的正式專輯）
+function findLibraryMatchesForSong(title, artist) {
+  const titleKey = normalizeSongKey(title);
+  if (!titleKey) return [];
+  const entries = getSongMatchIndex().get(titleKey) || [];
+  const hits = entries
+    .filter(e => artistKeysMatch(artist, e.rawArtist))
+    .sort((x, y) => ((y.album.tracks || []).length) - ((x.album.tracks || []).length));
+  const picked = [];
+  const seen = new Set();
+  hits.forEach(h => {
+    const kind = h.isTidal ? 'tidal' : 'local';
+    if (seen.has(kind)) return;
+    seen.add(kind);
+    picked.push({ kind, album: h.album });
+  });
+  return picked;
+}
+
+// TIDAL 端比對結果與查詢快取（含「查無」也快取，避免重複請求）
+const kkboxTidalMatchCache = new Map();
+let kkboxTidalLookupSeq = 0;
+
+async function lookupTidalMatchForSong(title, artist) {
+  const key = songMatchKeyOf(title, artist);
+  if (kkboxTidalMatchCache.has(key)) return kkboxTidalMatchCache.get(key);
+  if (!window.tidalService || !window.tidalService.isLoggedIn) return null;
+  try {
+    const res = await window.tidalService.api('/search', { query: `${title} ${artist}`, limit: 8 });
+    const items = (res && res.tracks && res.tracks.items) || [];
+    for (const raw of items) {
+      const t = window.tidalService.normalizeTrack(raw);
+      if (!t) continue;
+      if (normalizeSongKey(t.title) !== normalizeSongKey(title)) continue;
+      if (!artistKeysMatch(artist, t.artist)) continue;
+      const albumId = raw.album ? (raw.album.id || raw.album.albumId) : null;
+      if (!albumId) continue;
+      const found = { albumId: String(albumId), albumTitle: t.album || '', artist: t.artist || '' };
+      kkboxTidalMatchCache.set(key, found);
+      return found;
+    }
+    kkboxTidalMatchCache.set(key, null); // 查詢成功但沒有同一首歌
+  } catch (e) {
+    return null; // 連線失敗不快取，下次仍可再查
+  }
+  return null;
+}
+
+const SONG_MATCH_ICON_LOCAL = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="2.6"></circle></svg>';
+const SONG_MATCH_ICON_TIDAL = '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M4 10.182L7.273 7 10.545 10.182 7.273 13.364 4 10.182zm6.545 6.545L13.818 13.545 17.091 16.727 13.818 19.909 10.545 16.727zm0-13.09L13.818 0.455 17.091 3.636 13.818 6.818 10.545 3.636zm6.545 6.545L20.364 7 23.636 10.182 20.364 13.364 17.091 10.182z"></path></svg>';
+
+async function openMatchedSongAlbum(hit) {
+  if (!hit) return;
+  if (hit.album) {
+    openAlbumDetail(hit.album);
+    showToast(`已開啟${hit.kind === 'tidal' ? ' TIDAL' : '本機'}專輯《${hit.album.title}》`);
+    return;
+  }
+  if (hit.tidal && window.tidalService && window.tidalService.isLoggedIn) {
+    try {
+      const data = await window.tidalService.getAlbum(hit.tidal.albumId);
+      if (data && data.album) {
+        openAlbumDetail(data.album);
+        showToast(`已開啟 TIDAL 專輯《${data.album.title}》`);
+      } else {
+        showToast('無法取得該 TIDAL 專輯資料');
+      }
+    } catch (e) {
+      showToast(`取得 TIDAL 專輯失敗：${String((e && e.message) || e)}`);
+    }
+  }
+}
+
+function createSongMatchBadge(kind, hit) {
+  const btn = document.createElement('button');
+  btn.className = `kkbox-match-badge ${kind === 'tidal' ? 'kkbox-match-tidal' : 'kkbox-match-local'}`;
+  btn.dataset.matchKind = kind;
+  const albumTitle = hit.album ? hit.album.title : (hit.tidal ? hit.tidal.albumTitle : '');
+  btn.title = kind === 'tidal'
+    ? `TIDAL 有此曲：《${albumTitle}》— 點擊開啟 TIDAL 專輯頁`
+    : `本機音樂庫收有此曲：《${albumTitle}》— 點擊開啟本機專輯頁`;
+  btn.innerHTML = (kind === 'tidal' ? SONG_MATCH_ICON_TIDAL : SONG_MATCH_ICON_LOCAL) + `<span>${kind === 'tidal' ? 'TIDAL' : '本機'}</span>`;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openMatchedSongAlbum(hit);
+  });
+  return btn;
+}
+
+function buildSongMatchCell(track) {
+  const cell = document.createElement('div');
+  cell.className = 'kkbox-track-match-cell';
+  const hits = findLibraryMatchesForSong(track.title, track.artist);
+  const cached = kkboxTidalMatchCache.get(songMatchKeyOf(track.title, track.artist));
+  if (cached && !hits.some(h => h.kind === 'tidal')) hits.push({ kind: 'tidal', tidal: cached });
+  hits.forEach(h => cell.appendChild(createSongMatchBadge(h.kind, h)));
+  return cell;
+}
+
+// 清單渲染後，為尚未命中的列向 TIDAL 補比對（有上限、可中斷、結果快取）
+async function annotateKkboxRowsWithTidal(trackList, rows) {
+  if (!window.tidalService || !window.tidalService.isLoggedIn) return;
+  const seq = ++kkboxTidalLookupSeq;
+  const pending = [];
+  trackList.forEach((track, i) => {
+    const row = rows[i];
+    if (!row) return;
+    const key = songMatchKeyOf(track.title, track.artist);
+    if (kkboxTidalMatchCache.has(key)) return;
+    if (findLibraryMatchesForSong(track.title, track.artist).some(h => h.kind === 'tidal')) return;
+    pending.push({ track, row });
+  });
+  const batch = pending.slice(0, 24);
+  if (!batch.length) return;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < batch.length) {
+      const item = batch[cursor++];
+      const found = await lookupTidalMatchForSong(item.track.title, item.track.artist);
+      if (seq !== kkboxTidalLookupSeq) return;
+      if (state.currentView !== 'kkbox' || !document.body.contains(item.row)) return;
+      if (!found) continue;
+      const cell = item.row.querySelector('.kkbox-track-match-cell');
+      if (cell && !cell.querySelector('[data-match-kind="tidal"]')) {
+        cell.appendChild(createSongMatchBadge('tidal', { tidal: found }));
+      }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+}
+
+// ----------------- KKBOX 比對欄位執行期自我測試（main.js --test-kkbox-match） -----------------
+// ① 比對規則單元檢查 ② 以真實 KKBOX 排行榜第一列注入同名的本機專輯，驗證「本機」圖示與點擊後
+// 開啟本機專輯頁 ③ 以假 TIDAL 服務驗證「TIDAL」圖示與點擊後開啟 TIDAL 專輯頁。
+async function runKkboxMatchSelfTest() {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(14, report); } catch (err) {}
+  };
+  const waitFor = (pred, ms) => new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => {
+      let value = false;
+      try { value = !!pred(); } catch (e) { value = false; }
+      if (value) { resolve(true); return; }
+      if (Date.now() - t0 > ms) { resolve(false); return; }
+      setTimeout(tick, 150);
+    };
+    tick();
+  });
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  const realTidalService = window.tidalService;
+  let injectedIds = [];
+
+  try {
+    if (!window.electronAPI || !window.electronAPI.captureStep) { bad('capture IPC available'); finish(); return; }
+
+    // ① 比對規則
+    const titleCases = [
+      ['Legacy Song (Remastered 2011)', 'Legacy Song - 2011 Remastered', true],
+      ['Shape of You (Official Video)', 'Shape of You', true],
+      ['Blue Rondo à la Turk', 'Blue Rondo A La Turk', true],
+      ['Take Five', 'Take Five (Single Edit)', true],
+      ['Alpha Song', 'Beta Song', false]
+    ];
+    const wrongTitles = titleCases.filter(([a, b, want]) => (normalizeSongKey(a) === normalizeSongKey(b)) !== want);
+    if (!wrongTitles.length) ok('song title normalization', `${titleCases.length} cases`);
+    else bad('song title normalization', wrongTitles.map(c => `${c[0]} vs ${c[1]} want=${c[2]}`).join(', '));
+
+    const artistCases = [
+      ['Adele', 'Adele', true],
+      ['Queen + David Bowie', 'Queen & David Bowie', true],
+      ['張學友', '張學友 / 高勝美', true],
+      ['The Beatles', 'Beatles Cover Band', false],
+      ['Queen', 'Queen Worship Ensemble', false]
+    ];
+    const wrongArtists = artistCases.filter(([a, b, want]) => artistKeysMatch(a, b) !== want);
+    if (!wrongArtists.length) ok('artist identity rules', `${artistCases.length} cases`);
+    else bad('artist identity rules', wrongArtists.map(c => `${c[0]} vs ${c[1]} want=${c[2]}`).join(', '));
+
+    // ② 真實 KKBOX 排行榜：取第一列注入同名的本機專輯
+    navigateTo('kkbox');
+    const listEl = document.getElementById('kkboxChartTracksList');
+    if (!listEl) { bad('KKBOX chart list element exists'); finish(); return; }
+    const rowsReady = await waitFor(() => listEl.querySelectorAll('.kkbox-track-row').length > 0, 30000);
+    const rowCount = listEl.querySelectorAll('.kkbox-track-row').length;
+    if (!rowsReady) {
+      bad('KKBOX chart rows loaded', `rows=${rowCount} text=${(listEl.textContent || '').slice(0, 80)}`);
+      finish();
+      return;
+    }
+    const firstTitleEl = listEl.querySelector('.kkbox-track-row .kkbox-track-title');
+    const firstArtistEl = listEl.querySelector('.kkbox-track-row .kkbox-track-artist');
+    const kkTitle = firstTitleEl ? firstTitleEl.textContent.trim() : '';
+    const kkArtist = firstArtistEl ? firstArtistEl.textContent.split(' • ')[0].trim() : '';
+    if (!kkTitle || !kkArtist) { bad('KKBOX first row title/artist readable', `title=${kkTitle} artist=${kkArtist}`); finish(); return; }
+    ok('KKBOX chart rows loaded', `rows=${rowCount} target="${kkTitle}" / "${kkArtist}"`);
+
+    const now = Date.now();
+    injectedIds = ['kkm1', 'kkm2'];
+    state.tracks = [...state.tracks,
+      { id: 'kkm1', title: kkTitle, trackNumber: 1, duration: 200, album: 'KKBOX Match Test Album', artist: kkArtist, albumArtist: kkArtist, year: 2001, genre: 'Test', formatName: 'FLAC', sampleRate: 96000, bitsPerSample: 24, isLossless: true, addedAt: now, filePath: 'D:\\__rp_kkbox_match__.flac' },
+      { id: 'kkm2', title: 'Another Track On Test Album', trackNumber: 2, duration: 180, album: 'KKBOX Match Test Album', artist: kkArtist, albumArtist: kkArtist, year: 2001, genre: 'Test', formatName: 'FLAC', sampleRate: 96000, bitsPerSample: 24, isLossless: true, addedAt: now, filePath: 'D:\\__rp_kkbox_match_2__.flac' }
+    ];
+    rebuildLibraryCollections();
+
+    const hits = findLibraryMatchesForSong(kkTitle, kkArtist);
+    if (hits.length === 1 && hits[0].kind === 'local' && hits[0].album.title === 'KKBOX Match Test Album') {
+      ok('library match index finds the injected song', hits[0].album.title);
+    } else {
+      bad('library match index finds the injected song', `hits=${hits.length} kinds=${hits.map(h => h.kind).join(',')}`);
+    }
+
+    // ③ 假 TIDAL 服務：只對這首歌回報命中
+    window.tidalService = {
+      isLoggedIn: true,
+      api: async (endpoint, params) => {
+        const q = String((params && params.query) || '');
+        const hit = normalizeSongKey(q).includes(normalizeSongKey(kkTitle));
+        return {
+          tracks: {
+            items: hit ? [{
+              id: 900101, title: kkTitle, artists: [{ name: kkArtist }],
+              album: { id: 'mock-album-777', title: 'Mock TIDAL Match Album', cover: null }
+            }] : []
+          }
+        };
+      },
+      normalizeTrack: (t) => ({
+        id: `tidal_${t.id}`, tidalId: t.id, isTidal: true, title: t.title,
+        artist: (t.artists || []).map(a => a.name).join(', '),
+        album: t.album ? t.album.title : ''
+      }),
+      getAlbum: async (albumId) => ({
+        album: { id: `tidal_album_${albumId}`, tidalId: albumId, isTidal: true, title: 'Mock TIDAL Match Album', artist: kkArtist, year: 2015, tracks: [], cover: '', genre: 'Test' },
+        tracks: []
+      })
+    };
+    kkboxTidalMatchCache.clear();
+
+    const refreshBtn = document.getElementById('btnRefreshCharts');
+    if (!refreshBtn) { bad('KKBOX refresh button available'); finish(); return; }
+    refreshBtn.click();
+    const reRendered = await waitFor(() => {
+      const rows = listEl.querySelectorAll('.kkbox-track-row');
+      return rows.length > 0 && !!rows[0].querySelector('.kkbox-match-badge');
+    }, 30000);
+
+    const targetRow = [...listEl.querySelectorAll('.kkbox-track-row')].find(r => {
+      const t = r.querySelector('.kkbox-track-title');
+      return t && normalizeSongKey(t.textContent) === normalizeSongKey(kkTitle);
+    });
+    if (!targetRow) { bad('matching KKBOX row still present after refresh'); finish(); return; }
+
+    const localBadge = targetRow.querySelector('.kkbox-match-local');
+    const tidalBadge = targetRow.querySelector('.kkbox-match-tidal');
+    if (localBadge) ok('local match badge shown beside song title', localBadge.textContent.trim());
+    else bad('local match badge shown beside song title', `badges=${targetRow.querySelectorAll('.kkbox-match-badge').length} reRendered=${reRendered}`);
+
+    if (tidalBadge) ok('TIDAL match badge shown beside song title', tidalBadge.textContent.trim());
+    else bad('TIDAL match badge shown beside song title', `reRendered=${reRendered} tidalLoggedInMock=true`);
+
+    const otherRow = [...listEl.querySelectorAll('.kkbox-track-row')].find(r => {
+      const t = r.querySelector('.kkbox-track-title');
+      return t && normalizeSongKey(t.textContent) !== normalizeSongKey(kkTitle);
+    });
+    if (otherRow && otherRow.querySelector('.kkbox-match-local')) {
+      bad('non-matching rows stay without local badge', `row="${otherRow.querySelector('.kkbox-track-title').textContent}"`);
+    } else {
+      ok('non-matching rows stay without local badge');
+    }
+
+    // 請主行程截取 KKBOX 清單（圖示已顯示），再繼續點擊測試
+    try {
+      let scroller = targetRow.parentElement;
+      while (scroller && scroller !== document.body) {
+        const st = window.getComputedStyle(scroller);
+        if (/(auto|scroll)/.test(st.overflowY) && scroller.scrollHeight > scroller.clientHeight + 4) break;
+        scroller = scroller.parentElement;
+      }
+      const delta = targetRow.getBoundingClientRect().top - 300;
+      if (scroller && scroller !== document.documentElement && scroller !== document.body) scroller.scrollTop += delta;
+      else window.scrollBy(0, delta);
+    } catch (err) {}
+    await sleep(400);
+    try { window.electronAPI.captureStep(15, 'kkbox match badges visible'); } catch (err) {}
+    await sleep(3500);
+
+    // 點擊本機圖示 ➔ 本機專輯頁
+    if (localBadge) {
+      localBadge.click();
+      await sleep(600);
+      const view = document.getElementById('viewAlbumDetail');
+      const titleEl = document.getElementById('detailTitle');
+      if (view && view.classList.contains('active') && titleEl && titleEl.textContent.trim() === 'KKBOX Match Test Album') {
+        ok('clicking local badge opens the local album page', titleEl.textContent.trim());
+      } else {
+        bad('clicking local badge opens the local album page', `active=${!!(view && view.classList.contains('active'))} title=${titleEl ? titleEl.textContent.trim() : 'n/a'}`);
+      }
+    }
+
+    // 點擊 TIDAL 圖示 ➔ TIDAL 專輯頁
+    if (tidalBadge) {
+      tidalBadge.click();
+      await sleep(1200);
+      const view = document.getElementById('viewAlbumDetail');
+      const titleEl = document.getElementById('detailTitle');
+      if (view && view.classList.contains('active') && titleEl && titleEl.textContent.trim() === 'Mock TIDAL Match Album') {
+        ok('clicking TIDAL badge opens the TIDAL album page', titleEl.textContent.trim());
+      } else {
+        bad('clicking TIDAL badge opens the TIDAL album page', `active=${!!(view && view.classList.contains('active'))} title=${titleEl ? titleEl.textContent.trim() : 'n/a'}`);
+      }
+    }
+
+    // 清理：移除注入的測試專輯後不應再比對到
+    state.tracks = state.tracks.filter(t => !injectedIds.includes(t.id));
+    injectedIds = [];
+    rebuildLibraryCollections();
+    kkboxTidalMatchCache.clear();
+    if (findLibraryMatchesForSong(kkTitle, kkArtist).length === 0) ok('test data removed after self-test');
+    else bad('test data removed after self-test', 'index still matches');
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  } finally {
+    window.tidalService = realTidalService;
+    if (injectedIds.length) {
+      state.tracks = state.tracks.filter(t => !injectedIds.includes(t.id));
+      rebuildLibraryCollections();
+    }
+    kkboxTidalMatchCache.clear();
+  }
+  finish();
+}
+
+try {
+  const rpKkboxMatchParams = new URLSearchParams(window.location.search || '');
+  if (rpKkboxMatchParams.get('testKkboxMatch') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runKkboxMatchSelfTest(); }, 2600);
+  }
+} catch (err) {}
+
+// ============================================================
 // KKBOX Online Streaming & Open API Subsystem (Native rooPlayer Engine)
 // ============================================================
 
@@ -12178,6 +12595,7 @@ function initKkboxStreaming() {
   // Helper: Render track rows with Play, Add to Queue, and Favorite actions
   function renderKkboxTrackList(container, trackList) {
     container.innerHTML = '';
+    const renderedRows = [];
     trackList.forEach((track, idx) => {
       const row = document.createElement('div');
       row.className = 'kkbox-track-row';
@@ -12203,6 +12621,10 @@ function initKkboxStreaming() {
           </button>
         </div>
       `;
+
+      // 歌名右側欄位：本機 / TIDAL 比對到同一首歌時顯示圖示，點擊連結到該專輯頁
+      const rowLeft = row.querySelector('.kkbox-track-row-left');
+      if (rowLeft) rowLeft.appendChild(buildSongMatchCell(track));
 
       // Play Now
       const btnPlay = row.querySelector('.kkbox-btn-play-now');
@@ -12244,7 +12666,11 @@ function initKkboxStreaming() {
       });
 
       container.appendChild(row);
+      renderedRows.push(row);
     });
+
+    // 尚未在本機命中的列，向 TIDAL 補比對（有上限、可中斷、結果快取）
+    annotateKkboxRowsWithTidal(trackList, renderedRows);
   }
 
   // Load first tab (Charts) immediately on initialization
