@@ -11801,6 +11801,20 @@ async function runKkboxMatchSelfTest() {
     if (!kkTitle || !kkArtist) { bad('KKBOX first row title/artist readable', `title=${kkTitle} artist=${kkArtist}`); finish(); return; }
     ok('KKBOX chart rows loaded', `rows=${rowCount} target="${kkTitle}" / "${kkArtist}"`);
 
+    // KKBOX 帳號按鈕：暫時反灰不開放點擊（設定與流程保留）
+    const loginBtn = document.getElementById('btnOpenKkboxLoginModal');
+    if (loginBtn && loginBtn.disabled && loginBtn.classList.contains('soft-disabled')) {
+      ok('KKBOX 帳號按鈕暫時停用（反灰且不可點擊）', `title="${(loginBtn.title || '').slice(0, 24)}…"`);
+    } else {
+      bad('KKBOX 帳號按鈕暫時停用（反灰且不可點擊）', loginBtn ? `disabled=${loginBtn.disabled} class=${loginBtn.className}` : 'button missing');
+    }
+    const loginModalEl = document.getElementById('kkboxLoginModal');
+    if (loginModalEl) ok('KKBOX 帳號 modal 與設定仍保留', 'kkboxLoginModal exists');
+    else bad('KKBOX 帳號 modal 與設定仍保留', 'modal missing');
+    try { await sleep(1500); } catch (err) {} // 等合成器产出 KKBOX 頁的框架，避免截到切換前的舊畫面
+    try { window.electronAPI.captureStep(16, 'kkbox header with login button disabled'); } catch (err) {}
+    await sleep(2500);
+
     const now = Date.now();
     injectedIds = ['kkm1', 'kkm2'];
     state.tracks = [...state.tracks,
@@ -12289,10 +12303,19 @@ function initKkboxStreaming() {
   }
 
   // Login Modal
+  // KKBOX 帳號輸入目前對播放沒有實質效益（排行榜／精選歌單／搜尋皆走官方公開曲庫），
+  // 因此暫時反灰不開放點擊：modal、localStorage 帳號與所有相關流程完整保留，
+  // 要恢復時只需把 KKBOX_LOGIN_TEMP_DISABLED 改成 false。
+  const KKBOX_LOGIN_TEMP_DISABLED = true;
   if (btnOpenLogin) {
     btnOpenLogin.addEventListener('click', () => {
       if (loginModal) loginModal.style.display = 'flex';
     });
+    if (KKBOX_LOGIN_TEMP_DISABLED) {
+      btnOpenLogin.disabled = true;
+      btnOpenLogin.classList.add('soft-disabled');
+      btnOpenLogin.title = 'KKBOX 帳號連線目前不影響本頁功能（排行榜、精選歌單與搜尋皆以官方公開曲庫運作），此項目暫時停用';
+    }
   }
   function closeLoginModal() {
     if (loginModal) loginModal.style.display = 'none';

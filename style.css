@@ -5619,6 +5619,29 @@ body.table-col-resizing * {
   border-color: rgba(46, 204, 113, 0.4);
 }
 
+/* KKBOX 帳號輸入暫時停用：設定與流程都保留，僅反灰不開放點擊 */
+.btn-kkbox-login.soft-disabled,
+.btn-kkbox-login.soft-disabled.logged-in {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border-color: rgba(148, 163, 184, 0.28);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-kkbox-login.soft-disabled:hover {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  box-shadow: none;
+}
+
+[data-theme="light"] .btn-kkbox-login.soft-disabled,
+[data-theme="light"] .btn-kkbox-login.soft-disabled.logged-in {
+  background: rgba(100, 116, 139, 0.12);
+  color: #64748b;
+  border-color: rgba(100, 116, 139, 0.3);
+}
+
 /* Info Banner */
 .kkbox-info-banner {
   flex-shrink: 0;

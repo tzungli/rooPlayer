@@ -268,16 +268,21 @@ function runCaptureSequence() {
       }
       if (TEST_KKBOX_MATCH) {
         console.log('[test-kkbox-match] waiting for renderer KKBOX match-column self-test result');
-        // 渲染端在比對圖示顯示時先發 15（截取畫面），最後發 14（測試報告）
-        const shotSignal = new Promise((resolve) => { captureSignals[15] = (info) => { captureSignals[15] = null; resolve(info); }; });
+        // 渲染端依序發：16（KKBOX 頁頭，帳號按鈕已反灰）→ 15（比對圖示顯示）→ 14（測試報告）
+        const shotHeader = new Promise((resolve) => { captureSignals[16] = (info) => { captureSignals[16] = null; resolve(info); }; });
+        const shotBadges = new Promise((resolve) => { captureSignals[15] = (info) => { captureSignals[15] = null; resolve(info); }; });
         const reportPromise = waitRendererInfo(14, 120000);
-        const shotInfo = await shotSignal;
-        try {
-          const img = await mainWindow.webContents.capturePage();
-          const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'kkbox-match-test.png');
-          fs.writeFileSync(shotPath, img.toPNG());
-          console.log('[test-kkbox-match] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
-        } catch (e) { console.warn('[test-kkbox-match] screenshot failed:', e); }
+        const shotDir = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata');
+        const saveShot = async (fileName, info) => {
+          try {
+            const img = await mainWindow.webContents.capturePage();
+            const shotPath = path.join(shotDir, fileName);
+            fs.writeFileSync(shotPath, img.toPNG());
+            console.log('[test-kkbox-match] screenshot saved: ' + shotPath + ' (' + info + ')');
+          } catch (e) { console.warn('[test-kkbox-match] screenshot failed:', e); }
+        };
+        await saveShot('kkbox-login-disabled.png', await shotHeader);
+        await saveShot('kkbox-match-test.png', await shotBadges);
         const report = await reportPromise;
         console.log('[test-kkbox-match] renderer report: ' + report);
         console.log('[test] done');
