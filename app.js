@@ -238,6 +238,7 @@ const state = {
   currentView: 'overview',
   activeAlbumDetail: null,
   currentArtistDetail: null,
+  currentLabelDetail: null, // 目前開啟的發行公司（RECORD LABEL）頁面
   activeGenreFilter: null,
   recentlyPlayedAlbums: [],
   activeFilter: 'all',
@@ -4404,7 +4405,10 @@ function renderAlbumMetadata(album) {
     ? `${album.tracks.length} 首歌曲 • ${formatTotalAlbumDuration(album.tracks)}`
     : `${trackCount} 首歌曲`;
 
-  if (companyEl) companyEl.textContent = label || '獨立發行 / 未標記廠牌';
+  if (companyEl) {
+    companyEl.textContent = label || '獨立發行 / 未標記廠牌';
+    setAlbumLabelLink(companyEl, label); // 有真實廠牌時可點擊 ➔ 開啟該發行公司頁面
+  }
   if (yearEl) yearEl.textContent = year;
   if (durationEl) durationEl.textContent = tracksDurationText;
 
@@ -4414,7 +4418,14 @@ function renderAlbumMetadata(album) {
       if (state.activeAlbumDetail && state.activeAlbumDetail.title === album.title && state.activeAlbumDetail.artist === album.artist) {
         if (!label && onlineCredits.label) {
           label = onlineCredits.label;
-          if (companyEl) companyEl.textContent = label;
+          if (companyEl) {
+            companyEl.textContent = label;
+            setAlbumLabelLink(companyEl, label);
+          }
+          // 線上補齊的廠牌記回記憶體中的專輯：同一廠牌頁面在本次工作階段也會收錄它
+          if (state.activeAlbumDetail && state.activeAlbumDetail.title === album.title && state.activeAlbumDetail.artist === album.artist) {
+            state.activeAlbumDetail.label = label;
+          }
         }
         if ((!year || year === '未載明') && onlineCredits.releaseDate) {
           const parsedYear = String(onlineCredits.releaseDate).slice(0, 4);
@@ -4428,6 +4439,483 @@ function renderAlbumMetadata(album) {
   }
 }
 
+
+// ----------------- 發行公司（Record Label）辨識與廠牌頁面 -----------------
+// 專輯頁的「發行公司」可點擊 ➔ 開啟該公司頁面，列出音樂庫（本機標籤 + 已收錄 TIDAL）
+// 與 TIDAL 上同屬該公司的全部發行專輯。
+// 比對來源：album.label（本機 LABEL / PUBLISHER 標籤）➔ copyright 推導 ➔ 各 track 同名字欄位。
+function cleanCopyrightLabel(copyright) {
+  const raw = String(copyright || '')
+    .replace(/^[℗©pPcC0-9\s,\.\-]+/, '')
+    .replace(/(under exclusive license to|licensed to|a division of).*$/i, '')
+    .trim();
+  return raw.length > 2 ? raw : '';
+}
+
+function albumLabelValue(album) {
+  if (!album) return '';
+  if (album.label) return String(album.label).trim();
+  const fromCopyright = cleanCopyrightLabel(album.copyright);
+  if (fromCopyright) return fromCopyright;
+  for (const t of (album.tracks || [])) {
+    if (t.label) return String(t.label).trim();
+    const derived = cleanCopyrightLabel(t.copyright);
+    if (derived) return derived;
+  }
+  return '';
+}
+
+// 公司名稱結尾的 korporative 字樣不影響身分（RCA ⇔ RCA Records、Decca ⇔ Decca Music Group）
+const LABEL_SUFFIX_WORDS = [
+  'records', 'record', 'recording', 'recordings', 'rec', 'label', 'ltd', 'ltda', 'limited',
+  'inc', 'co', 'corp', 'corporation', 'gmbh', 'llc', 'llp', 'bv', 'group', 'entertainment',
+  'publishing', 'distribution', 'music group', 'music limited', 'music co'
+];
+
+function normalizeLabelKey(value) {
+  let key = String(value || '')
+    .replace(/[℗©]/g, ' ')
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+    .replace(/[^0-9a-z\u4e00-\u9fff\s.&'\-]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  for (let pass = 0; pass < 3; pass++) {
+    let changed = false;
+    for (const suffix of LABEL_SUFFIX_WORDS) {
+      const pattern = new RegExp(`\\s${suffix.replace(/\./g, '\\.?')}$`, 'i');
+      if (pattern.test(key) && key.replace(pattern, '').trim().length >= 3) {
+        key = key.replace(pattern, '').trim();
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return key;
+}
+
+// 同一公司判定：正規化後相同，或一方以完整單字出現在另一方內（Decca ⇔ Decca Music Group、
+// Universal Music ⇔ Universal Music Ltd）。Sony Music 與 Sony Classical 不同名 ⇒ 不會誤併。
+function labelsMatch(a, b) {
+  const ka = normalizeLabelKey(a);
+  const kb = normalizeLabelKey(b);
+  if (!ka || !kb) return false;
+  if (ka === kb) return true;
+  const shorter = ka.length <= kb.length ? ka : kb;
+  const longer = ka.length <= kb.length ? kb : ka;
+  if (shorter.length < 3) return false;
+  const escaped = shorter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^0-9a-z])${escaped}([^0-9a-z]|$)`, 'i').test(longer);
+}
+
+function labelTitleKey(title, artist) {
+  return `${normalizeLabelKey(title)}||${normalizeLabelKey(artist)}`;
+}
+
+function albumsForLabel(labelName) {
+  const matched = [];
+  state.albums.forEach(alb => {
+    const lab = albumLabelValue(alb);
+    if (lab && labelsMatch(lab, labelName)) matched.push(alb);
+  });
+  matched.sort((a, b) => String(b.year || b.date || '').localeCompare(String(a.year || a.date || '')));
+  return matched;
+}
+
+// 專輯頁：把「發行公司」變成可點擊的廠牌連結
+function setAlbumLabelLink(companyEl, label) {
+  if (!companyEl) return;
+  const hasLabel = !!(label && String(label).trim() && String(label).trim() !== '獨立發行 / 未標記廠牌');
+  companyEl.classList.toggle('label-link', hasLabel);
+  companyEl.title = hasLabel ? `檢視 ${label} 在 rooPlayer 音樂庫（含 TIDAL）發行的全部專輯` : '';
+  companyEl.onclick = hasLabel
+    ? (e) => { e.stopPropagation(); openLabelDetail(String(label).trim()); }
+    : null;
+}
+
+let labelDetailRenderSeq = 0;
+
+function renderLabelAlbumGrid(gridId, countId, emptyId, albums, emptyText) {
+  const grid = document.getElementById(gridId);
+  const countBadge = document.getElementById(countId);
+  const emptyHint = document.getElementById(emptyId);
+  if (!grid) return;
+  grid.innerHTML = '';
+  if (countBadge) countBadge.textContent = `${albums.length} 張`;
+  albums.forEach(alb => grid.appendChild(createAlbumCard(alb)));
+  if (emptyHint) {
+    emptyHint.style.display = albums.length ? 'none' : 'block';
+    if (emptyText && !albums.length) emptyHint.textContent = emptyText;
+  }
+}
+
+function createLabelTidalCard(alb) {
+  const card = document.createElement('div');
+  card.className = 'album-card tidal-discography-card';
+  card.dataset.tidalId = String(alb.tidalId);
+
+  const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
+  const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
+  const inLib = isTidalAlbumInLibrary(alb.tidalId);
+  const isHiRes = alb.audioQuality === 'HI_RES_LOSSLESS' || alb.audioQuality === 'HIRES';
+  const qualityBadgeHtml = isHiRes
+    ? `<span class="album-quality-tag tag-tidal-hires">TIDAL MAX</span>`
+    : `<span class="album-quality-tag tag-tidal">TIDAL FLAC</span>`;
+  const labelName = albumLabelValue(alb);
+
+  card.innerHTML = `
+    <div class="album-art-wrap">
+      <img src="${coverSrc}" class="album-art-img" alt="${escapeXml(alb.title)}" loading="lazy">
+      ${qualityBadgeHtml}
+      <button class="card-play-btn" title="播放整張 TIDAL 專輯">▶</button>
+    </div>
+    <div class="album-meta">
+      <div class="album-title" title="${escapeXml(alb.title)}">${escapeXml(alb.title)}</div>
+      <div class="album-artist">${escapeXml(alb.artist)}</div>
+      <div class="album-year">${alb.year ? alb.year + ' • ' : ''}${alb.numberOfTracks ? alb.numberOfTracks + ' 首 • ' : ''}${inLib ? '<span style="color:#00e5ff;font-weight:700;">✓ 已在曲庫</span>' : (labelName ? escapeXml(labelName) : '')}</div>
+    </div>
+    <div class="tidal-card-actions">
+      <button class="btn-tidal-lib-action ${inLib ? 'in-library' : ''}" data-tidal-id="${alb.tidalId}">${inLib ? '✓ 已在曲庫' : '➕ 加入曲庫'}</button>
+    </div>
+  `;
+
+  const playBtn = card.querySelector('.card-play-btn');
+  if (playBtn) {
+    playBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      playTidalAlbum(alb.tidalId);
+    });
+  }
+  const libBtn = card.querySelector('.btn-tidal-lib-action');
+  if (libBtn) {
+    libBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (isTidalAlbumInLibrary(alb.tidalId)) {
+        if (confirm(`確定要將《${alb.title}》從曲庫移除嗎？`)) {
+          await removeTidalAlbumFromLibrary(alb.tidalId);
+        }
+      } else {
+        await addTidalAlbumToLibrary(alb.tidalId, alb);
+      }
+    });
+  }
+  const artWrap = card.querySelector('.album-art-wrap');
+  if (artWrap) {
+    artWrap.style.cursor = 'pointer';
+    artWrap.addEventListener('click', (e) => {
+      if (e.target.closest('.card-play-btn')) return;
+      e.stopPropagation();
+      openAlbumDetail(alb);
+    });
+  }
+  return card;
+}
+
+// TIDAL 端該公司的發行專輯：① 直接以公司名稱搜尋 ② 循該公司在庫演出者的 TIDAL 歷年發行延伸
+// 兩者都只保留 TIDAL 發行資料（copyright 欄位）確實屬於該公司者。
+async function fetchLabelTidalAlbums(labelName, localMatched) {
+  const loadingEl = document.getElementById('labelTidalLoading');
+  const grid = document.getElementById('labelTidalAlbumsGrid');
+  const countBadge = document.getElementById('labelTidalAlbumsCount');
+  const emptyHint = document.getElementById('labelTidalEmptyHint');
+  const seq = ++labelDetailRenderSeq;
+
+  if (loadingEl) loadingEl.style.display = 'flex';
+  if (grid) grid.innerHTML = '';
+  if (emptyHint) emptyHint.style.display = 'none';
+  if (countBadge) countBadge.textContent = '檢索中...';
+
+  if (!window.tidalService || !window.tidalService.isLoggedIn) {
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (countBadge) countBadge.textContent = '未連線 TIDAL';
+    if (emptyHint) {
+      emptyHint.textContent = '尚未連線 TIDAL：於「TIDAL」頁登入後，即可列出該發行公司在 TIDAL 的發行專輯並直接播放或加入曲庫。';
+      emptyHint.style.display = 'block';
+    }
+    return;
+  }
+
+  try {
+    const found = new Map();
+    const accept = (alb) => {
+      if (!alb || !alb.tidalId) return;
+      if (!labelsMatch(alb.label || alb.copyright, labelName)) return;
+      found.set(String(alb.tidalId), alb);
+    };
+
+    // 1) 以公司名稱直接搜尋 TIDAL 專輯
+    try {
+      const direct = await window.tidalService.search(labelName, 50);
+      ((direct && direct.albums) || []).forEach(accept);
+    } catch (e) { console.warn('[label] TIDAL label search failed:', e); }
+    if (seq !== labelDetailRenderSeq) return;
+
+    // 2) 循該公司在庫演出者延伸其 TIDAL 歷年發行（最多 8 位，避免大量請求）
+    const artistNames = [...new Set((localMatched || []).map(a => a.artist).filter(Boolean))].slice(0, 8);
+    for (const artistName of artistNames) {
+      try {
+        const artistObj = await window.tidalService.searchArtist(artistName);
+        if (!artistObj || !artistObj.id) continue;
+        const discography = await window.tidalService.getArtistAlbums(artistObj.id, 50);
+        (discography || []).forEach(accept);
+      } catch (e) { /* 單一演出者失敗不影響整頁 */ }
+      if (seq !== labelDetailRenderSeq) return;
+    }
+
+    // 3) 排除上方清單已出現者（已在曲庫的 TIDAL 專輯、同名本機專輯）
+    const knownIds = new Set((localMatched || []).map(a => String(a.tidalId || '')).filter(Boolean));
+    const knownTitles = new Set((localMatched || []).map(a => labelTitleKey(a.title, a.artist)));
+    const list = [...found.values()]
+      .filter(alb => !knownIds.has(String(alb.tidalId)) && !knownTitles.has(labelTitleKey(alb.title, alb.artist)))
+      .sort((a, b) => String(b.releaseDate || b.year || '').localeCompare(String(a.releaseDate || a.year || '')));
+
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (countBadge) countBadge.textContent = list.length ? `共 ${list.length} 張` : '0 張';
+    if (grid) list.forEach(alb => grid.appendChild(createLabelTidalCard(alb)));
+    if (emptyHint) {
+      emptyHint.textContent = list.length
+        ? ''
+        : `TIDAL 未回報屬於「${labelName}」的其他發行專輯（TIDAL 僅在 copyright 欄位提供發行公司資料）。`;
+      emptyHint.style.display = list.length ? 'none' : 'block';
+    }
+  } catch (e) {
+    console.warn('[label] TIDAL label expansion failed:', e);
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (countBadge) countBadge.textContent = '連線失敗';
+    if (emptyHint) {
+      emptyHint.textContent = `連線 TIDAL 時發生錯誤：${String((e && e.message) || e)}`;
+      emptyHint.style.display = 'block';
+    }
+  }
+}
+
+async function openLabelDetail(labelName) {
+  const label = String(labelName || '').trim();
+  if (!label) return;
+  state.currentLabelDetail = label;
+  navigateTo('labelDetail');
+
+  const matched = albumsForLabel(label);
+  const inLibraryAlbums = matched;
+  const tracks = [];
+  inLibraryAlbums.forEach(alb => { if (Array.isArray(alb.tracks)) tracks.push(...alb.tracks); });
+  const artists = [...new Set(inLibraryAlbums.map(a => a.artist).filter(Boolean))].sort();
+
+  const nameEl = document.getElementById('labelDetailName');
+  if (nameEl) nameEl.textContent = label;
+  const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  setText('labelDetailAlbumCount', inLibraryAlbums.length);
+  setText('labelDetailArtistCount', artists.length);
+  setText('labelDetailTrackCount', tracks.length);
+
+  const avatarImg = document.getElementById('labelDetailAvatar');
+  const avatarPlaceholder = document.getElementById('labelDetailAvatarPlaceholder');
+  if (avatarImg) { avatarImg.style.display = 'none'; avatarImg.src = ''; }
+  if (avatarPlaceholder) {
+    avatarPlaceholder.style.display = 'flex';
+    avatarPlaceholder.textContent = '🏷️';
+  }
+  const backdrop = document.getElementById('labelHeroBackdrop');
+  if (backdrop) { backdrop.style.backgroundImage = 'none'; backdrop.style.opacity = '0'; }
+
+  // 該公司演出者 chips（點擊開演出者頁）
+  const chipsBox = document.getElementById('labelDetailArtists');
+  if (chipsBox) {
+    chipsBox.innerHTML = '';
+    artists.forEach(name => {
+      const chip = document.createElement('span');
+      chip.className = 'genre-chip label-artist-chip';
+      chip.textContent = name;
+      chip.title = `開啟 ${name} 的演出者頁面`;
+      chip.addEventListener('click', () => openArtistDetail(name));
+      chipsBox.appendChild(chip);
+    });
+  }
+
+  const btnPlayAll = document.getElementById('btnPlayAllLabelAlbums');
+  if (btnPlayAll) {
+    btnPlayAll.onclick = () => {
+      if (!tracks.length) { showToast('此發行公司在音樂庫內尚無可播放的曲目'); return; }
+      playTrackList(tracks, 0);
+      showToast(`▶ 播放 ${label} 發行的全部專輯（${tracks.length} 首）`);
+    };
+  }
+  const btnShuffle = document.getElementById('btnShuffleLabelAlbums');
+  if (btnShuffle) {
+    btnShuffle.onclick = () => {
+      if (!tracks.length) { showToast('此發行公司在音樂庫內尚無可播放的曲目'); return; }
+      setShuffleState(true);
+      playTrackList(tracks, Math.floor(Math.random() * tracks.length));
+      showToast(`🔀 隨機播放 ${label} 發行的專輯`);
+    };
+  }
+  const btnRetidy = document.getElementById('btnLabelTidalSearch');
+  if (btnRetidy) btnRetidy.onclick = () => fetchLabelTidalAlbums(label, inLibraryAlbums);
+
+  renderLabelAlbumGrid('labelLocalAlbumsGrid', 'labelLocalAlbumsCount', 'labelNoLocalHint',
+    inLibraryAlbums, '音樂庫內沒有以該發行公司標記的專輯；下方 TIDAL 發行清單可直接播放或加入曲庫。');
+
+  fetchLabelTidalAlbums(label, inLibraryAlbums);
+}
+
+// ----------------- 發行公司頁面執行期自我測試（main.js --test-labels） -----------------
+// 注入帶 LABEL / 僅帶 copyright 的測試專輯 ➔ 驗證廠牌比對、專輯頁「發行公司」可點擊、
+// 點擊後廠牌頁面正確列出該公司專輯（含未標記廠牌不可點擊的反例）。
+async function runLabelSelfTest() {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const note = (name, detail) => lines.push(`NOTE ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(12, report); } catch (err) {}
+  };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  try {
+    if (!window.electronAPI || !window.electronAPI.captureStep) { bad('capture IPC available'); finish(); return; }
+
+    const now = Date.now();
+    const mkTrack = (id, album, artist, extra) => Object.assign({
+      id, title: `Track ${id}`, trackNumber: 1, duration: 120,
+      album, artist, albumArtist: artist, year: 2020, genre: 'Jazz',
+      formatName: 'FLAC', sampleRate: 96000, bitsPerSample: 24, isLossless: true,
+      addedAt: now, filePath: `D:\\__rp_label_test__\\${album}\\${id}.flac`
+    }, extra || {});
+
+    state.tracks = [...state.tracks,
+      mkTrack('lta1', 'Label Test Album One', 'Test Artist A', { label: 'Test Label Records' }),
+      mkTrack('lta1b', 'Label Test Album One', 'Test Artist A', { label: 'Test Label Records' }),
+      mkTrack('lta2', 'Label Test Album Two', 'Test Artist B', { copyright: '℗ 2021 Test Label Records' }),
+      mkTrack('lta3', 'Other Label Album', 'Test Artist C', { label: 'Other Label Co' }),
+      mkTrack('lta4', 'No Label Album', 'Test Artist D', {})
+    ];
+    rebuildLibraryCollections();
+
+    const matched = albumsForLabel('Test Label Records');
+    const titles = matched.map(a => a.title).sort().join('|');
+    if (matched.length === 2 && titles === 'Label Test Album One|Label Test Album Two') {
+      ok('label page collects label-tagged + copyright-derived albums', titles);
+    } else {
+      bad('label page collects label-tagged + copyright-derived albums', `count=${matched.length} titles=${titles}`);
+    }
+
+    const matchCases = [
+      ['Test Label', 'Test Label Records', true],
+      ['Test Label Records', 'Test Label', true],
+      ['Decca', 'Decca Music Group', true],
+      ['RCA Records', 'RCA', true],
+      ['Universal Music', 'Universal Music Ltd', true],
+      ['Test Label Records', 'Other Label Co', false],
+      ['Sony Music', 'Sony Classical', false]
+    ];
+    const wrongCases = matchCases.filter(([a, b, want]) => labelsMatch(a, b) !== want);
+    if (!wrongCases.length) ok('label identity rules', `${matchCases.length} cases`);
+    else bad('label identity rules', wrongCases.map(c => `${c[0]} vs ${c[1]} want=${c[2]}`).join(', '));
+
+    const taggedAlbum = state.albums.find(a => a.title === 'Label Test Album One');
+    if (!taggedAlbum) { bad('test album grouped in library'); finish(); return; }
+    openAlbumDetail(taggedAlbum);
+    await sleep(250);
+    const companyEl = document.getElementById('detailCompany');
+    if (!companyEl || !companyEl.classList.contains('label-link') || typeof companyEl.onclick !== 'function') {
+      bad('album page 發行公司 becomes clickable when label exists', companyEl ? `class=${companyEl.className}` : 'element missing');
+    } else {
+      ok('album page 發行公司 becomes clickable when label exists', companyEl.textContent);
+    }
+
+    if (companyEl && typeof companyEl.onclick === 'function') {
+      companyEl.onclick({ stopPropagation: () => {} });
+      await sleep(500);
+      const view = document.getElementById('viewLabelDetail');
+      const grid = document.getElementById('labelLocalAlbumsGrid');
+      const cards = grid ? grid.querySelectorAll('.album-card').length : -1;
+      const nameEl = document.getElementById('labelDetailName');
+      const albumCountEl = document.getElementById('labelDetailAlbumCount');
+      const artistCountEl = document.getElementById('labelDetailArtistCount');
+      const viewOk = view && view.classList.contains('active');
+      const nameOk = nameEl && nameEl.textContent === 'Test Label Records';
+      const countsOk = albumCountEl && albumCountEl.textContent === '2' && artistCountEl && artistCountEl.textContent === '2';
+      if (viewOk && nameOk && cards === 2 && countsOk) {
+        ok('clicking label opens label page with that label albums', `cards=${cards} artists=${artistCountEl.textContent}`);
+      } else {
+        bad('clicking label opens label page with that label albums', `view=${!!viewOk} name=${nameOk} cards=${cards} albumCount=${albumCountEl && albumCountEl.textContent} artistCount=${artistCountEl && artistCountEl.textContent}`);
+      }
+
+      const tidalBadge = document.getElementById('labelTidalAlbumsCount');
+      const tidalLoading = document.getElementById('labelTidalLoading');
+      const tidalLoggedIn = !!(window.tidalService && window.tidalService.isLoggedIn);
+      note('TIDAL section state', `loggedIn=${tidalLoggedIn} badge=${tidalBadge ? tidalBadge.textContent : 'n/a'} loadingVisible=${tidalLoading ? tidalLoading.style.display : 'n/a'}`);
+
+      // 以假 TIDAL 服務驗證該公司專輯的篩選與去重（不依賴網路；跑完即還原）
+      const realTidalService = window.tidalService;
+      try {
+        const mockAlbums = [
+          { tidalId: 'mock1', title: 'Mock Label Release One', artist: 'Test Artist A', releaseDate: '2022-01-01', numberOfTracks: 5, copyright: '℗ 2022 Test Label Records', label: 'Test Label Records', audioQuality: 'HI_RES_LOSSLESS', cover: '' },
+          { tidalId: 'mock2', title: 'Mock Other Company Release', artist: 'Test Artist A', releaseDate: '2023-01-01', numberOfTracks: 4, copyright: '℗ 2023 Other Label Co', label: 'Other Label Co', audioQuality: 'LOSSLESS', cover: '' },
+          { tidalId: 'mock3', title: 'Label Test Album One', artist: 'Test Artist A', releaseDate: '2020-05-05', numberOfTracks: 2, copyright: '℗ 2020 Test Label Records', label: 'Test Label Records', audioQuality: 'LOSSLESS', cover: '' }
+        ];
+        window.tidalService = {
+          isLoggedIn: true,
+          search: async () => ({ albums: mockAlbums, tracks: [], artists: [] }),
+          searchArtist: async (name) => (name === 'Test Artist A' ? { id: 'mock-artist-1' } : null),
+          getArtistAlbums: async () => mockAlbums
+        };
+        await fetchLabelTidalAlbums('Test Label Records', matched);
+        await sleep(200);
+        const tidalGrid = document.getElementById('labelTidalAlbumsGrid');
+        const tidalCards = tidalGrid ? [...tidalGrid.querySelectorAll('.album-card')] : [];
+        const tidalTitles = tidalCards.map(c => (c.querySelector('.album-title') || {}).textContent).sort().join('|');
+        const hiresTag = tidalCards.some(c => !!c.querySelector('.tag-tidal-hires'));
+        if (tidalCards.length === 1 && tidalTitles === 'Mock Label Release One' && hiresTag) {
+          ok('TIDAL expansion keeps only same-label albums and drops duplicates already listed', tidalTitles);
+        } else {
+          bad('TIDAL expansion keeps only same-label albums and drops duplicates already listed', `count=${tidalCards.length} titles=${tidalTitles}`);
+        }
+      } finally {
+        window.tidalService = realTidalService;
+      }
+
+      // 請主行程截取廠牌頁面（兩個區塊都已渲染），再繼續後續檢查與清理
+      try { window.electronAPI.captureStep(13, 'label page rendered'); } catch (err) {}
+      await sleep(3500);
+    }
+
+    // 無本機標籤的專輯：不得由本機資料推導出廠牌；link 開/關行為直接驗證（線上補齊屬非同步，不作為斷言）
+    const untaggedAlbum = state.albums.find(a => a.title === 'No Label Album');
+    if (untaggedAlbum && albumLabelValue(untaggedAlbum) === '') {
+      ok('album without local label derives no label');
+    } else {
+      bad('album without local label derives no label', `value=${untaggedAlbum ? albumLabelValue(untaggedAlbum) : 'album missing'}`);
+    }
+
+    const scratch = document.createElement('span');
+    scratch.className = 'detail-meta-value label-link';
+    scratch.onclick = () => {};
+    setAlbumLabelLink(scratch, '');
+    const cleared = !scratch.classList.contains('label-link') && !scratch.onclick;
+    setAlbumLabelLink(scratch, 'Real Label Records');
+    const armed = scratch.classList.contains('label-link') && typeof scratch.onclick === 'function';
+    if (cleared && armed) ok('label link toggles off without label, on with label');
+    else bad('label link toggles off without label, on with label', `cleared=${cleared} armed=${armed}`);
+
+    state.tracks = state.tracks.filter(t => !String(t.id).startsWith('lta'));
+    rebuildLibraryCollections();
+    const cleaned = albumsForLabel('Test Label Records').length;
+    if (cleaned === 0) ok('test data removed after self-test');
+    else bad('test data removed after self-test', `left=${cleaned}`);
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  }
+  finish();
+}
+
+try {
+  const rpLabelParams = new URLSearchParams(window.location.search || '');
+  if (rpLabelParams.get('testLabels') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runLabelSelfTest(); }, 2600);
+  }
+} catch (err) {}
 
 // ----------------- Album Recommendations Card Component -----------------
 function createRecommendAlbumCard(alb, reason) {

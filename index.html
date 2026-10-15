@@ -654,6 +654,77 @@
         </div>
       </section>
 
+      <!-- 3.5 RECORD LABEL (發行公司) DETAIL VIEW -->
+      <section id="viewLabelDetail" class="content-view">
+        <div class="artist-detail-hero" id="labelDetailHero">
+          <div class="artist-hero-backdrop" id="labelHeroBackdrop"></div>
+          <div class="artist-hero-gradient"></div>
+
+          <div class="artist-hero-inner">
+            <div class="artist-detail-avatar-box">
+              <img id="labelDetailAvatar" src="" alt="Label Logo" class="artist-detail-avatar" style="display: none;">
+              <div id="labelDetailAvatarPlaceholder" class="artist-detail-avatar-placeholder">🏷️</div>
+            </div>
+            <div class="artist-detail-info">
+              <div class="artist-detail-tag">RECORD LABEL • 發行公司總覽</div>
+              <h1 class="artist-detail-name" id="labelDetailName">Record Label</h1>
+              <div class="artist-detail-genres" id="labelDetailArtists">
+                <!-- 該公司演出者 chips -->
+              </div>
+              <div class="artist-detail-stats">
+                <span class="stat-pill"><span id="labelDetailAlbumCount">0</span> 張專輯</span>
+                <span class="stat-pill"><span id="labelDetailArtistCount">0</span> 位演出者</span>
+                <span class="stat-pill"><span id="labelDetailTrackCount">0</span> 首歌曲</span>
+              </div>
+              <div class="artist-detail-actions">
+                <button class="btn btn-primary" id="btnPlayAllLabelAlbums">▶ 播放該公司所有專輯</button>
+                <button class="btn btn-secondary" id="btnShuffleLabelAlbums">🔀 隨機播放</button>
+                <button class="btn btn-secondary" id="btnLabelTidalSearch" title="重新連線 TIDAL 比對該發行公司">🔄 重新比對 TIDAL</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3.5.1 本機音樂庫中該公司發行的專輯 -->
+        <div class="artist-section-block">
+          <div class="section-header">
+            <h2>💿 本機音樂庫收藏（該公司發行）</h2>
+            <span class="section-count-badge" id="labelLocalAlbumsCount">0 張</span>
+          </div>
+          <p class="section-desc">比對範圍：本機檔案的 LABEL / PUBLISHER / COPYRIGHT 標籤，以及已加入曲庫的 TIDAL 專輯發行資料。</p>
+          <div class="album-grid" id="labelLocalAlbumsGrid">
+            <!-- Injected via JS -->
+          </div>
+          <div class="empty-hint" id="labelNoLocalHint" style="display: none;">
+            音樂庫內沒有以該發行公司標記的專輯；下方 TIDAL 發行清單可直接播放或加入曲庫。
+          </div>
+        </div>
+
+        <!-- 3.5.2 TIDAL 上該公司發行的專輯 -->
+        <div class="artist-section-block">
+          <div class="section-header">
+            <div class="header-with-tag">
+              <h2 id="labelTidalSectionTitle">💎 TIDAL 該公司發行專輯</h2>
+              <div class="streaming-platforms-tags" id="labelTidalPlatformTags">
+                <span class="platform-tag tidal">TIDAL</span>
+                <span class="platform-tag" style="background:rgba(255,255,255,0.08);color:#d4d4d8;">依發行公司欄位比對</span>
+              </div>
+            </div>
+            <span class="section-count-badge" id="labelTidalAlbumsCount">載入中...</span>
+          </div>
+          <p class="section-desc" id="labelTidalSectionDesc">以 TIDAL 專輯的發行公司資料（copyright 欄位）比對同一家唱片公司，並循該公司演出者的 TIDAL 歷年發行作品延伸查找；可直接以 rooPlayer 音訊引擎播放，或加入曲庫。</p>
+
+          <div class="bio-loading" id="labelTidalLoading">
+            <span class="spinner"></span> 正在連線 TIDAL 並比對該發行公司的專輯...
+          </div>
+
+          <div class="album-grid missing-album-grid" id="labelTidalAlbumsGrid">
+            <!-- Injected via JS -->
+          </div>
+          <div class="empty-hint" id="labelTidalEmptyHint" style="display: none;"></div>
+        </div>
+      </section>
+
       <!-- 4. TRACKS VIEW -->
       <section id="viewTracks" class="content-view">
         <div class="view-header">

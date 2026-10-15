@@ -22,7 +22,8 @@ process.on('unhandledRejection', (reason, promise) => {
 const CAPTURE_MODE = process.argv.includes('--capture');
 const TEST_VERSIONS = process.argv.includes('--test-versions'); // 執行期測試「其他版本」匹配邏輯
 const TEST_EXCLUSIVE = process.argv.includes('--test-exclusive'); // 執行期測試 WASAPI 獨佔輸出端到端流程
-if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE) {
+const TEST_LABELS = process.argv.includes('--test-labels'); // 執行期測試發行公司（RECORD LABEL）頁面
+if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS) {
   // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
   // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -246,6 +247,24 @@ function runCaptureSequence() {
         app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
         return;
       }
+      if (TEST_LABELS) {
+        console.log('[test-labels] waiting for renderer record-label page self-test result');
+        // 渲染端在廠牌頁面渲染完成時先發 13（截取畫面），最後發 12（測試報告）
+        const shotSignal = new Promise((resolve) => { captureSignals[13] = (info) => { captureSignals[13] = null; resolve(info); }; });
+        const reportPromise = waitRendererInfo(12, 90000);
+        const shotInfo = await shotSignal;
+        try {
+          const img = await mainWindow.webContents.capturePage();
+          const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'label-detail-test.png');
+          fs.writeFileSync(shotPath, img.toPNG());
+          console.log('[test-labels] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
+        } catch (e) { console.warn('[test-labels] screenshot failed:', e); }
+        const report = await reportPromise;
+        console.log('[test-labels] renderer report: ' + report);
+        console.log('[test] done');
+        app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
+        return;
+      }
       await sleep(4500); // 等 initApp / demo 展示渲染完成
       console.log('[capture] step 1: home');
       await captureShot('home.png');
@@ -323,7 +342,10 @@ function createWindow() {
     console.warn('Failed to configure kkboxSession:', e);
   }
 
-  if (TEST_EXCLUSIVE) {
+  if (TEST_LABELS) {
+    // 不帶 rpCapture：截圖流程的 UI 自動化會開 modal / 注入示範專輯，干擾本測試的 DOM 計數
+    mainWindow.loadFile('index.html', { query: { testLabels: '1' } });
+  } else if (TEST_EXCLUSIVE) {
     try {
       writeExclusiveTestFixture(EXCLUSIVE_TEST_FIXTURE);
       console.log('[test-exclusive] fixture written:', EXCLUSIVE_TEST_FIXTURE);
@@ -341,10 +363,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE) runCaptureSequence();
+    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS) runCaptureSequence();
   });
 
-  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE) {
+  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS) {
     // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {
