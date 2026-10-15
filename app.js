@@ -4922,9 +4922,12 @@ try {
 } catch (err) {}
 
 // ----------------- Album Recommendations Card Component -----------------
-function createRecommendAlbumCard(alb, reason) {
+function createRecommendAlbumCard(alb, reason, detail) {
   const card = document.createElement('div');
   card.className = 'recommend-card';
+  if (detail) card.title = detail; // 滑過可見完整關聯原因與各訊號權重
+  card.dataset.recommendReason = reason || '';
+  card.dataset.recommendDetail = detail || '';
 
   const defaultCover = createSvgCover(alb.title, alb.artist, '#27272a', '#09090b');
   const coverSrc = formatCoverSrc(alb.cover) || defaultCover;
@@ -4968,7 +4971,327 @@ function createRecommendAlbumCard(alb, reason) {
   return card;
 }
 
-// ----------------- Album Recommendations Engine (Metadata-driven + TIDAL) -----------------
+// ----------------- Album Recommendations Engine（多訊號加權評分 + TIDAL 真實關聯） -----------------
+// 目標：讓「同類型推薦專輯」與正在瀏覽的專輯真正相關，而不是只靠曲風字串相同。
+// 本機訊號與權重（可互相抵銷）：
+//   同演出者 70｜收錄相同曲目 每首 15（上限 45）｜同曲風 60｜相近曲風 26｜同廠牌 25
+//   同製作或作曲 18｜年代相近 18/10/4（容忍度依曲風生命週期調整）｜同為 Hi-Res 或 DSD 12
+//   扣分：不同曲風 -25｜合輯或精選 -35、Various Artists 再 -25｜單曲 -18、EP -12｜演出者不明 -30｜曲目過少 -20
+// 低於 RECOMMEND_MIN_SCORE 的候選不顯示，避免「湊數」的推薦；每張卡片列出實際命中的訊號。
+const RECOMMEND_MIN_SCORE = 40;
+
+// 曲風之間的合理關聯（同一個音樂語境，例如 Jazz ↔ Blues / Soul）
+const GENRE_AFFINITY = {
+  'Jazz': ['Blues', 'Soul / R&B', 'Vocal', 'Soundtrack', 'Hip Hop'],
+  'Blues': ['Jazz', 'Rock', 'Soul / R&B', 'Folk'],
+  'Classical': ['Soundtrack', 'Ambient', 'Vocal'],
+  'Soundtrack': ['Classical', 'Ambient', 'Electronic'],
+  'Electronic': ['Ambient', 'Soundtrack', 'Pop'],
+  'Ambient': ['Electronic', 'Classical', 'Soundtrack'],
+  'Rock': ['Metal', 'Blues', 'Folk', 'Pop'],
+  'Metal': ['Rock'],
+  'Folk': ['Blues', 'Vocal', 'Rock'],
+  'Vocal': ['Jazz', 'Pop', 'Soul / R&B'],
+  'Pop': ['Vocal', 'Electronic', 'Soul / R&B'],
+  'Soul / R&B': ['Jazz', 'Pop', 'Blues', 'Hip Hop'],
+  'Hip Hop': ['Soul / R&B', 'Electronic', 'Jazz'],
+  'Audiophile': ['Jazz', 'Classical', 'Electronic', 'Rock']
+};
+
+// 各曲風對發行年份差距的容忍度（年）：生命週期短的曲風要求較近的時代
+const GENRE_ERA_TOLERANCE = {
+  'Hip Hop': 8, 'Electronic': 10, 'Pop': 12, 'Ambient': 15, 'Metal': 15,
+  'Rock': 20, 'Jazz': 25, 'Blues': 25, 'Folk': 25, 'Vocal': 25, 'Audiophile': 30,
+  'Soundtrack': 40, 'Classical': 60
+};
+
+let albumRecommendRenderSeq = 0;
+const tidalRecommendCache = new Map(); // 演出者名稱 ➔ { discography, similarAlbums, genreAlbums }
+
+function albumIdentityKey(alb) {
+  if (!alb) return '';
+  if (alb.isTidal && (alb.tidalId || alb.id)) return `tidal::${String(alb.tidalId || alb.id)}`;
+  return `local::${String(alb.title || '').toLowerCase().trim()}::${String(alb.artist || '').toLowerCase().trim()}`;
+}
+
+function titleArtistKey(alb) {
+  if (!alb) return '';
+  return `${normalizeSongKey(alb.title)}|||${normalizeSongKey(alb.artist)}`;
+}
+
+function albumRecordingMap(alb) {
+  const map = new Map(); // 正規化歌名 ➔ 該曲目出現過的演出者名稱（含 track / album 層）
+  (alb.tracks || []).forEach(t => {
+    const titleKey = normalizeSongKey(t.title);
+    if (!titleKey) return;
+    if (!map.has(titleKey)) map.set(titleKey, []);
+    const artists = map.get(titleKey);
+    [t.artist, t.albumArtist, alb.artist].forEach(a => {
+      const value = String(a || '').trim();
+      if (value) artists.push(value);
+    });
+  });
+  return map;
+}
+
+// 相同錄音收錄數：同一首歌（歌名＋可相容的演出者）出現在兩張專輯，是很強的關聯
+// 例：合輯裡各曲目仍帶原本的演出者 ➔ 與正式專輯相符；不同演出者翻唱同一首歌 ➔ 不算相同錄音
+function albumSharedRecordings(src, cand) {
+  const srcMap = albumRecordingMap(src);
+  if (!srcMap.size) return 0;
+  const candMap = albumRecordingMap(cand);
+  let shared = 0;
+  candMap.forEach((candArtists, titleKey) => {
+    if (!srcMap.has(titleKey)) return;
+    const srcArtists = srcMap.get(titleKey);
+    const matched = candArtists.some(ca => srcArtists.some(sa =>
+      ca.toLowerCase() === sa.toLowerCase() || artistKeysMatch(ca, sa)));
+    if (matched) shared++;
+  });
+  return shared;
+}
+
+function albumCreditOverlap(src, cand) {
+  const grab = (v) => String(v || '').toLowerCase().split(/[,;&\/]+/).map(s => s.trim()).filter(s => s.length > 2);
+  const srcSet = new Set([...grab(src.producer), ...grab(src.composer)]);
+  if (!srcSet.size) return '';
+  return [...grab(cand.producer), ...grab(cand.composer)].find(x => srcSet.has(x)) || '';
+}
+
+function isVariousArtistsAlbum(alb) {
+  const artist = String(alb.artist || '').toLowerCase();
+  return /\bvarious artists?\b/.test(artist);
+}
+
+function isCompilationAlbum(alb) {
+  const title = String(alb.title || '').toLowerCase();
+  if (/\b(best of|greatest hits|the very best|ultimate collection|compilation|anthology|box ?set|collection|recording sessions|合輯|精選|全集|全輯)\b/.test(title)) return true;
+  return isVariousArtistsAlbum(alb);
+}
+
+function albumIsDsd(alb) {
+  return ['DSD', 'DSF', 'DFF'].includes(String(alb.formatName || '').toUpperCase());
+}
+
+function albumIsHiRes(alb) {
+  if (albumIsDsd(alb)) return true;
+  if (alb.audioQuality === 'HI_RES_LOSSLESS' || alb.audioQuality === 'HIRES') return true;
+  return (alb.bitsPerSample || 0) >= 24 || (alb.sampleRate || 0) > 48000;
+}
+
+// 本機專輯之間的關聯評分
+function scoreAlbumSimilarity(src, cand) {
+  const signals = [];
+  let score = 0;
+
+  const srcArtist = String(src.artist || '').trim();
+  const candArtist = String(cand.artist || '').trim();
+  const sameArtist = !!srcArtist && !!candArtist && !isUnknownArtist(srcArtist) && !isUnknownArtist(candArtist)
+    && (srcArtist.toLowerCase() === candArtist.toLowerCase() || artistKeysMatch(srcArtist, candArtist));
+  if (sameArtist) {
+    score += 70;
+    signals.push({ weight: 70, label: `同演出者 ${candArtist}` });
+  }
+
+  const srcGenre = String(src.genre || '').trim();
+  const candGenre = String(cand.genre || '').trim();
+  if (srcGenre && candGenre && srcGenre !== 'Various' && candGenre !== 'Various') {
+    if (srcGenre.toLowerCase() === candGenre.toLowerCase()) {
+      score += 60;
+      signals.push({ weight: 60, label: `同曲風 ${candGenre}` });
+    } else if ((GENRE_AFFINITY[srcGenre] || []).some(g => g.toLowerCase() === candGenre.toLowerCase())) {
+      score += 26;
+      signals.push({ weight: 26, label: `${srcGenre} 相近曲風 ${candGenre}` });
+    } else {
+      score -= 25; // 曲風不同：除非有其他強訊號，否則不該出現在推薦裡
+    }
+  }
+
+  const shared = albumSharedRecordings(src, cand);
+  if (shared > 0) {
+    const weight = Math.min(45, 15 * shared);
+    score += weight;
+    signals.push({ weight, label: `收錄 ${shared} 首相同曲目` });
+  }
+
+  const srcLabel = albumLabelValue(src);
+  const candLabel = albumLabelValue(cand);
+  if (srcLabel && candLabel && labelsMatch(srcLabel, candLabel)) {
+    score += 25;
+    signals.push({ weight: 25, label: `同廠牌 ${candLabel}` });
+  }
+
+  const sharedCredit = albumCreditOverlap(src, cand);
+  if (sharedCredit) {
+    score += 18;
+    signals.push({ weight: 18, label: `相同製作／作曲 ${sharedCredit}` });
+  }
+
+  const srcYear = Number(src.year) || 0;
+  const candYear = Number(cand.year) || 0;
+  if (srcYear && candYear) {
+    const diff = Math.abs(srcYear - candYear);
+    const tolerance = GENRE_ERA_TOLERANCE[srcGenre] || 15;
+    if (diff <= Math.min(3, tolerance)) {
+      score += 18;
+      signals.push({ weight: 18, label: `同為 ${candYear} 年發行` });
+    } else if (diff <= tolerance) {
+      score += 10;
+      signals.push({ weight: 10, label: `相近年代 ${candYear}` });
+    } else if (diff > tolerance * 2) {
+      score -= 8;
+    }
+  }
+
+  if (albumIsDsd(src) && albumIsDsd(cand)) {
+    score += 12;
+    signals.push({ weight: 12, label: '同為 DSD 發燒母帶' });
+  } else if (albumIsHiRes(src) && albumIsHiRes(cand)) {
+    score += 8;
+    signals.push({ weight: 8, label: '同為 Hi-Res 高解析版本' });
+  }
+
+  if (isCompilationAlbum(cand)) {
+    score -= 35;
+    signals.push({ weight: -35, label: '合輯／精選（關聯較弱）' });
+  }
+  if (isVariousArtistsAlbum(cand)) {
+    score -= 25;
+    signals.push({ weight: -25, label: '演出者為 Various Artists' });
+  }
+  const candTrackCount = (cand.tracks || []).length;
+  if (candTrackCount === 1) {
+    score -= 18;
+    signals.push({ weight: -18, label: '單曲' });
+  } else if (candTrackCount === 2) {
+    score -= 12;
+    signals.push({ weight: -12, label: 'EP／少量曲目' });
+  } else if (candTrackCount <= 3 && !sameArtist) {
+    score -= 20;
+    signals.push({ weight: -20, label: '曲目過少' });
+  }
+  if (isUnknownArtist(candArtist)) {
+    score -= 30;
+    signals.push({ weight: -30, label: '演出者不明' });
+  }
+
+  return { score, signals, shared };
+}
+
+function recommendReasonLabel(signals) {
+  const positive = (signals || []).filter(s => s.weight > 0).sort((a, b) => b.weight - a.weight);
+  if (!positive.length) return '精選推薦';
+  return positive.slice(0, 2).map(s => s.label).join('・');
+}
+
+function recommendReasonDetail(signals, score) {
+  const parts = (signals || []).map(s => `${s.label}（${s.weight > 0 ? '+' : ''}${s.weight}）`);
+  return `關聯原因：${parts.join('、') || '無'}｜關聯分 ${score}`;
+}
+
+// TIDAL 端改用真實關聯圖譜：同演出者的完整發行 + TIDAL 的「相近演出者」及其作品
+function scoreTidalRecommendation(src, item) {
+  const { alb, kind } = item;
+  const signals = [];
+  let score = 0;
+
+  const srcArtist = String(src.artist || '').trim();
+  const candArtist = String(alb.artist || '').trim();
+  const sameArtist = srcArtist && candArtist && !isUnknownArtist(srcArtist)
+    && (srcArtist.toLowerCase() === candArtist.toLowerCase() || artistKeysMatch(srcArtist, candArtist));
+
+  if (kind === 'discography' || sameArtist) {
+    score += 70;
+    signals.push({ weight: 70, label: `同演出者 ${candArtist || srcArtist} (TIDAL)` });
+  } else if (kind === 'similar') {
+    score += 45;
+    signals.push({ weight: 45, label: `與 ${srcArtist || '本專輯'} 風格相近 (TIDAL)` });
+  } else if (kind === 'genre') {
+    score += 40;
+    signals.push({ weight: 40, label: `同屬 ${String(src.genre || '').trim()} 作品 (TIDAL)` });
+  }
+
+  const type = String(alb.type || '').toUpperCase();
+  if (type === 'SINGLE' || type === 'EP') {
+    // 單曲與 EP 不是專輯：這個區塊只推薦專輯，直接排除
+    return { score: -999, signals: [{ weight: -999, label: `${type === 'SINGLE' ? '單曲' : 'EP'}（非專輯，不推薦）` }] };
+  }
+  if (type === 'COMPILATION') { score -= 25; signals.push({ weight: -25, label: '合輯 (TIDAL)' }); }
+
+  if (isTidalAlbumInLibrary(alb.tidalId)) {
+    score -= 100; // 已在曲庫的專輯不再推薦
+    signals.push({ weight: -100, label: '已在曲庫' });
+  }
+
+  const srcLabel = albumLabelValue(src);
+  if (srcLabel && alb.label && labelsMatch(srcLabel, alb.label)) {
+    score += 25;
+    signals.push({ weight: 25, label: `同廠牌 ${alb.label} (TIDAL)` });
+  }
+
+  const srcHiRes = albumIsHiRes(src);
+  const candHiRes = alb.audioQuality === 'HI_RES_LOSSLESS' || alb.audioQuality === 'HIRES'
+    || (alb.mediaMetadata && alb.mediaMetadata.tags && alb.mediaMetadata.tags.includes('HIRES_LOSSLESS'));
+  if (srcHiRes && candHiRes) {
+    score += 10;
+    signals.push({ weight: 10, label: '同為 Hi-Res 高解析版本 (TIDAL)' });
+  }
+
+  const srcYear = Number(src.year) || 0;
+  const candYear = Number(alb.year) || 0;
+  if (srcYear && candYear) {
+    const diff = Math.abs(srcYear - candYear);
+    const tolerance = GENRE_ERA_TOLERANCE[String(src.genre || '').trim()] || 15;
+    if (diff <= Math.min(3, tolerance)) { score += 12; signals.push({ weight: 12, label: `同為 ${candYear} 年發行 (TIDAL)` }); }
+    else if (diff <= tolerance) { score += 6; }
+  }
+
+  return { score, signals };
+}
+
+async function fetchTidalRecommendationAlbums(album) {
+  const artistName = String(album.artist || '').trim();
+  const genreName = String(album.genre || '').trim();
+  const out = [];
+  if (!window.tidalService || !window.tidalService.isLoggedIn) return out;
+
+  let entry = tidalRecommendCache.get(artistName || '__no_artist__');
+  if (!entry) {
+    entry = { discography: [], similarAlbums: [], genreAlbums: [] };
+    if (artistName && !isUnknownArtist(artistName)) {
+      try {
+        const artistObj = await window.tidalService.searchArtist(artistName);
+        if (artistObj && artistObj.id) {
+          entry.discography = (await window.tidalService.getArtistAlbums(artistObj.id, 25)) || [];
+          const similar = (await window.tidalService.getSimilarArtists(artistObj.id, 6)) || [];
+          const perArtist = await Promise.all(similar.slice(0, 6).map(async (sa) => {
+            if (!sa || !sa.id) return [];
+            try { return (await window.tidalService.getArtistAlbums(sa.id, 4)) || []; } catch (e) { return []; }
+          }));
+          entry.similarAlbums = perArtist.flat();
+        }
+      } catch (e) { console.warn('[recommend] TIDAL artist graph fetch failed:', e); }
+    }
+    if (genreName && genreName !== 'Various') {
+      try {
+        const res = await window.tidalService.search(genreName, 12);
+        entry.genreAlbums = (res && res.albums) || [];
+      } catch (e) { console.warn('[recommend] TIDAL genre search failed:', e); }
+    }
+    tidalRecommendCache.set(artistName || '__no_artist__', entry);
+    if (tidalRecommendCache.size > 40) {
+      // 只保留最近使用的演出者，避免久開後記憶體持續成長
+      const oldest = tidalRecommendCache.keys().next().value;
+      if (oldest !== (artistName || '__no_artist__')) tidalRecommendCache.delete(oldest);
+    }
+  }
+
+  entry.discography.forEach(alb => out.push({ alb, kind: 'discography' }));
+  entry.similarAlbums.forEach(alb => out.push({ alb, kind: 'similar' }));
+  entry.genreAlbums.forEach(alb => out.push({ alb, kind: 'genre' }));
+  return out;
+}
+
 function renderAlbumRecommendations(album) {
   const container = document.getElementById('albumRecommendationsGrid');
   const countBadge = document.getElementById('recommendCountBadge');
@@ -4982,103 +5305,28 @@ function renderAlbumRecommendations(album) {
     genreTag.textContent = currentGenre && currentGenre !== 'Various' ? currentGenre : '多元曲風';
   }
 
-  // Tokenize genres helper
-  const tokenizeGenre = (g) => {
-    if (!g) return [];
-    return g.toLowerCase()
-      .replace(/[\/,\-\_\&]/g, ' ')
-      .split(/\s+/)
-      .map(w => w.trim())
-      .filter(w => w.length > 1 && !['and', 'the', 'various', 'music'].includes(w));
-  };
+  const selfKey = albumIdentityKey(album);
+  const displayedKeys = new Set([selfKey]);
+  const displayedTitleKeys = new Set([titleArtistKey(album)]);
 
-  const albumGenreTokens = new Set(tokenizeGenre(currentGenre));
-  (album.tracks || []).forEach(t => {
-    tokenizeGenre(t.genre).forEach(w => albumGenreTokens.add(w));
-  });
+  const scored = (state.albums || [])
+    .filter(cand => albumIdentityKey(cand) !== selfKey)
+    .map(cand => Object.assign({ cand }, scoreAlbumSimilarity(album, cand)))
+    .filter(item => item.score >= RECOMMEND_MIN_SCORE)
+    .sort((a, b) => (b.score - a.score)
+      || (b.shared - a.shared)
+      || ((b.cand.tracks || []).length - (a.cand.tracks || []).length));
 
-  const candidates = (state.albums || []).filter(cand => {
-    // Exclude current album
-    const isSameTitle = (cand.title || '').toLowerCase().trim() === (album.title || '').toLowerCase().trim();
-    const isSameArtist = (cand.artist || '').toLowerCase().trim() === (album.artist || '').toLowerCase().trim();
-    return !(isSameTitle && isSameArtist);
-  });
-
-  // Calculate similarity scores for local library albums
-  const scored = candidates.map(cand => {
-    let score = 0;
-    let reason = '精選推薦';
-
-    const candGenre = (cand.genre || '').trim();
-    const candTokens = new Set(tokenizeGenre(candGenre));
-    (cand.tracks || []).forEach(t => {
-      tokenizeGenre(t.genre).forEach(w => candTokens.add(w));
-    });
-
-    // 1. Exact genre match
-    if (currentGenre && candGenre && currentGenre.toLowerCase() === candGenre.toLowerCase() && currentGenre !== 'Various') {
-      score += 120;
-      reason = `同為 ${candGenre} 曲風`;
-    } else {
-      // Token overlap
-      let overlapCount = 0;
-      let matchedWord = '';
-      albumGenreTokens.forEach(token => {
-        if (candTokens.has(token)) {
-          overlapCount++;
-          matchedWord = token;
-        }
-      });
-
-      if (overlapCount > 0) {
-        score += overlapCount * 40;
-        reason = `同含 ${matchedWord.toUpperCase()} 風格`;
-      }
-    }
-
-    // 2. Same Artist Bonus
-    if ((cand.artist || '').toLowerCase().trim() === (album.artist || '').toLowerCase().trim()) {
-      score += 50;
-      if (score < 100) reason = `同為 ${album.artist} 作品`;
-    }
-
-    // 3. Era / Decade Proximity
-    if (album.year && cand.year) {
-      const yearDiff = Math.abs(album.year - cand.year);
-      if (yearDiff <= 3) {
-        score += 25;
-        if (score < 40) reason = `同為 ${cand.year} 年代經典`;
-      } else if (yearDiff <= 10) {
-        score += 15;
-      }
-    }
-
-    // 4. Hi-Res / Format Proximity
-    if (cand.isLossless && album.isLossless) {
-      score += 10;
-    }
-    const isDsdCand = cand.formatName === 'DSD' || cand.formatName === 'DSF' || cand.formatName === 'DFF';
-    const isDsdAlbum = album.formatName === 'DSD' || album.formatName === 'DSF' || album.formatName === 'DFF';
-    if (isDsdCand && isDsdAlbum) {
-      score += 25;
-      reason = '同為 DSD 發燒母帶';
-    }
-
-    return { album: cand, score, reason };
-  });
-
-  // Sort descending by score
-  scored.sort((a, b) => b.score - a.score);
-
-  // Take top local recommended albums (up to 4)
   const localRecommendations = scored.slice(0, 4);
 
-  const displayedTitles = new Set();
-  displayedTitles.add((album.title || '').toLowerCase().trim());
-
   localRecommendations.forEach(item => {
-    displayedTitles.add((item.album.title || '').toLowerCase().trim());
-    container.appendChild(createRecommendAlbumCard(item.album, item.reason));
+    displayedKeys.add(albumIdentityKey(item.cand));
+    displayedTitleKeys.add(titleArtistKey(item.cand));
+    container.appendChild(createRecommendAlbumCard(
+      item.cand,
+      recommendReasonLabel(item.signals),
+      recommendReasonDetail(item.signals, item.score)
+    ));
   });
 
   const isTidalLoggedIn = window.tidalService && window.tidalService.isLoggedIn;
@@ -5086,82 +5334,296 @@ function renderAlbumRecommendations(album) {
   if (localRecommendations.length === 0 && !isTidalLoggedIn) {
     const empty = document.createElement('div');
     empty.className = 'recommend-empty-hint';
-    empty.textContent = `目前本機音樂庫中暫無其他 ${currentGenre || '同類型'} 專輯，在「資料夾」加入更多音樂目錄即可自動擴充風格比對推薦！`;
+    empty.textContent = `目前本機音樂庫中沒有與《${album.title}》足夠相關的專輯（同演出者、同曲風或相近曲風、同廠牌、相同曲目收錄）。在「資料夾」加入更多音樂目錄即可擴充推薦。`;
     container.appendChild(empty);
   } else if (countBadge) {
     countBadge.textContent = `${localRecommendations.length} 張推薦`;
   }
 
-  // 5. Enrich with online TIDAL albums if logged in
-  if (isTidalLoggedIn) {
-    const searchPromises = [];
-    const curArtistName = (album.artist || '').trim();
+  if (!isTidalLoggedIn) return;
 
-    if (curArtistName && !isUnknownArtist(curArtistName)) {
-      searchPromises.push(
-        window.tidalService.search(curArtistName, 8)
-          .then(res => ({ type: 'artist', albums: res?.albums || [] }))
-          .catch(() => ({ type: 'artist', albums: [] }))
-      );
-    }
+  const seq = ++albumRecommendRenderSeq;
+  fetchTidalRecommendationAlbums(album).then(list => {
+    if (seq !== albumRecommendRenderSeq || state.activeAlbumDetail !== album) return;
 
-    if (currentGenre && currentGenre !== 'Various') {
-      searchPromises.push(
-        window.tidalService.search(currentGenre, 8)
-          .then(res => ({ type: 'genre', albums: res?.albums || [] }))
-          .catch(() => ({ type: 'genre', albums: [] }))
-      );
-    }
-
-    Promise.all(searchPromises).then(results => {
-      if (state.activeAlbumDetail !== album) return;
-
-      const tidalCandidates = [];
-      results.forEach(res => {
-        (res.albums || []).forEach(tAlb => {
-          if (!tAlb || !tAlb.title) return;
-          const normTitle = (tAlb.title || '').toLowerCase().trim();
-          if (displayedTitles.has(normTitle)) return;
-          displayedTitles.add(normTitle);
-
-          let reason = 'TIDAL 發燒精選';
-          if (res.type === 'artist' || (tAlb.artist || '').toLowerCase().trim() === curArtistName.toLowerCase().trim()) {
-            reason = `同為 ${curArtistName} (TIDAL)`;
-          } else if (currentGenre && currentGenre !== 'Various') {
-            reason = `TIDAL ${currentGenre} 精選`;
-          }
-          tidalCandidates.push({ album: tAlb, reason });
-        });
-      });
-
-      const selectedTidal = tidalCandidates.slice(0, 5);
-      if (selectedTidal.length > 0) {
-        const emptyHint = container.querySelector('.recommend-empty-hint');
-        if (emptyHint) emptyHint.remove();
-
-        selectedTidal.forEach(item => {
-          container.appendChild(createRecommendAlbumCard(item.album, item.reason));
-        });
-      }
-
-      const totalCount = container.querySelectorAll('.recommend-card').length;
-      if (countBadge) {
-        countBadge.textContent = selectedTidal.length > 0 
-          ? `${totalCount} 張推薦 (含 TIDAL)` 
-          : `${totalCount} 張推薦`;
-      }
-
-      if (totalCount === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'recommend-empty-hint';
-        empty.textContent = `暫無其他 ${currentGenre || '同類型'} 專輯推薦。`;
-        container.appendChild(empty);
-      }
-    }).catch(err => {
-      console.warn('TIDAL album recommendations fetch error:', err);
+    const tidalScored = [];
+    list.forEach(item => {
+      const alb = item.alb;
+      if (!alb || !alb.title) return;
+      const key = albumIdentityKey(alb);
+      const titleKey = titleArtistKey(alb);
+      if (displayedKeys.has(key) || displayedTitleKeys.has(titleKey)) return;
+      const scoredTidal = scoreTidalRecommendation(album, item);
+      if (scoredTidal.score < RECOMMEND_MIN_SCORE) return;
+      displayedKeys.add(key);
+      displayedTitleKeys.add(titleKey);
+      tidalScored.push(Object.assign({ alb }, scoredTidal));
     });
-  }
+
+    tidalScored.sort((a, b) => b.score - a.score);
+    const selectedTidal = tidalScored.slice(0, 4);
+
+    if (selectedTidal.length > 0) {
+      const emptyHint = container.querySelector('.recommend-empty-hint');
+      if (emptyHint) emptyHint.remove();
+      selectedTidal.forEach(item => {
+        container.appendChild(createRecommendAlbumCard(
+          item.alb,
+          recommendReasonLabel(item.signals),
+          recommendReasonDetail(item.signals, item.score)
+        ));
+      });
+    }
+
+    const totalCount = container.querySelectorAll('.recommend-card').length;
+    if (countBadge) {
+      countBadge.textContent = selectedTidal.length > 0
+        ? `${totalCount} 張推薦 (含 TIDAL)`
+        : `${totalCount} 張推薦`;
+    }
+
+    if (totalCount === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'recommend-empty-hint';
+      empty.textContent = `本機與 TIDAL 端目前都沒有與《${album.title}》足夠相關的專輯推薦。`;
+      container.appendChild(empty);
+    }
+  }).catch(err => {
+    console.warn('TIDAL album recommendations fetch error:', err);
+  });
 }
+
+// ----------------- 推薦引擎執行期自我測試（main.js --test-recommend） -----------------
+// 以固定的假曲庫驗證多訊號評分、排序、門檻過濾，以及 TIDAL 端改用真實關聯圖譜後的行為。
+async function runRecommendSelfTest() {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(17, report); } catch (err) {}
+  };
+  const waitFor = (pred, ms) => new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => {
+      let value = false;
+      try { value = !!pred(); } catch (e) { value = false; }
+      if (value) { resolve(true); return; }
+      if (Date.now() - t0 > ms) { resolve(false); return; }
+      setTimeout(tick, 120);
+    };
+    tick();
+  });
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  const realTidalService = window.tidalService;
+  const realActiveAlbum = state.activeAlbumDetail;
+  let injected = false;
+  let savedTracks = null;
+
+  try {
+    if (!window.electronAPI || !window.electronAPI.captureStep) { bad('capture IPC available'); finish(); return; }
+
+    const mk = (id, album, artist, genre, year, label, titles, hiRes) => titles.map((title, i) => ({
+      id: `${id}_t${i}`, title, trackNumber: i + 1, duration: 240,
+      album, artist, albumArtist: artist, year, genre,
+      label: label || null,
+      formatName: 'FLAC', sampleRate: hiRes ? 96000 : 44100, bitsPerSample: hiRes ? 24 : 16,
+      isLossless: true, addedAt: Date.now(), filePath: `D:\\__rp_rec__\\${album}\\${i + 1}.flac`
+    }));
+
+    const fixture = [
+      ...mk('rec_src', 'Blue Field Sessions', 'Miles Test', 'Jazz', 1959, 'Field Records', ['Song Alpha', 'Song Beta', 'Song Gamma', 'Song Delta'], true),
+      ...mk('rec_c1', 'Second Field Session', 'Miles Test', 'Jazz', 1960, 'Field Records', ['Song Alpha', 'Quiet River', 'Night Harbor', 'Old Town'], true),
+      ...mk('rec_c2', 'Third Field Session', 'Monk Test', 'Jazz', 1961, 'Field Records', ['Song Beta', 'Quiet River', 'Night Harbor', 'Old Town'], false),
+      ...mk('rec_c3', 'Fourth Field Session', 'Sonny Test', 'Blues', 1960, null, ['Delta Morning', 'Slow Train', 'Evening Dust', 'Cold Hall'], false),
+      ...mk('rec_c4', 'Fifth Field Session', 'Nina Test', 'Metal', 1995, null, ['Heavy Anvil', 'Iron Peak', 'Storm Forge', 'Deep Cellar'], false),
+      // 同一演出者的精選輯：收錄完全相同的四首錄音 ➔ 靠相同曲目取得高關聯，但仍被合輯扣分
+      ...mk('rec_c5', 'Field Session Anthology', 'Miles Test', 'Jazz', 1959, null, ['Song Alpha', 'Song Beta', 'Song Gamma', 'Song Delta'], false),
+      // Various Artists 合輯：同曲風同年代，但沒有相同錄音 ➔ 被合輯與 Various Artists 扣分後低於門檻
+      ...mk('rec_c6', 'Field Session Sampler', 'Various Artists', 'Jazz', 1959, null, ['Sample One', 'Sample Two', 'Sample Three', 'Sample Four'], false),
+      { id: 'rec_own', title: 'Owned Tidal Track', trackNumber: 1, duration: 240, album: 'Unrelated Owned Tidal Set', artist: 'Nina Test', albumArtist: 'Nina Test', year: 1995, genre: 'Metal', isTidal: true, tidalId: 'trk-owned', tidalAlbumId: 't-owned', audioQuality: 'HI_RES_LOSSLESS', formatName: 'FLAC', sampleRate: 96000, bitsPerSample: 16, isLossless: true, addedAt: Date.now() }
+    ];
+
+    // 只讓測試曲庫存在，避免與內建示範專輯（Kind of Blue 等）混在一起造成排序不可控
+    const savedTracks = state.tracks;
+    state.tracks = fixture;
+    rebuildLibraryCollections();
+    injected = true;
+
+    const byTitle = (t) => (state.albums || []).find(a => a.title === t);
+    const src = byTitle('Blue Field Sessions');
+    if (!src) { bad('fixture source album built from injected tracks'); finish(); return; }
+
+    // ① 評分：每個候選的预期分數（同演出者 70／同曲風 60／相近曲風 26／相同曲目 15×n 上限 45／
+    //    同廠牌 25／年代 18／Hi-Res 8／合輯 -14／不同曲風 -25）
+    const expectScores = [
+      ['Second Field Session', 196],
+      ['Field Session Anthology', 158],
+      ['Third Field Session', 103],
+      ['Fourth Field Session', 44],
+      ['Field Session Sampler', 18],
+      ['Fifth Field Session', -25]
+    ];
+    const mismatches = [];
+    expectScores.forEach(([title, want]) => {
+      const cand = byTitle(title);
+      if (!cand) { mismatches.push(`${title}: 未建立`); return; }
+      const got = scoreAlbumSimilarity(src, cand).score;
+      if (got !== want) mismatches.push(`${title}: 得到 ${got} 預期 ${want}`);
+    });
+    if (!mismatches.length) ok('多訊號關聯評分', expectScores.map(([t, w]) => `${t}=${w}`).join(', '));
+    else bad('多訊號關聯評分', mismatches.join(' | '));
+
+    // ② 本機推薦排序與門檻過濾（此階段不接 TIDAL）
+    window.tidalService = null;
+    const grid = document.getElementById('albumRecommendationsGrid');
+    if (!grid) { bad('albumRecommendationsGrid exists'); finish(); return; }
+    state.activeAlbumDetail = src;
+    renderAlbumRecommendations(src);
+
+    const ready = await waitFor(() => grid.querySelectorAll('.recommend-card').length >= 4, 8000);
+    const cardText = (c) => { const el = c.querySelector('.recommend-title'); return el ? el.textContent.trim() : ''; };
+    const titles = [...grid.querySelectorAll('.recommend-card')].map(cardText);
+    const wantOrder = ['Second Field Session', 'Field Session Anthology', 'Third Field Session', 'Fourth Field Session'];
+    if (JSON.stringify(titles) === JSON.stringify(wantOrder)) {
+      ok('推薦排序依關聯分且同演出者優先', titles.join(' > '));
+    } else {
+      bad('推薦排序依關聯分且同演出者優先', `得到 ${titles.join(' > ')}｜預期 ${wantOrder.join(' > ')}｜ready=${ready}`);
+    }
+
+    if (titles.includes('Fifth Field Session')) bad('不同曲風的專輯被門檻過濾', 'Fifth Field Session 仍出現');
+    else ok('不同曲風的專輯被門檻過濾', `RECOMMEND_MIN_SCORE=${RECOMMEND_MIN_SCORE}`);
+
+    if (titles.includes('Fourth Field Session')) ok('相近曲風（Jazz ➔ Blues）可進入推薦');
+    else bad('相近曲風（Jazz ➔ Blues）可進入推薦', '未出現');
+
+    if (titles.includes('Field Session Sampler')) bad('Various Artists 合輯被門檻過濾', 'Field Session Sampler 仍出現');
+    else ok('Various Artists 合輯被門檻過濾');
+
+    const badge = document.getElementById('recommendCountBadge');
+    if (badge && /4/.test(badge.textContent || '')) ok('推薦數量徽章與結果一致', badge.textContent.trim());
+    else bad('推薦數量徽章與結果一致', badge ? badge.textContent.trim() : '無徽章');
+
+    const details = [...grid.querySelectorAll('.recommend-card')].map(c => c.dataset.recommendDetail || '');
+    const reasons = [...grid.querySelectorAll('.recommend-card')].map(c => c.dataset.recommendReason || '');
+    if (reasons[0] && reasons[0].startsWith('同演出者 Miles Test')) ok('卡片標示最強關聯原因', reasons[0]);
+    else bad('卡片標示最強關聯原因', reasons[0] || '無原因');
+    if (reasons[2] && reasons[2].includes('同廠牌 Field Records')) ok('同廠牌訊號列入原因', reasons[2]);
+    else bad('同廠牌訊號列入原因', reasons[2] || '無原因');
+    if (details[1] && details[1].includes('相同曲目') && details[1].includes('合輯／精選') && details[1].includes('-35')) {
+      ok('精選輯靠相同錄音取得關聯但仍被合輯扣分', details[1]);
+    } else bad('精選輯靠相同錄音取得關聯但仍被合輯扣分', details[1] || '無細節');
+    if (reasons[3] && reasons[3].includes('相近曲風 Blues')) ok('相近曲風原因寫明曲風連結', reasons[3]);
+    else bad('相近曲風原因寫明曲風連結', reasons[3] || '無原因');
+    if ([...grid.querySelectorAll('.recommend-card')].every(c => (c.dataset.recommendDetail || '').includes('關聯分'))) {
+      ok('每張卡片滑過可看完整訊號與權重');
+    } else bad('每張卡片滑過可看完整訊號與權重', 'detail 缺失');
+
+    // 截圖：切到專輯頁讓「同類型推薦專輯」區塊可見（不用 openAlbumDetail，避免線上補資料干擾斷言）
+    try {
+      navigateTo('albumDetail');
+      const tEl = document.getElementById('detailTitle');
+      const aEl = document.getElementById('detailArtist');
+      if (tEl) tEl.textContent = src.title;
+      if (aEl) aEl.textContent = `${src.artist}｜${src.year}｜${src.genre}`;
+    } catch (err) {}
+    await sleep(1200);
+    // 把「同類型推薦專輯」區塊捲到可视區，截取才有推薦卡片
+    try {
+      const section = document.getElementById('albumRecommendationsGrid');
+      let scroller = section ? section.parentElement : null;
+      while (scroller && scroller !== document.body) {
+        const st = window.getComputedStyle(scroller);
+        if (/(auto|scroll)/.test(st.overflowY) && scroller.scrollHeight > scroller.clientHeight + 4) break;
+        scroller = scroller.parentElement;
+      }
+      if (section) {
+        const delta = section.getBoundingClientRect().top - 120;
+        if (scroller && scroller !== document.documentElement && scroller !== document.body) scroller.scrollTop += delta;
+        else window.scrollBy(0, delta);
+      }
+    } catch (err) {}
+    await sleep(1200);
+    try { window.electronAPI.captureStep(18, 'recommend grid rendered'); } catch (err) {}
+    await sleep(3000);
+
+    // ③ TIDAL 端：真實 discography + 相近演出者；單曲／已在曲庫／與本機重複都要被排除
+    window.tidalService = {
+      isLoggedIn: true,
+      searchArtist: async (name) => ({ id: 'a1', name }),
+      getArtistAlbums: async (artistId) => artistId === 'a1' ? [
+        { tidalId: 't-own', title: 'Blue Field Sessions', artist: 'Miles Test', type: 'ALBUM', year: 1959 },
+        { tidalId: 't-new', title: 'Miles Test Live Set', artist: 'Miles Test', type: 'ALBUM', year: 1961, label: 'Field Records', audioQuality: 'HI_RES_LOSSLESS' },
+        { tidalId: 't-single', title: 'Miles Test Single Cut', artist: 'Miles Test', type: 'SINGLE', year: 1960 },
+        { tidalId: 't-owned', title: 'Owned Tidal Album', artist: 'Miles Test', type: 'ALBUM', year: 1962 }
+      ] : [
+        { tidalId: 't-sim', title: 'Similar Field Group Album', artist: 'Similar Field Group', type: 'ALBUM', year: 1962 }
+      ],
+      getSimilarArtists: async () => [{ id: 'a2', name: 'Similar Field Group' }],
+      search: async () => ({ albums: [{ tidalId: 't-genre', title: 'Some Jazz Record', artist: 'Other Jazz Guy', type: 'ALBUM', year: 1970 }], tracks: [] })
+    };
+    tidalRecommendCache.clear();
+    renderAlbumRecommendations(src);
+
+    const tidalReady = await waitFor(() =>
+      [...grid.querySelectorAll('.recommend-card')].some(c => (c.dataset.recommendReason || '').includes('TIDAL')), 20000);
+    const allTitles = [...grid.querySelectorAll('.recommend-card')].map(cardText);
+    const tidalTitles = allTitles.slice(wantOrder.length);
+
+    if (JSON.stringify(tidalTitles) === JSON.stringify(['Miles Test Live Set', 'Similar Field Group Album', 'Some Jazz Record'])) {
+      ok('TIDAL 推薦改用真實關聯圖譜並依分數排序', tidalTitles.join(' > '));
+    } else {
+      bad('TIDAL 推薦改用真實關聯圖譜並依分數排序', `得到 ${tidalTitles.join(' > ')}｜全部 ${allTitles.join(' > ')}｜ready=${tidalReady}`);
+    }
+
+    if (tidalTitles.includes('Miles Test Single Cut')) bad('單曲不列入專輯推薦', 'SINGLE 仍出現');
+    else ok('單曲不列入專輯推薦');
+    if (tidalTitles.includes('Owned Tidal Album')) bad('已在曲庫的 TIDAL 專輯不再推薦', 't-owned 仍出現');
+    else ok('已在曲庫的 TIDAL 專輯不再推薦', 't-owned 被 -100 抵銷');
+    const dupCount = allTitles.filter(t => t === 'Blue Field Sessions').length;
+    if (dupCount === 0) ok('與本機重複的 TIDAL 專輯被去重');
+    else bad('與本機重複的 TIDAL 專輯被去重', `重複 ${dupCount} 次`);
+
+    const badge2 = document.getElementById('recommendCountBadge');
+    if (badge2 && /含 TIDAL/.test(badge2.textContent || '')) ok('徽章顯示含 TIDAL 的張數', badge2.textContent.trim());
+    else bad('徽章顯示含 TIDAL 的張數', badge2 ? badge2.textContent.trim() : '無徽章');
+
+    const tidalReasons = [...grid.querySelectorAll('.recommend-card')].map(c => c.dataset.recommendReason || '').filter(r => r.includes('TIDAL'));
+    if (tidalReasons[0] && tidalReasons[0].includes('同演出者') && tidalReasons[1] && tidalReasons[1].includes('風格相近')) {
+      ok('TIDAL 卡片原因區分同演出者與相近演出者', `${tidalReasons[0]} / ${tidalReasons[1]}`);
+    } else bad('TIDAL 卡片原因區分同演出者與相近演出者', tidalReasons.join(' / ') || '無原因');
+
+    // ④ 清理
+    state.tracks = savedTracks || [];
+    injected = false;
+    rebuildLibraryCollections();
+    const leftovers = ['Blue Field Sessions', 'Second Field Session', 'Field Session Anthology', 'Field Session Sampler', 'Unrelated Owned Tidal Set'].filter(t => byTitle(t));
+    if (!leftovers.length) ok('測試資料於自我測試後移除');
+    else bad('測試資料於自我測試後移除', leftovers.join(', '));
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  } finally {
+    window.tidalService = realTidalService;
+    state.activeAlbumDetail = realActiveAlbum;
+    tidalRecommendCache.clear();
+    if (injected) {
+      state.tracks = savedTracks || [];
+      rebuildLibraryCollections();
+    }
+    const g = document.getElementById('albumRecommendationsGrid');
+    if (g) g.innerHTML = '';
+  }
+  finish();
+}
+
+try {
+  const rpRecommendParams = new URLSearchParams(window.location.search || '');
+  if (rpRecommendParams.get('testRecommend') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runRecommendSelfTest(); }, 2600);
+  }
+} catch (err) {}
 
 // ----------------- Recommended Artists Engine (Genre-based + TIDAL) -----------------
 function renderAlbumArtistRecommendations(album) {

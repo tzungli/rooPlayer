@@ -24,7 +24,8 @@ const TEST_VERSIONS = process.argv.includes('--test-versions'); // 執行期測�
 const TEST_EXCLUSIVE = process.argv.includes('--test-exclusive'); // 執行期測試 WASAPI 獨佔輸出端到端流程
 const TEST_LABELS = process.argv.includes('--test-labels'); // 執行期測試發行公司（RECORD LABEL）頁面
 const TEST_KKBOX_MATCH = process.argv.includes('--test-kkbox-match'); // 執行期測試 KKBOX 清單的本機 / TIDAL 比對欄位
-if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH) {
+const TEST_RECOMMEND = process.argv.includes('--test-recommend'); // 執行期測試專輯頁「同類型推薦專輯」關聯評分
+if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND) {
   // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
   // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -289,6 +290,24 @@ function runCaptureSequence() {
         app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
         return;
       }
+      if (TEST_RECOMMEND) {
+        console.log('[test-recommend] waiting for renderer album-recommendation self-test result');
+        // 渲染端先發 18（推薦卡片已渲染，截取畫面），最後發 17（測試報告）
+        const shotSignal = new Promise((resolve) => { captureSignals[18] = (info) => { captureSignals[18] = null; resolve(info); }; });
+        const reportPromise = waitRendererInfo(17, 120000);
+        const shotInfo = await shotSignal;
+        try {
+          const img = await mainWindow.webContents.capturePage();
+          const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'recommend-test.png');
+          fs.writeFileSync(shotPath, img.toPNG());
+          console.log('[test-recommend] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
+        } catch (e) { console.warn('[test-recommend] screenshot failed:', e); }
+        const report = await reportPromise;
+        console.log('[test-recommend] renderer report: ' + report);
+        console.log('[test] done');
+        app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
+        return;
+      }
       await sleep(4500); // 等 initApp / demo 展示渲染完成
       console.log('[capture] step 1: home');
       await captureShot('home.png');
@@ -366,7 +385,10 @@ function createWindow() {
     console.warn('Failed to configure kkboxSession:', e);
   }
 
-  if (TEST_KKBOX_MATCH) {
+  if (TEST_RECOMMEND) {
+    // 不帶 rpCapture：截圖流程的 UI 自動化會開 modal / 注入示範專輯，干擾本測試的 DOM 斷言
+    mainWindow.loadFile('index.html', { query: { testRecommend: '1' } });
+  } else if (TEST_KKBOX_MATCH) {
     // 不帶 rpCapture：截圖流程的 UI 自動化會開 modal / 切換頁面，干擾 KKBOX 清單的 DOM 斷言
     mainWindow.loadFile('index.html', { query: { testKkboxMatch: '1' } });
   } else if (TEST_LABELS) {
@@ -390,10 +412,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH) runCaptureSequence();
+    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND) runCaptureSequence();
   });
 
-  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH) {
+  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND) {
     // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {
