@@ -3974,6 +3974,28 @@ body.table-col-resizing * {
   box-shadow: 0 0 8px rgba(16, 185, 129, 0.35);
 }
 
+/* WASAPI 獨佔輸出：與 LINE OUT 同樣鎖定音量，但用琥珀色區分「繞過混音器」的輸出路徑 */
+.exclusive-out-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+}
+
+.exclusive-out-label {
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.exclusive-out-btn.exclusive-out-active {
+  background: rgba(245, 158, 11, 0.20);
+  border-color: var(--accent-gold, #f59e0b);
+  color: var(--accent-gold, #f59e0b);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.35);
+}
+
 .volume-slider:disabled {
   opacity: 0.35;
   cursor: not-allowed;

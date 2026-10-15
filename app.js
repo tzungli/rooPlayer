@@ -233,6 +233,7 @@ const state = {
   shufflePointer: -1,
   volume: 1.0, // 程式開啟預設音量：最大
   lineOut: false, // Line Out：最大音量輸出鎖定（鎖定時不可調音量）
+  exclusive: false, // WASAPI 獨佔輸出：繞過 Windows 混音器直出（等同 LINE OUT 音量鎖定）
   theme: 'dark',
   currentView: 'overview',
   activeAlbumDetail: null,
@@ -5994,6 +5995,19 @@ async function playDsdTrack(track, startSec = 0) {
       return;
     }
 
+    // WASAPI 獨佔輸出：DSF 由引擎固定輸出 88.2kHz/24-bit，裝置需支援 88.2k 獨佔格式
+    if (state.exclusive && exclusiveZoneOk()) {
+      const exRate = exclusiveChooseRate(88200, 88200);
+      if (exRate === 88200 && await exclusiveStartStream(track, startSec, streamUrl, exRate)) {
+        state.isPlaying = true;
+        updatePlayPauseBtnUI();
+        updateSignalPathUI(track);
+        showToast('🎚️ WASAPI 獨佔輸出: DSD ➔ 24-bit/88.2kHz 直出（繞過混音器，系統音效暫停）');
+        return;
+      }
+      exclusiveFallbackShared(exRate === 88200 ? '獨佔輸出啟動失敗' : '輸出裝置不支援 88.2kHz 獨佔格式');
+    }
+
     nativeAudio.src = streamUrl;
     nativeAudio.play().then(() => {
       state.isPlaying = true;
@@ -6088,6 +6102,26 @@ async function playSoxTrack(track, startSec = 0) {
     if (!streamUrl) {
       playerArtist.textContent = '無法建立 SoX 升頻串流服務';
       return;
+    }
+
+    // WASAPI 獨佔輸出：同一条引擎串流改由 helper 以裝置支援的取樣率直出，
+    // 升頻 / PEQ / 卷積全部保留；裝置最高獨取樣率低於來源時自動退回共享模式。
+    if (state.exclusive && exclusiveZoneOk()) {
+      const srcRate = track.sampleRate || 44100;
+      const exRate = exclusiveChooseRate(srcRate, targetRate);
+      if (exRate) {
+        const exUrl = await window.electronAPI.getSoxStreamUrl(track.filePath, startSec, exRate, '', dsdOrder, filterPhase, peqPayloadJson(), convPayloadJson());
+        if (exUrl && await exclusiveStartStream(track, startSec, exUrl, exRate)) {
+          state.isPlaying = true;
+          updatePlayPauseBtnUI();
+          updateSignalPathUI(track);
+          showToast(`🎚️ WASAPI 獨佔輸出: ${formatKhz(srcRate)} ➔ ${formatKhz(exRate)} 24-bit 直出（繞過混音器，系統音效暫停）`);
+          return;
+        }
+        exclusiveFallbackShared('獨佔輸出啟動失敗');
+      } else {
+        exclusiveFallbackShared(`裝置最高獨取樣率低於來源 ${formatKhz(srcRate)}`);
+      }
     }
 
     nativeAudio.src = streamUrl;
@@ -7847,6 +7881,7 @@ function getCurrentPlaybackTime() {
   if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
     return state.dlnaCurrentSec || 0;
   }
+  if (exclusiveActive) return exclusivePosSec || 0; // 獨佔輸出由 helper 的位置事件驅動
   if (isCurrentDsd) {
     return (currentDsdOffset || 0) + (nativeAudio.currentTime || 0);
   }
@@ -7869,6 +7904,8 @@ function seekPlaybackTo(targetSec) {
     if (window.electronAPI && window.electronAPI.seekDlna) {
       window.electronAPI.seekDlna(state.activeDlnaDevice.id, targetSec);
     }
+  } else if (exclusiveActive) {
+    exclusiveSeekTo(targetSec);
   } else if (isCurrentDsd) {
     playDsdTrack(track, targetSec);
   } else if (isCurrentSox) {
@@ -8090,6 +8127,8 @@ function togglePlayPause() {
     } else if (currentTrack.isDemo || !currentTrack.filePath) {
       stopDemoSynth();
       pauseVirtualProgress();
+    } else if (exclusiveActive) {
+      try { window.electronAPI.exclusivePause(); } catch (err) {}
     } else {
       nativeAudio.pause();
     }
@@ -8119,6 +8158,9 @@ function togglePlayPause() {
     } else if (currentTrack.isDemo || !currentTrack.filePath) {
       playDemoSynth(currentTrack);
       resumeVirtualProgress();
+    } else if (exclusiveActive) {
+      exclusiveEndedFired = false;
+      try { window.electronAPI.exclusiveResume(); } catch (err) {}
     } else {
       nativeAudio.play();
     }
@@ -8366,6 +8408,7 @@ function stopPlaybackAtEnd() {
   updatePlayPauseBtnUI();
   stopDemoSynth();
   stopVirtualProgress();
+  exclusiveStopStream();
   if (nativeAudio.src) {
     nativeAudio.pause();
   }
@@ -8560,6 +8603,11 @@ scrubberBar.addEventListener('click', (e) => {
     virtualCurrentSec = Math.floor(ratio * virtualTotalSec);
     currentTimeLabel.textContent = formatDuration(virtualCurrentSec);
     scrubberFill.style.width = `${ratio * 100}%`;
+  } else if (exclusiveActive) {
+    const total = track.duration || 300;
+    exclusiveSeekTo(Math.max(0, Math.min(total, ratio * total)));
+    scrubberFill.style.width = `${ratio * 100}%`;
+    currentTimeLabel.textContent = formatDuration(Math.max(0, Math.min(total, ratio * total)));
   } else if (isCurrentDsd) {
     const targetSec = Math.floor(ratio * (track.duration || 300));
     playDsdTrack(track, targetSec);
@@ -8633,8 +8681,373 @@ btnLineOut.addEventListener('click', () => {
     volumeSlider.value = restore;
     applyVolume(restore);
     showToast('🔌 Line Out 已解除：恢復音量調整');
+    // 獨佔輸出必然伴隨最大音量直出：解除音量鎖定時一併解除獨佔輸出
+    if (state.exclusive) setExclusiveOff('WASAPI 獨佔輸出需鎖定最大音量，已一併解除');
   }
 });
+
+// ----------------- WASAPI 獨佔輸出（Windows 聲音獨佔模式） -----------------
+// 開啟後本機播放改由 tools/rp-wasapi-exclusive（主行程以 Windows 內建 csc 編譯）直接以
+// AUDCLNT_SHAREMODE_EXCLUSIVE 驅動輸出裝置：引擎串流完全不變，helper 用 Range 分段讀取
+// 同一条 /sox-stream、/dsd-stream，所以升頻 / PEQ / 卷縮全部保留。
+// 獨佔期間 Windows 混音器被繞過（系統音效暫停），音量等同 LINE OUT 最大直出；
+// 任何一步失敗都自動退回原本的共享模式播放路徑，不會變成不能聽。
+const btnExclusive = document.getElementById('btnExclusive');
+let exclusiveCap = null;           // 裝置獨佔能力探測結果（主行程快取）
+let exclusiveCapChecked = false;
+let exclusiveActive = false;       // helper 目前驅動輸出裝置
+let exclusiveRate = 0;             // helper 目前使用的取樣率
+let exclusiveStreamStartSec = 0;   // 目前串流的起點（絕對秒）
+let exclusivePosSec = 0;           // helper 位置事件換算出的絕對播放位置（秒）
+let exclusiveEndedFired = false;
+let exclusiveFallbackAt = 0;       // 最近一次退回共享的時間戳（避免每首都重試、每首都跳訊息）
+let exclusiveEventTap = null;      // 自我測試攔截點：回傳 true 表示事件已由測試接管
+
+function exclusiveApiOk() {
+  return !!(window.electronAPI && window.electronAPI.exclusiveStart && window.electronAPI.exclusiveProbe);
+}
+
+function exclusiveZoneOk() {
+  return state.activeAudioZone === 'local' && !state.activeDlnaDevice;
+}
+
+function isDsdFilePath(filePath) {
+  return /\.(dsf|dff)$/i.test(String(filePath || ''));
+}
+
+function exclusiveSupportedRates() {
+  if (!exclusiveCap || !exclusiveCap.ok || !Array.isArray(exclusiveCap.supported)) return [];
+  return exclusiveCap.supported.map(s => Number(s.rate) || 0).filter(r => r > 0).sort((a, b) => b - a);
+}
+
+async function exclusiveEnsureCapability(force = false) {
+  if (!exclusiveApiOk()) return null;
+  if (!force && exclusiveCapChecked) return exclusiveCap;
+  try {
+    exclusiveCap = await window.electronAPI.exclusiveProbe(force);
+  } catch (err) {
+    exclusiveCap = { ok: false, msg: String((err && err.message) || err) };
+  }
+  exclusiveCapChecked = true;
+  updateExclusiveBtnState();
+  return exclusiveCap;
+}
+
+// 裝置能力 ∩ 來源取樣率：選 ≥ 來源率且尽量貼近目標者；回傳 null 代表這首無法獨佔直出。
+function exclusiveChooseRate(sourceRate, targetRate) {
+  const rates = exclusiveSupportedRates();
+  if (!rates.length) return null;
+  const floor = Math.max(1, Number(sourceRate) || 1);
+  const usable = rates.filter(r => r >= floor);
+  if (!usable.length) return null;
+  const want = Number(targetRate) || floor;
+  const up = usable.filter(r => r >= want).sort((a, b) => a - b);
+  return up.length ? up[0] : usable[0];
+}
+
+// 獨佔初始化前必須釋放共享模式佔用（Chromium 的 HTMLAudioElement 仍持有同一裝置時，
+// IAudioClient::Initialize 會回 AUDCLNT_E_DEVICE_IN_USE）
+function exclusiveReleaseSharedDevice() {
+  try { nativeAudio.pause(); } catch (err) {}
+  try {
+    nativeAudio.removeAttribute('src');
+    nativeAudio.load();
+  } catch (err) {}
+  // 示範合成器（WebAudio）同樣會佔用輸出裝置：獨佔初始化前先讓它讓位
+  try { stopDemoSynth(); } catch (err) {}
+  try { if (audioCtx && audioCtx.state === 'running') audioCtx.suspend(); } catch (err) {}
+}
+
+async function exclusiveStartStream(track, startSec, streamUrl, rate) {
+  if (!exclusiveApiOk() || !streamUrl || !rate) return false;
+  exclusiveReleaseSharedDevice();
+  let res = null;
+  try {
+    res = await window.electronAPI.exclusiveStart({
+      url: streamUrl,
+      rate,
+      deviceId: (exclusiveCap && exclusiveCap.deviceId) || ''
+    });
+  } catch (err) {
+    res = { ok: false, msg: String((err && err.message) || err) };
+  }
+  if (!res || !res.ok) {
+    exclusiveActive = false;
+    exclusiveRate = 0;
+    return false;
+  }
+  exclusiveActive = true;
+  exclusiveRate = rate;
+  exclusiveStreamStartSec = startSec;
+  exclusivePosSec = startSec;
+  exclusiveEndedFired = false;
+  updateExclusiveBtnState();
+  return true;
+}
+
+function exclusiveStopStream() {
+  const wasActive = exclusiveActive;
+  exclusiveActive = false;
+  exclusiveRate = 0;
+  exclusiveStreamStartSec = 0;
+  if (wasActive && exclusiveApiOk()) {
+    try { window.electronAPI.exclusiveStop(); } catch (err) {}
+  }
+}
+
+// 獨佔失敗：這首改走共享模式，並把開關關掉（原因清楚告知；8 秒內不重複跳訊息，避免每首都跳）
+function exclusiveFallbackShared(msg) {
+  const now = Date.now();
+  const notify = now - exclusiveFallbackAt >= 8000;
+  exclusiveFallbackAt = now;
+  exclusiveStopStream();
+  state.exclusive = false;
+  try { localStorage.setItem('rooplayer_exclusive_output', '0'); } catch (err) {}
+  updateExclusiveBtnState();
+  if (notify) showToast(`⚠️ WASAPI 獨佔輸出無法使用（${msg || '裝置不支援'}），已退回共享模式播放`);
+}
+
+function exclusiveHandleEnded() {
+  if (exclusiveEndedFired) return;
+  exclusiveEndedFired = true;
+  exclusiveStopStream();
+  onTrackEnded();
+}
+
+function exclusiveSeekTo(targetSec) {
+  if (!exclusiveActive || !exclusiveApiOk()) return false;
+  const rel = Math.max(0, targetSec - exclusiveStreamStartSec);
+  exclusivePosSec = targetSec;
+  exclusiveEndedFired = false;
+  try { window.electronAPI.exclusiveSeek(rel); } catch (err) {}
+  return true;
+}
+
+function renderExclusiveProgress() {
+  const track = state.queue[state.currentTrackIndex];
+  if (!track) return;
+  const total = (track.duration && track.duration > 0) ? track.duration : 0;
+  const current = Math.max(0, exclusivePosSec);
+  currentTimeLabel.textContent = formatDuration(current);
+  if (total > 0) {
+    scrubberFill.style.width = `${Math.min(100, (current / total) * 100)}%`;
+    totalTimeLabel.textContent = formatDuration(total);
+  }
+  updateNowPlayingPlaybackProgress();
+}
+
+if (exclusiveApiOk() && window.electronAPI.onExclusiveStatus) {
+  window.electronAPI.onExclusiveStatus((ev) => {
+    if (!ev) return;
+    if (exclusiveEventTap && exclusiveEventTap(ev)) return; // 自我測試接管事件
+    if (ev.ev === 'pos') {
+      if (!exclusiveActive || !exclusiveRate) return;
+      const audible = Number(ev.audible) || 0;
+      exclusivePosSec = exclusiveStreamStartSec + audible / exclusiveRate;
+      renderExclusiveProgress();
+      const track = state.queue[state.currentTrackIndex];
+      const total = (track && track.duration) ? track.duration : 0;
+      if (total > 0 && exclusivePosSec >= total) exclusiveHandleEnded();
+    } else if (ev.ev === 'eof') {
+      if (exclusiveActive) exclusiveHandleEnded();
+    } else if (ev.ev === 'fail' || ev.ev === 'crashed') {
+      if (!exclusiveActive) return;
+      const resumeSec = exclusivePosSec;
+      const track = state.queue[state.currentTrackIndex];
+      const wasPlaying = state.isPlaying;
+      exclusiveFallbackShared(ev.msg);
+      if (wasPlaying && track && track.filePath) {
+        if (isDsdFilePath(track.filePath)) playDsdTrack(track, resumeSec);
+        else playSoxTrack(track, resumeSec);
+      }
+    }
+  });
+}
+
+// 關閉獨佔輸出：寫入設定、停止 helper，必要時從目前位置改以共享模式續播
+function setExclusiveOff(note) {
+  state.exclusive = false;
+  try { localStorage.setItem('rooplayer_exclusive_output', '0'); } catch (err) {}
+  const resumeSec = exclusiveActive ? exclusivePosSec : 0;
+  const wasPlaying = state.isPlaying;
+  const track = state.queue[state.currentTrackIndex];
+  exclusiveStopStream();
+  updateExclusiveBtnState();
+  if (wasPlaying && track && track.filePath) {
+    if (isDsdFilePath(track.filePath)) playDsdTrack(track, resumeSec);
+    else playSoxTrack(track, resumeSec);
+  }
+  if (note) showToast('🎚️ ' + note);
+}
+
+function updateExclusiveBtnState() {
+  if (!btnExclusive) return;
+  const rates = exclusiveSupportedRates();
+  btnExclusive.classList.toggle('exclusive-out-active', !!state.exclusive);
+  btnExclusive.disabled = !exclusiveApiOk() || (!rates.length && !exclusiveCapChecked);
+  btnExclusive.title = rates.length
+    ? `WASAPI 獨佔模式：最高 ${formatKhz(rates[0])} 24-bit 直出，繞過 Windows 混音器（獨佔期間系統音效暫停、音量鎖定最大）`
+    : (exclusiveCapChecked ? 'WASAPI 獨佔模式：目前輸出裝置未回報可用格式' : 'WASAPI 獨佔模式：正在探測輸出裝置能力');
+}
+
+// 訊號路徑徽章：獨佔輸出在既有徽章後方補上 EXCLUSIVE 標記（原函數照常執行）
+const baseUpdateSignalPathUI = updateSignalPathUI;
+updateSignalPathUI = function (track = null) {
+  baseUpdateSignalPathUI(track);
+  if (exclusiveActive && exclusiveRate && signalPathBadge) {
+    signalPathBadge.textContent = `${signalPathBadge.textContent} | EXCLUSIVE ${formatKhz(exclusiveRate)}`;
+  }
+};
+
+if (btnExclusive) {
+  btnExclusive.addEventListener('click', async () => {
+    if (!exclusiveApiOk()) { showToast('⚠️ 獨佔輸出需要桌面版執行環境'); return; }
+    if (!exclusiveZoneOk()) { showToast('⚠️ 獨佔輸出只適用於本機播放（DLNA 輸出請先切回本機播放）'); return; }
+
+    if (!state.exclusive) {
+      const cap = await exclusiveEnsureCapability(true);
+      const rates = exclusiveSupportedRates();
+      if (!rates.length) {
+        updateExclusiveBtnState();
+        showToast(`❌ 目前輸出裝置不支援 WASAPI 獨佔模式：${(cap && cap.msg) || '無可用格式'}`);
+        return;
+      }
+      state.exclusive = true;
+      try { localStorage.setItem('rooplayer_exclusive_output', '1'); } catch (err) {}
+      // 獨佔輸出由裝置決定音量：同步啟用 LINE OUT 鎖定，音量滑桿停用
+      if (!state.lineOut) {
+        lineOutRestoreVolume = state.volume;
+        state.lineOut = true;
+        volumeSlider.value = 1;
+        volumeSlider.disabled = true;
+        btnVolumeIcon.disabled = true;
+        btnLineOut.classList.add('line-out-active');
+        applyVolume(1);
+      }
+      updateExclusiveBtnState();
+      const nativePick = exclusiveChooseRate(44100, 44100) || rates[0];
+      showToast(`🎚️ WASAPI 獨佔模式已啟用：本機播放改以 ${formatKhz(nativePick)} 24-bit 直出（最高 ${formatKhz(rates[0])}，系統音效暫停）`);
+      // 正在播放 → 立刻以獨佔從目前位置續播
+      if (state.isPlaying && state.currentTrackIndex >= 0) {
+        const track = state.queue[state.currentTrackIndex];
+        if (track && track.filePath) {
+          const at = getCurrentPlaybackTime();
+          if (isDsdFilePath(track.filePath)) playDsdTrack(track, at);
+          else playSoxTrack(track, at);
+        }
+      }
+    } else {
+      setExclusiveOff('已解除 WASAPI 獨佔模式：恢復 Windows 共享模式輸出');
+    }
+  });
+}
+
+// ----------------- 獨佔輸出執行期自我測試（main.js --test-exclusive） -----------------
+// 完整走過一次真實路徑：探測裝置能力 ➔ 引擎 /sox-stream 升頻 ➔ helper 獨佔播放 ➔
+// 位置事件 ➔ 暫停 / 續播 / 跳轉（Range 分段）➔ 播完結算。結果經 capture:step(11) 回報主行程。
+async function runExclusiveSelfTest(fixturePath) {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    exclusiveEventTap = null;
+    exclusiveStopStream();
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(11, report); } catch (err) {}
+  };
+
+  try {
+    if (!fixturePath || !window.electronAPI || !window.electronAPI.getSoxStreamUrl) {
+      bad('fixture / stream IPC available', 'fixture=' + fixturePath);
+      finish();
+      return;
+    }
+    const cap = await exclusiveEnsureCapability(true);
+    const rates = exclusiveSupportedRates();
+    if (!cap || !cap.ok || !rates.length) {
+      bad('probe exclusive capability', JSON.stringify(cap || {}).slice(0, 180));
+      finish();
+      return;
+    }
+    ok('probe exclusive capability', 'rates=' + rates.join(','));
+
+    const rate = exclusiveChooseRate(44100, 96000) || rates[0];
+    const url = await window.electronAPI.getSoxStreamUrl(fixturePath, 0, rate, '', 5, 'linear', '', '');
+    if (!url) { bad('build engine sox-stream url'); finish(); return; }
+    ok('build engine sox-stream url', 'rate=' + rate);
+
+    const events = [];
+    exclusiveEventTap = (ev) => { events.push(ev); return true; };
+
+    const started = await exclusiveStartStream({ filePath: fixturePath, sampleRate: 44100, duration: 6 }, 0, url, rate);
+    if (!started) { bad('exclusive start accepted'); finish(); return; }
+
+    const waitFor = (pred, ms) => new Promise((resolve) => {
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        const hit = events.find(pred);
+        if (hit) { clearInterval(iv); resolve(hit); }
+        else if (Date.now() - t0 > ms) { clearInterval(iv); resolve(null); }
+      }, 100);
+    });
+
+    const ready = await waitFor(e => e.ev === 'ready', 20000);
+    if (!ready) { bad('helper ready event', 'no ready within 20s'); finish(); return; }
+    ok('helper ready (exclusive stream)', 'rate=' + ready.rate + ' bits=' + ready.bits + ' bufferFrames=' + ready.bufferFrames);
+
+    const pos1 = await waitFor(e => e.ev === 'pos' && e.audible > rate * 0.5, 20000);
+    if (!pos1) { bad('position events advancing', JSON.stringify(events.slice(-2))); finish(); return; }
+    ok('position events advancing', 'audible=' + pos1.audible);
+
+    try { window.electronAPI.exclusivePause(); } catch (err) {}
+    const paused = await waitFor(e => e.ev === 'paused', 8000);
+    if (!paused) { bad('paused event'); finish(); return; }
+    const pausedSec = paused.audible / rate;
+    if (pausedSec <= 0.2 || pausedSec > 5) bad('pause position plausible', 'audible=' + paused.audible);
+    else ok('pause position plausible', (pausedSec).toFixed(2) + 's');
+
+    try { window.electronAPI.exclusiveResume(); } catch (err) {}
+    const resumed = await waitFor(e => e.ev === 'pos' && e.audible > paused.audible + rate * 0.2, 20000);
+    if (!resumed) { bad('resume continues from pause point', JSON.stringify(events.slice(-2))); finish(); return; }
+    ok('resume continues from pause point', 'audible=' + resumed.audible);
+
+    try { window.electronAPI.exclusiveSeek(1.5); } catch (err) {}
+    const seekPos = await waitFor(e => e.ev === 'pos' && e.audible >= rate * 1.4, 20000);
+    if (!seekPos) { bad('seek lands near target', JSON.stringify(events.slice(-2))); finish(); return; }
+    ok('seek lands near target', (seekPos.audible / rate).toFixed(2) + 's');
+
+    const eof = await waitFor(e => e.ev === 'eof', 45000);
+    if (!eof) { bad('end-of-stream event', JSON.stringify(events.slice(-2))); finish(); return; }
+    if (eof.fed < rate * 5.8 || eof.fed > rate * 6.3) bad('end-of-stream frame count', 'fed=' + eof.fed);
+    else ok('end-of-stream frame count', 'fed=' + eof.fed);
+
+    const lastPos = events.filter(e => e.ev === 'pos').slice(-1)[0];
+    const underruns = lastPos ? lastPos.underruns : -1;
+    if (underruns === 0) ok('no buffer underruns', 'underruns=0');
+    else lines.push(`NOTE underruns=${underruns}（引擎漸進渲染落後於即時播放時屬預期，非協定錯誤）`);
+
+    const hardFail = events.find(e => e.ev === 'fail' || e.ev === 'crashed');
+    if (hardFail) bad('no helper failure events', JSON.stringify(hardFail).slice(0, 180));
+    else ok('no helper failure events');
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  }
+  finish();
+}
+
+try {
+  if (localStorage.getItem('rooplayer_exclusive_output') === '1') state.exclusive = true;
+} catch (err) {}
+updateExclusiveBtnState();
+setTimeout(() => { exclusiveEnsureCapability(true); }, 1200);
+
+try {
+  const rpParams = new URLSearchParams(window.location.search || '');
+  if (rpParams.get('testExclusive') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runExclusiveSelfTest(rpParams.get('fixture') || ''); }, 2600);
+  }
+} catch (err) {}
 
 // ----------------- Queue Drawer -----------------
 function renderQueue() {
@@ -10226,6 +10639,7 @@ function setupPlayerControls() {
     state.shufflePointer = -1;
     stopDemoSynth();
     stopVirtualProgress();
+    exclusiveStopStream();
     if (nativeAudio.src) {
       nativeAudio.pause();
       nativeAudio.src = '';
@@ -10530,6 +10944,7 @@ async function switchAudioZone(target) {
       if (nativeAudio) {
         nativeAudio.pause();
       }
+      exclusiveStopStream(); // 切換到 DLNA 輸出時必須釋放獨佔裝置
       stopDemoSynth();
       stopVirtualProgress();
 

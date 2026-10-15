@@ -21,7 +21,8 @@ process.on('unhandledRejection', (reason, promise) => {
 // 截圖模式（--capture）改用暫存 userData：不碰使用者真實設定、空庫自動顯示 demo 展示。
 const CAPTURE_MODE = process.argv.includes('--capture');
 const TEST_VERSIONS = process.argv.includes('--test-versions'); // 執行期測試「其他版本」匹配邏輯
-if (CAPTURE_MODE || TEST_VERSIONS) {
+const TEST_EXCLUSIVE = process.argv.includes('--test-exclusive'); // 執行期測試 WASAPI 獨佔輸出端到端流程
+if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE) {
   // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
   // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -31,6 +32,7 @@ if (CAPTURE_MODE || TEST_VERSIONS) {
 }
 process.env.ROOPLAYER_USER_FILTERS = path.join(app.getPath('userData'), 'rooplayer_user_filters.json');
 const CAPTURE_DEMO_IR = CAPTURE_MODE ? path.join(app.getPath('userData'), 'demo-concert-hall-ir.wav') : null;
+const EXCLUSIVE_TEST_FIXTURE = path.join(app.getPath('userData'), 'exclusive-test-tone.wav');
 
 const nativeAudioEngine = require('./native-audio-engine');
 const nativeDspStreamer = require('./native-dsp-streamer');
@@ -51,6 +53,25 @@ function getDurationWithNativeHeader(filePath) {
 
 const DlnaManager = require('./dlna-manager');
 let dlnaManager = null;
+
+// ==========================================================
+// WASAPI 獨佔輸出（Windows 內建 csc 編譯的 tools/rp-wasapi-exclusive.cs）
+// 引擎串流（/sox-stream、/dsd-stream）直接由 helper 以 Range 讀取，
+// 引擎本身不需要任何輸出格式改動；獨佔失敗一律由渲染端退回共享模式。
+// ==========================================================
+const ExclusiveOutput = require('./exclusive-output');
+let exclusiveOutput = null;
+function getExclusiveOutput() {
+  if (!exclusiveOutput) {
+    exclusiveOutput = new ExclusiveOutput(__dirname, path.join(app.getPath('userData'), 'exclusive-output'));
+    exclusiveOutput.onEvent = (ev) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try { mainWindow.webContents.send('exclusive:status', ev); } catch (e) {}
+      }
+    };
+  }
+  return exclusiveOutput;
+}
 
 // Optimize Chromium GPU rendering and process responsiveness for high-resolution audio processing
 app.commandLine.appendSwitch('enable-gpu-rasterization');
@@ -157,6 +178,26 @@ function writeDemoIrWav(filePath) {
   fs.writeFileSync(filePath, Buffer.concat([header, data]));
 }
 
+// 獨佔輸出測試素材：6 秒 44.1kHz 24-bit 立體聲正弦 WAV（引擎原生解碼，不需外部依賴）
+function writeExclusiveTestFixture(filePath) {
+  const sr = 44100, secs = 6, n = Math.round(sr * secs);
+  const data = Buffer.alloc(n * 6); // stereo s24le
+  for (let i = 0; i < n; i++) {
+    const l = Math.round(0.25 * 8388607 * Math.sin(2 * Math.PI * 440 * i / sr));
+    const r = Math.round(0.25 * 8388607 * Math.sin(2 * Math.PI * 440 * i / sr + 0.2));
+    data.writeIntLE(l, i * 6, 3);
+    data.writeIntLE(r, i * 6 + 3, 3);
+  }
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0); header.writeUInt32LE(36 + data.length, 4); header.write('WAVE', 8);
+  header.write('fmt ', 12); header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); header.writeUInt16LE(2, 22); // PCM, stereo
+  header.writeUInt32LE(sr, 24); header.writeUInt32LE(sr * 6, 28);
+  header.writeUInt16LE(6, 32); header.writeUInt16LE(24, 34);
+  header.write('data', 36); header.writeUInt32LE(data.length, 40);
+  fs.writeFileSync(filePath, Buffer.concat([header, data]));
+}
+
 async function captureShot(name) {
   const img = await Promise.race([
     mainWindow.webContents.capturePage(),
@@ -171,7 +212,7 @@ let captureStarted = false;
 const captureSignals = {}; // n -> resolve（渲染器完成 UI 操作後經 capture:step IPC 回報）
 ipcMain.on('capture:step', (event, n, info) => {
   console.log('[capture] renderer step signal:', n, info || '');
-  if (captureSignals[n]) { captureSignals[n](); captureSignals[n] = null; }
+  if (captureSignals[n]) { captureSignals[n](info); captureSignals[n] = null; }
 });
 
 function runCaptureSequence() {
@@ -183,6 +224,11 @@ function runCaptureSequence() {
     new Promise((resolve) => { captureSignals[n] = resolve; }),
     sleep(ms).then(() => console.log('[capture] WARNING: renderer step', n, 'not signaled in time'))
   ]);
+  // 取渲染端回報的內容（獨佔輸出自我測試把結果字串傳回來）
+  const waitRendererInfo = (n, ms) => new Promise((resolve) => {
+    captureSignals[n] = (info) => { captureSignals[n] = null; resolve(info === undefined ? '' : String(info)); };
+    sleep(ms).then(() => { if (captureSignals[n]) { captureSignals[n] = null; resolve('TIMEOUT'); } });
+  });
   (async () => {
     try {
       if (TEST_VERSIONS) {
@@ -190,6 +236,14 @@ function runCaptureSequence() {
         await waitRenderer(9, 30000);
         console.log('[test] done');
         app.exit(0);
+        return;
+      }
+      if (TEST_EXCLUSIVE) {
+        console.log('[test-exclusive] waiting for renderer WASAPI-exclusive self-test result');
+        const report = await waitRendererInfo(11, 120000);
+        console.log('[test-exclusive] renderer report: ' + report);
+        console.log('[test] done');
+        app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
         return;
       }
       await sleep(4500); // 等 initApp / demo 展示渲染完成
@@ -269,7 +323,14 @@ function createWindow() {
     console.warn('Failed to configure kkboxSession:', e);
   }
 
-  if (TEST_VERSIONS) {
+  if (TEST_EXCLUSIVE) {
+    try {
+      writeExclusiveTestFixture(EXCLUSIVE_TEST_FIXTURE);
+      console.log('[test-exclusive] fixture written:', EXCLUSIVE_TEST_FIXTURE);
+    } catch (e) { console.warn('[test-exclusive] fixture write failed:', e); }
+    // 注意：不帶 rpCapture，避免截圖流程的 UI 自動化另開 DSP session 把獨佔測試 session 取代掉
+    mainWindow.loadFile('index.html', { query: { testExclusive: '1', fixture: EXCLUSIVE_TEST_FIXTURE } });
+  } else if (TEST_VERSIONS) {
     mainWindow.loadFile('index.html', { query: { rpCapture: '1', testVersions: '1' } });
   } else if (CAPTURE_MODE) {
     try { writeDemoIrWav(CAPTURE_DEMO_IR); console.log('[capture] demo IR written:', CAPTURE_DEMO_IR); } catch (e) { console.warn('[capture] demo IR write failed:', e); }
@@ -280,10 +341,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (CAPTURE_MODE || TEST_VERSIONS) runCaptureSequence();
+    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE) runCaptureSequence();
   });
 
-  if (CAPTURE_MODE || TEST_VERSIONS) {
+  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE) {
     // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {
@@ -373,6 +434,9 @@ async function cleanupAllAudioStreams() {
   }
   if (dlnaManager) {
     try { await dlnaManager.destroy(); } catch (e) {}
+  }
+  if (exclusiveOutput) {
+    try { exclusiveOutput.kill(); } catch (e) {} // 獨佔 helper 必須跟著結束，否則裝置會一直被佔用
   }
   try { nativeDspStreamer.destroy(); } catch (e) {}
 }
@@ -596,12 +660,31 @@ function startDsdStreamingServer() {
           } catch (e) { /* Convolution failure must never break playback */ }
         }
 
-        res.writeHead(200, {
-          'Content-Type': 'audio/wav',
-          'Content-Length': outWavFinal.length,
-          'Access-Control-Allow-Origin': '*'
-        });
-        res.end(outWavFinal);
+        // Range 支援：WASAPI 獨佔輸出以 byte 分段重新取用同一条 88.2k 串流（seek / resume）
+        const totalDsdBytes = outWavFinal.length;
+        const dsdRange = req.headers.range;
+        if (dsdRange) {
+          const parts = dsdRange.replace(/bytes=/, '').split('-');
+          const rStart = Math.max(0, parseInt(parts[0], 10) || 0);
+          const rEnd = Math.min(totalDsdBytes - 1, parts[1] !== undefined && parts[1] !== '' ? parseInt(parts[1], 10) : totalDsdBytes - 1);
+          const chunk = rStart <= rEnd ? outWavFinal.subarray(rStart, rEnd + 1) : Buffer.alloc(0);
+          res.writeHead(206, {
+            'Content-Type': 'audio/wav',
+            'Content-Length': chunk.length,
+            'Content-Range': `bytes ${rStart}-${rEnd}/${totalDsdBytes}`,
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*'
+          });
+          res.end(chunk);
+        } else {
+          res.writeHead(200, {
+            'Content-Type': 'audio/wav',
+            'Content-Length': totalDsdBytes,
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*'
+          });
+          res.end(outWavFinal);
+        }
         return;
       }
 
@@ -859,6 +942,39 @@ ipcMain.handle('audio:getSoxStreamUrl', (event, filePath, startSec = 0, sampleRa
   if (convJson) params.set('conv', convJson);
   params.set('local', '1'); // Local Electron Chromium playback needs decoded PCM WAV
   return `http://127.0.0.1:${dsdStreamPort}/sox-stream?${params.toString()}`;
+});
+
+// ==========================================================
+// WASAPI 獨佔輸出 IPC（渲染端只處理狀態與按鈕，COM 全部在 helper 行程內）
+// ==========================================================
+ipcMain.handle('exclusive:probe', (event, force = false) => {
+  try {
+    return getExclusiveOutput().probe(force);
+  } catch (e) {
+    return { ok: false, code: 'RP-PROBE', msg: String(e.message || e) };
+  }
+});
+
+ipcMain.handle('exclusive:start', (event, opts = {}) => {
+  try {
+    return getExclusiveOutput().start({
+      url: opts.url || '',
+      rate: Number(opts.rate) || 0,
+      startByte: Number(opts.startByte) || 0,
+      deviceId: opts.deviceId || ''
+    });
+  } catch (e) {
+    return { ok: false, code: 'RP-START', msg: String(e.message || e) };
+  }
+});
+
+ipcMain.handle('exclusive:pause', () => { try { return { ok: getExclusiveOutput().pause() }; } catch (e) { return { ok: false, msg: String(e.message || e) }; } });
+ipcMain.handle('exclusive:resume', () => { try { return { ok: getExclusiveOutput().resume() }; } catch (e) { return { ok: false, msg: String(e.message || e) }; } });
+ipcMain.handle('exclusive:seek', (event, streamSeconds = 0) => { try { return { ok: getExclusiveOutput().seek(streamSeconds) }; } catch (e) { return { ok: false, msg: String(e.message || e) }; } });
+ipcMain.handle('exclusive:stop', () => { try { return { ok: getExclusiveOutput().stop() }; } catch (e) { return { ok: false, msg: String(e.message || e) }; } });
+ipcMain.handle('exclusive:state', () => {
+  const mgr = getExclusiveOutput();
+  return { running: mgr.isBusy(), rate: mgr.currentRate, capability: mgr.capability || null };
 });
 
 // ==========================================================

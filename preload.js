@@ -68,6 +68,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('dlna:trackEnded', () => callback());
   },
 
+  // WASAPI 獨佔輸出（Windows 聲音獨佔模式）
+  exclusiveProbe: (force = false) => ipcRenderer.invoke('exclusive:probe', force),
+  exclusiveStart: (options) => ipcRenderer.invoke('exclusive:start', options),
+  exclusivePause: () => ipcRenderer.invoke('exclusive:pause'),
+  exclusiveResume: () => ipcRenderer.invoke('exclusive:resume'),
+  exclusiveSeek: (streamSeconds) => ipcRenderer.invoke('exclusive:seek', streamSeconds),
+  exclusiveStop: () => ipcRenderer.invoke('exclusive:stop'),
+  exclusiveState: () => ipcRenderer.invoke('exclusive:state'),
+  onExclusiveStatus: (callback) => {
+    ipcRenderer.on('exclusive:status', (_event, payload) => callback(payload));
+  },
+
   // Media file URL helper - produces 100% compliant standard file:/// URL for seamless audio playback
   getMediaUrl: (absolutePath) => {
     if (!absolutePath) return '';
