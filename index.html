@@ -76,6 +76,11 @@
           <span class="nav-label">播放紀錄</span>
           <span class="badge" id="historyCountBadge">0</span>
         </button>
+        <button class="nav-item" data-view="playlists">
+          <span class="nav-icon">📃</span>
+          <span class="nav-label">播放清單</span>
+          <span class="badge" id="playlistCountBadge">0</span>
+        </button>
       </div>
 
       <div class="nav-group">
@@ -272,6 +277,91 @@
           <div style="font-size: 36px; margin-bottom: 12px;">🕒</div>
           <div style="font-size: 15px; font-weight: 600; color: var(--text-main);">尚未有任何播放紀錄</div>
           <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">開始播放歌曲後，系統將自動記錄最近播放的 100 首曲目並由最近到最久排序。</div>
+        </div>
+      </section>
+
+      <!-- PLAYLISTS VIEW (播放清單：儲存、匯入、編輯、刪除) -->
+      <section id="viewPlaylists" class="content-view">
+        <!-- 清單總覽 -->
+        <div id="playlistsListView">
+          <div class="view-header">
+            <div>
+              <h1 class="page-title">播放清單 Playlists</h1>
+              <span class="page-subtitle" id="playlistsHeaderCount">共 0 個播放清單</span>
+            </div>
+            <div class="header-actions">
+              <button class="btn btn-primary btn-sm" id="btnPlaylistNew" title="新增一個空白播放清單">➕ 新增清單</button>
+              <button class="btn btn-secondary btn-sm" id="btnPlaylistSaveQueue" title="將目前播放隊列的所有歌曲依序存成新的播放清單">💾 儲存目前隊列</button>
+              <button class="btn btn-secondary btn-sm" id="btnPlaylistImport" title="匯入 .m3u / .m3u8 / .json 播放清單檔">📥 匯入清單</button>
+            </div>
+          </div>
+          <div class="tracklist-table-container" id="playlistsTableContainer">
+            <table class="tracklist-table" id="playlistsTable">
+              <thead>
+                <tr>
+                  <th style="width: 45px;">#</th>
+                  <th style="width: 70px; text-align: center;">播放</th>
+                  <th>清單名稱</th>
+                  <th style="width: 110px; text-align: center;">曲目數</th>
+                  <th style="width: 110px; text-align: right;">總時長</th>
+                  <th style="width: 150px;">更新時間</th>
+                  <th style="width: 190px; text-align: right;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="playlistsTableTbody">
+                <!-- Injected via JS -->
+              </tbody>
+            </table>
+          </div>
+          <div class="empty-hint" id="playlistsEmptyHint" style="display: none; padding: 48px; text-align: center;">
+            <div style="font-size: 36px; margin-bottom: 12px;">📃</div>
+            <div style="font-size: 15px; font-weight: 600; color: var(--text-main);">還沒有任何播放清單</div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">可用上方「新增清單」建立空白清單，或到播放隊列按「儲存目前隊列」把正在排的曲目依序存成清單；也可以「匯入清單」讀取 .m3u / .json 清單檔。</div>
+          </div>
+        </div>
+
+        <!-- 清單明細（編輯：上移、下移、刪除單曲） -->
+        <div id="playlistDetailView" style="display: none;">
+          <div class="view-header">
+            <div>
+              <h1 class="page-title" id="playlistDetailTitle">播放清單</h1>
+              <span class="page-subtitle" id="playlistDetailCount">0 首歌曲</span>
+            </div>
+            <div class="header-actions">
+              <button class="btn btn-secondary btn-sm" id="btnPlaylistBack">← 返回清單</button>
+              <button class="btn btn-secondary btn-sm" id="btnPlaylistRename" title="重新命名這個清單">✏️ 重新命名</button>
+              <button class="btn btn-secondary btn-sm" id="btnPlaylistAppendQueue" title="將目前播放隊列依序附加到這個清單">➕ 加入目前隊列</button>
+              <button class="btn btn-secondary btn-sm" id="btnPlaylistExportM3u" title="匯出成 .m3u8 播放清單檔（通用格式，可被其他播放器讀取）">💾 匯出 M3U</button>
+              <button class="btn btn-secondary btn-sm" id="btnPlaylistExportJson" title="匯出成 .json（保留完整曲目資訊，rooPlayer 可直接再匯入）">🧬 匯出 JSON</button>
+              <button class="btn btn-secondary btn-sm" id="btnPlaylistShuffle">🔀 隨機播放</button>
+              <button class="btn btn-primary btn-sm" id="btnPlaylistPlayAll">▶ 依序播放</button>
+              <button class="btn btn-secondary btn-sm" id="btnPlaylistDelete" title="刪除整個播放清單">🗑️ 刪除清單</button>
+            </div>
+          </div>
+          <div class="tracklist-table-container" id="playlistTrackTableContainer">
+            <table class="tracklist-table" id="playlistTrackTable">
+              <thead>
+                <tr>
+                  <th style="width: 45px;">#</th>
+                  <th style="width: 70px; text-align: center;">播放</th>
+                  <th>曲目名稱</th>
+                  <th>演出者</th>
+                  <th>專輯</th>
+                  <th style="width: 140px;">格式規格</th>
+                  <th style="width: 80px; text-align: right;">時長</th>
+                  <th style="width: 170px; text-align: right;">編輯</th>
+                </tr>
+              </thead>
+              <tbody id="playlistTrackTbody">
+                <!-- Injected via JS -->
+              </tbody>
+            </table>
+          </div>
+          <div class="empty-hint" id="playlistDetailEmptyHint" style="display: none; padding: 48px; text-align: center;">
+            <div style="font-size: 36px; margin-bottom: 12px;">🎵</div>
+            <div style="font-size: 15px; font-weight: 600; color: var(--text-main);">這個清單還沒有曲目</div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">按「加入目前隊列」可把正在排的曲目依序加進來，或從專輯、曲目、播放紀錄頁面播放歌曲後再儲存。</div>
+          </div>
         </div>
       </section>
 
@@ -1424,6 +1514,24 @@
                 </div>
               </div>
 
+              <!-- Module 3B: 播放清單 Playlists -->
+              <div class="manual-item">
+                <div class="manual-item-header">
+                  <span class="item-badge" style="background: rgba(139, 92, 246, 0.16); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.35);">播放清單</span>
+                  <h4>播放清單 (Playlists: 儲存 / 匯入 / 編輯 / 刪除)</h4>
+                </div>
+                <div class="manual-item-body">
+                  <p>在左側選單「播放紀錄」下方的<strong>播放清單</strong>頁面，自行建立與管理曲目順序：</p>
+                  <ul>
+                    <li><strong>💾 儲存</strong>：播放隊列上方按「儲存清單」，即可把目前隊列的所有歌曲<strong>依序</strong>存成一個命名清單；也可在清單頁按「新增清單」建立空白清單，或按「加入目前隊列」把佇列附加到既有清單。</li>
+                    <li><strong>📥 匯入 / 匯出</strong>：支援匯入 <code>.m3u</code> / <code>.m3u8</code> / <code>.json</code> 清單檔（不在曲庫中的路徑也會保留檔案路徑，演出者與曲目名稱自動分離還原）；清單也可匯出成 M3U8 給其他播放器，或匯出 JSON 完整備份後再匯入。</li>
+                    <li><strong>✏️ 編輯</strong>：清單明細每一首都提供<strong>上移 ↑ / 下移 ↓ / 刪除單曲 ✕</strong>，播放順序即依你排好的順序；支援重新命名，同名清單不會重複建立。</li>
+                    <li><strong>🗑️ 刪除</strong>：可刪除整個清單（只移除清單本身，歌曲仍保留在音樂庫）。</li>
+                    <li><strong>▶ 依序播放 / 🔀 隨機播放</strong>：清單內容直接載入播放隊列，本機、獨佔輸出與 DLNA 串流皆適用。</li>
+                  </ul>
+                </div>
+              </div>
+
               <!-- Module 4: TIDAL Hi-Res 串流探索中心 -->
               <div class="manual-item">
                 <div class="manual-item-header">
@@ -2256,6 +2364,7 @@
   <div id="queueDrawer" class="queue-drawer">
     <div class="queue-header">
       <h3>播放隊列 (<span id="queueCount">0</span>)</h3>
+      <button class="btn-save-queue-playlist" id="btnSaveQueuePlaylist" title="將目前播放隊列的所有歌曲依序加入一個播放清單並命名儲存">💾 儲存清單</button>
       <button class="btn-clear-queue" id="btnClearQueue">清空</button>
       <button class="btn-close-queue" id="btnCloseQueue">✕</button>
     </div>
@@ -2343,6 +2452,29 @@
   </footer>
 
   <!-- Database Import Report Modal -->
+  <!-- 播放清單命名 Modal（新增／重新命名／儲存隊列） -->
+  <div id="playlistNameModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="width: 470px; max-width: 92vw;">
+      <div class="modal-header">
+        <div class="modal-title-wrap" style="display: flex; align-items: center;">
+          <span style="background: #8b5cf6; color: #fff; font-weight: 800; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-right: 10px; letter-spacing: 0.5px;">PLAYLIST</span>
+          <h3 style="margin: 0; font-size: 16px; font-weight: 600;" id="playlistNameModalTitle">儲存播放清單</h3>
+        </div>
+        <button class="icon-btn" id="btnClosePlaylistName">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 22px 24px;">
+        <label for="playlistNameInput" style="display:block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 8px;">清單名稱</label>
+        <input type="text" id="playlistNameInput" maxlength="60" placeholder="例如：深夜爵士" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; font-size: 14px;">
+        <div id="playlistNameModalHint" style="margin-top: 10px; font-size: 12px; color: var(--text-muted); line-height: 1.6;"></div>
+      </div>
+      <div class="modal-footer" style="padding: 14px 24px; display: flex; justify-content: flex-end; gap: 10px;">
+        <button class="btn btn-secondary btn-sm" id="btnPlaylistNameCancel">取消</button>
+        <button class="btn btn-primary btn-sm" id="btnPlaylistNameConfirm">儲存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 音樂資料庫匯入結果 Modal -->
   <div id="importReportModal" class="modal-overlay" style="display: none;">
     <div class="modal-card import-report-modal-card" style="width: 580px; max-width: 92vw; background: var(--bg-card, #171820); border: 1px solid var(--border-color, rgba(255,255,255,0.12)); border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); overflow: hidden;">
       <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid rgba(255,255,255,0.08);">

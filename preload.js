@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveLibraryTracks: (tracks) => ipcRenderer.invoke('library:saveTracks', tracks),
   exportLibrary: (defaultFilename, extraData) => ipcRenderer.invoke('library:export', defaultFilename, extraData),
   importLibrary: () => ipcRenderer.invoke('library:import'),
+  readPlaylistFile: () => ipcRenderer.invoke('playlist:readFile'),
+  writePlaylistFile: (suggestedName, text, ext) => ipcRenderer.invoke('playlist:writeFile', suggestedName, text, ext),
   removeFolder: (folderPath) => ipcRenderer.invoke('library:removeFolder', folderPath),
   updateAlbumArtist: (albumTitle, artistName) => ipcRenderer.invoke('library:updateAlbumArtist', albumTitle, artistName),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),

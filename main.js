@@ -29,8 +29,9 @@ const TEST_UF_LAYOUT = process.argv.includes('--test-uf-layout'); // 執行期�
 const TEST_QUEUE_CONTRAST = process.argv.includes('--test-queue-contrast'); // 執行期測試播放佇列在淺色／深色的文字對比度
 const TEST_SPECTRUM_SMOOTH = process.argv.includes('--test-spectrum-smooth'); // 執行期測試 NOW PLAYING 頻譜的播放位置是否連續推進
 const TEST_DLNA_HINT = process.argv.includes('--test-dlna-hint'); // 執行期測試 DLNA 串流準備（記憶體緩衝）提示與重複按播放的保護
+const TEST_PLAYLISTS = process.argv.includes('--test-playlists'); // 執行期測試播放清單：儲存、匯入、編輯（上移/下移/移除單曲）、刪除
 const FAKE_DLNA_PORT = 49152; // 測試用假 UPnP MediaRenderer _listen port（probeIp 的候選位址之一）
-if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT) {
+if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS) {
   // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
   // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -238,6 +239,12 @@ function runCaptureSequence() {
     captureSignals[n] = (info) => { captureSignals[n] = null; resolve(info === undefined ? '' : String(info)); };
     sleep(ms).then(() => { if (captureSignals[n]) { captureSignals[n] = null; resolve('TIMEOUT'); } });
   });
+  // 截圖訊號：自我測試若在截圖點之前就失敗（例如獨佔裝置占用音訊端點），就不會發出這個訊號；
+  // 沒有逾時的話整個測試流程會卡在这里，後面的測試也跑不到。
+  const waitShotSignal = (n, ms) => new Promise((resolve) => {
+    captureSignals[n] = (info) => { captureSignals[n] = null; resolve(info === undefined ? '' : String(info)); };
+    sleep(ms).then(() => { if (captureSignals[n]) { captureSignals[n] = null; resolve(null); } });
+  });
   (async () => {
     try {
       if (TEST_VERSIONS) {
@@ -353,17 +360,52 @@ function runCaptureSequence() {
       if (TEST_SPECTRUM_SMOOTH) {
         console.log('[test-spectrum-smooth] waiting for renderer spectrum smoothness self-test result');
         // 渲染端先發 23（正在取頻譜窗，截取畫面），最後發 24（測試報告）
-        const shotSignal = new Promise((resolve) => { captureSignals[23] = (info) => { captureSignals[23] = null; resolve(info); }; });
         const reportPromise = waitRendererInfo(24, 120000);
-        const shotInfo = await shotSignal;
-        try {
-          const img = await mainWindow.webContents.capturePage();
-          const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'spectrum-smooth.png');
-          fs.writeFileSync(shotPath, img.toPNG());
-          console.log('[test-spectrum-smooth] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
-        } catch (e) { console.warn('[test-spectrum-smooth] screenshot failed:', e); }
+        const shotInfo = await waitShotSignal(23, 60000);
+        if (shotInfo === null) {
+          console.warn('[test-spectrum-smooth] 沒有截圖訊號 23：自我測試在截圖點之前就結束了');
+        } else {
+          try {
+            const img = await mainWindow.webContents.capturePage();
+            const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'spectrum-smooth.png');
+            fs.writeFileSync(shotPath, img.toPNG());
+            console.log('[test-spectrum-smooth] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
+          } catch (e) { console.warn('[test-spectrum-smooth] screenshot failed:', e); }
+        }
         const report = await reportPromise;
         console.log('[test-spectrum-smooth] renderer report: ' + report);
+        console.log('[test] done');
+        app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
+        return;
+      }
+      if (TEST_PLAYLISTS) {
+        console.log('[test-playlists] waiting for renderer playlist self-test result');
+        // 渲染端先發 27（清單明細在畫面上，深色）與 29（淺色模式），最後發 28（測試報告）
+        const reportPromise = waitRendererInfo(28, 120000);
+        const shotInfo = await waitShotSignal(27, 60000);
+        if (shotInfo === null) {
+          console.warn('[test-playlists] 沒有截圖訊號 27：自我測試在截圖點之前就結束了');
+        } else {
+          try {
+            const img = await mainWindow.webContents.capturePage();
+            const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'playlists-test.png');
+            fs.writeFileSync(shotPath, img.toPNG());
+            console.log('[test-playlists] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
+          } catch (e) { console.warn('[test-playlists] screenshot failed:', e); }
+        }
+        const lightInfo = await waitShotSignal(29, 60000);
+        if (lightInfo === null) {
+          console.warn('[test-playlists] 沒有截圖訊號 29（淺色模式）');
+        } else {
+          try {
+            const imgLight = await mainWindow.webContents.capturePage();
+            const shotPathLight = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'playlists-test-light.png');
+            fs.writeFileSync(shotPathLight, imgLight.toPNG());
+            console.log('[test-playlists] screenshot saved: ' + shotPathLight + ' (' + lightInfo + ')');
+          } catch (e) { console.warn('[test-playlists] light screenshot failed:', e); }
+        }
+        const report = await reportPromise;
+        console.log('[test-playlists] renderer report: ' + report);
         console.log('[test] done');
         app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
         return;
@@ -371,15 +413,18 @@ function runCaptureSequence() {
       if (TEST_DLNA_HINT) {
         console.log('[test-dlna-hint] waiting for renderer DLNA prepare-hint self-test result');
         // 渲染端先發 25（提示正在顯示中，截取畫面），最後發 26（測試報告）
-        const shotSignal = new Promise((resolve) => { captureSignals[25] = (info) => { captureSignals[25] = null; resolve(info); }; });
         const reportPromise = waitRendererInfo(26, 120000);
-        const shotInfo = await shotSignal;
-        try {
-          const img = await mainWindow.webContents.capturePage();
-          const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'dlna-buffer-hint.png');
-          fs.writeFileSync(shotPath, img.toPNG());
-          console.log('[test-dlna-hint] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
-        } catch (e) { console.warn('[test-dlna-hint] screenshot failed:', e); }
+        const shotInfo = await waitShotSignal(25, 60000);
+        if (shotInfo === null) {
+          console.warn('[test-dlna-hint] 沒有截圖訊號 25：自我測試在截圖點之前就結束了');
+        } else {
+          try {
+            const img = await mainWindow.webContents.capturePage();
+            const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'dlna-buffer-hint.png');
+            fs.writeFileSync(shotPath, img.toPNG());
+            console.log('[test-dlna-hint] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
+          } catch (e) { console.warn('[test-dlna-hint] screenshot failed:', e); }
+        }
         const report = await reportPromise;
         console.log('[test-dlna-hint] renderer report: ' + report);
         console.log('[test] done');
@@ -476,6 +521,9 @@ function createWindow() {
   } else if (TEST_LABELS) {
     // 不帶 rpCapture：截圖流程的 UI 自動化會開 modal / 注入示範專輯，干擾本測試的 DOM 計數
     mainWindow.loadFile('index.html', { query: { testLabels: '1' } });
+  } else if (TEST_PLAYLISTS) {
+    // 不帶 rpCapture：截圖流程的 UI 自動化會開 modal / 注入示範專輯，干擾播放清單的 DOM 斷言
+    mainWindow.loadFile('index.html', { query: { testPlaylists: '1' } });
   } else if (TEST_DLNA_HINT) {
     try {
       writeExclusiveTestFixture(EXCLUSIVE_TEST_FIXTURE, 14);
@@ -507,10 +555,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT) runCaptureSequence();
+    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS) runCaptureSequence();
   });
 
-  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT) {
+  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS) {
     // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {
@@ -2497,6 +2545,52 @@ ipcMain.handle('library:updateAlbumArtist', async (event, albumTitle, artistName
   } catch (err) {
     console.error('Failed to update album artist:', err);
     return { success: false, error: err.message };
+  }
+});
+
+// 播放清單檔：讀取（.m3u / .m3u8 / .json）與寫出（.m3u8 / .json）
+ipcMain.handle('playlist:readFile', async () => {
+  try {
+    const dialogRes = await dialog.showOpenDialog(mainWindow, {
+      title: '選取要匯入的播放清單檔',
+      properties: ['openFile'],
+      filters: [
+        { name: '播放清單 (*.m3u, *.m3u8, *.json)', extensions: ['m3u', 'm3u8', 'json'] },
+        { name: '所有檔案 (*.*)', extensions: ['*'] }
+      ]
+    });
+    if (dialogRes.canceled || !dialogRes.filePaths.length) return { canceled: true };
+
+    const filePath = dialogRes.filePaths[0];
+    const text = fs.readFileSync(filePath, 'utf-8');
+    return { success: true, filePath, fileName: path.basename(filePath), text };
+  } catch (err) {
+    return { success: false, error: `讀取清單檔失敗：${err.message}` };
+  }
+});
+
+ipcMain.handle('playlist:writeFile', async (event, suggestedName, text, ext) => {
+  try {
+    const safeExt = (ext === 'json') ? 'json' : 'm3u8';
+    const safeBase = String(suggestedName || 'playlist')
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
+      .replace(/\.(m3u|m3u8|json)$/i, '')
+      .slice(0, 80) || 'playlist';
+    const dialogRes = await dialog.showSaveDialog(mainWindow, {
+      title: '儲存播放清單檔',
+      defaultPath: `${safeBase}.${safeExt}`,
+      filters: safeExt === 'json'
+        ? [{ name: 'rooPlayer 播放清單 (*.json)', extensions: ['json'] }]
+        : [{ name: 'M3U8 播放清單 (*.m3u8)', extensions: ['m3u8'] }, { name: '所有檔案 (*.*)', extensions: ['*'] }]
+    });
+    if (dialogRes.canceled || !dialogRes.filePath) return { canceled: true };
+
+    let targetPath = dialogRes.filePath;
+    if (!/\.(m3u8?|json)$/i.test(targetPath)) targetPath += `.${safeExt}`;
+    fs.writeFileSync(targetPath, String(text || ''), 'utf-8');
+    return { success: true, path: targetPath };
+  } catch (err) {
+    return { success: false, error: `寫出清單檔失敗：${err.message}` };
   }
 });
 

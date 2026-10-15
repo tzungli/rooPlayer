@@ -3068,6 +3068,56 @@ body.table-col-resizing * {
   color: var(--text-main);
 }
 
+/* 播放隊列上的「儲存清單」按鈕（把目前隊列依序存成播放清單） */
+.btn-save-queue-playlist {
+  background: rgba(139, 92, 246, 0.16);
+  border: 1px solid rgba(139, 92, 246, 0.45);
+  border-radius: 6px;
+  color: #d8b4fe;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.btn-save-queue-playlist:hover {
+  background: rgba(139, 92, 246, 0.3);
+  color: #f3e8ff;
+}
+
+/* 播放清單明細的單曲編輯按鈕（上移、下移、刪除） */
+.btn-playlist-row-edit {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-sub);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 7px;
+  margin-left: 4px;
+}
+
+.btn-playlist-row-edit:hover {
+  color: var(--text-main);
+  border-color: rgba(139, 92, 246, 0.5);
+  background: rgba(139, 92, 246, 0.12);
+}
+
+.btn-playlist-row-edit:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* 播放清單總覽的清單名稱 */
+.playlist-name-text {
+  font-weight: 600;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.playlist-name-text:hover {
+  color: #a78bfa;
+}
+
 .queue-list {
   flex: 1;
   overflow-y: auto;
@@ -3583,6 +3633,22 @@ body.table-col-resizing * {
   color: #0f172a;
 }
 
+/* 左側選單：選取/滑過原本用固定白色字，淺色模式下淡紫底配白字看不清楚 */
+[data-theme="light"] .nav-item:hover {
+  background-color: rgba(15, 23, 42, 0.05);
+  color: #0f172a;
+}
+
+[data-theme="light"] .nav-item.active {
+  background-color: rgba(139, 92, 246, 0.14);
+  color: #4c1d95;
+}
+
+[data-theme="light"] .nav-item.active .badge {
+  background-color: rgba(139, 92, 246, 0.18);
+  color: #4c1d95;
+}
+
 [data-theme="light"] .btn-clear-queue,
 [data-theme="light"] .btn-close-queue {
   color: #475569;
@@ -3591,6 +3657,36 @@ body.table-col-resizing * {
 [data-theme="light"] .btn-clear-queue:hover,
 [data-theme="light"] .btn-close-queue:hover {
   color: #0f172a;
+}
+
+[data-theme="light"] .btn-save-queue-playlist {
+  background: rgba(124, 58, 237, 0.10);
+  border-color: rgba(124, 58, 237, 0.35);
+  color: #6d28d9;
+}
+
+[data-theme="light"] .btn-save-queue-playlist:hover {
+  background: rgba(124, 58, 237, 0.18);
+  color: #4c1d95;
+}
+
+[data-theme="light"] .btn-playlist-row-edit {
+  border-color: rgba(15, 23, 42, 0.18);
+  color: #475569;
+}
+
+[data-theme="light"] .btn-playlist-row-edit:hover {
+  color: #0f172a;
+  border-color: rgba(124, 58, 237, 0.5);
+  background: rgba(124, 58, 237, 0.10);
+}
+
+[data-theme="light"] .playlist-name-text {
+  color: #0f172a;
+}
+
+[data-theme="light"] .playlist-name-text:hover {
+  color: #6d28d9;
 }
 
 [data-theme="light"] .queue-list::-webkit-scrollbar {

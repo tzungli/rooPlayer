@@ -638,6 +638,8 @@ async function initApp() {
   setupScannerEvents();
   setupFavoritesEvents();
   setupHistoryEvents();
+  setupPlaylistEvents();
+  updatePlaylistCountBadge();
   setupSearch();
   setupCoverSizeControls();
   setupResizableTables();
@@ -1787,6 +1789,7 @@ const viewDirtyState = {
   favTracks: true,
   favArtists: true,
   history: true,
+  playlists: true,
   kkbox: true,
   tidal: true
 };
@@ -1832,6 +1835,9 @@ function renderViewIfNeeded(viewId) {
       break;
     case 'history':
       renderPlaybackHistory();
+      break;
+    case 'playlists':
+      renderPlaylists();
       break;
     case 'kkbox':
       onOpenKkboxView();
@@ -10725,6 +10731,286 @@ try {
   }
 } catch (err) {}
 
+// ----------------- 播放清單自我測試（main.js --test-playlists） -----------------
+// 走完整的 UI 流程：左側選單位置、從播放隊列儲存、開明細、上移/下移/移除單曲、
+// 重新命名、M3U round-trip 匯入、持久化、依序播放的隊列對應、刪除。
+async function runPlaylistsSelfTest() {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(28, report); } catch (err) {}
+  };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const storedBefore = (() => { try { return localStorage.getItem(PLAYLISTS_STORAGE_KEY); } catch (e) { return null; } })();
+
+  try {
+    // --- 1. 左側選單：播放清單在「播放紀錄」之下 ---
+    const navItems = Array.from(document.querySelectorAll('#sidebar .nav-item[data-view]'));
+    const idxHistory = navItems.findIndex(b => b.getAttribute('data-view') === 'history');
+    const idxPlaylists = navItems.findIndex(b => b.getAttribute('data-view') === 'playlists');
+    if (idxPlaylists > -1 && idxHistory > -1 && idxPlaylists === idxHistory + 1) {
+      ok('左側選單在播放紀錄之下新增播放清單', `選單第 ${idxHistory + 1} 項為 history、第 ${idxPlaylists + 1} 項為 playlists`);
+    } else {
+      bad('左側選單在播放紀錄之下新增播放清單', `history=${idxHistory} playlists=${idxPlaylists}`);
+    }
+    if (document.getElementById('viewPlaylists') && document.getElementById('playlistDetailView')) {
+      ok('播放清單頁面容器與明細容器都在');
+    } else {
+      bad('播放清單頁面容器與明細容器都在');
+    }
+
+    // --- 2. 從播放隊列儲存（播放隊列上的按鈕） ---
+    const fixtureTracks = [1, 2, 3].map(i => ({
+      id: `pltest_${i}`,
+      title: `測試曲目 ${i}`,
+      artist: 'rooPlayer 自我測試',
+      album: '清單測試專輯',
+      filePath: `D:/Music/__rooplayer_selftest__/0${i}.flac`,
+      fileName: `0${i}.flac`,
+      duration: 60 + i,
+      sampleRate: 96000,
+      bitsPerSample: 24,
+      formatName: 'FLAC',
+      trackNumber: i,
+    }));
+    state.queue = fixtureTracks.map(t => ({ ...t }));
+    state.currentTrackIndex = 0;
+    renderQueue();
+
+    const btnQueueSave = document.getElementById('btnSaveQueuePlaylist');
+    if (!btnQueueSave) { bad('播放隊列上有儲存清單的按鈕'); }
+    else {
+      btnQueueSave.click();
+      await sleep(120);
+      const modal = document.getElementById('playlistNameModal');
+      const nameInput = document.getElementById('playlistNameInput');
+      if (modal && modal.style.display === 'flex' && nameInput && String(nameInput.value).trim().length > 0) {
+        ok('播放隊列按儲存後出現命名視窗並預填名稱', `預填「${nameInput.value}」`);
+      } else {
+        bad('播放隊列按儲存後出現命名視窗並預填名稱', `display=${modal ? modal.style.display : 'none'}`);
+      }
+      nameInput.value = '自我測試清單 A';
+      document.getElementById('btnPlaylistNameConfirm').click();
+      await sleep(200);
+
+      const saved = findPlaylist((getPlaylists().find(p => p.name === '自我測試清單 A') || {}).id);
+      const titles = saved ? saved.items.map(t => t.title) : [];
+      const want = fixtureTracks.map(t => t.title);
+      if (saved && titles.length === 3 && titles.every((t, i) => t === want[i])) {
+        ok('儲存目前隊列：曲目依隊列順序完整寫入清單', titles.join(' → '));
+      } else {
+        bad('儲存目前隊列：曲目依隊列順序完整寫入清單', `${titles.length} 首：${titles.join(' → ')}`);
+      }
+      const badge = document.getElementById('playlistCountBadge');
+      if (badge && Number(badge.textContent) >= 1) ok('左側選單顯示清單數量', `badge=${badge.textContent}`);
+      else bad('左側選單顯示清單數量', badge ? `badge=${badge.textContent}` : '無 badge');
+
+      // 同名清單不重複建立
+      openPlaylistNameModal('saveQueue', { items: queueAsPlaylistItems() });
+      document.getElementById('playlistNameInput').value = '自我測試清單 A';
+      document.getElementById('btnPlaylistNameConfirm').click();
+      await sleep(150);
+      const dupCount = getPlaylists().filter(p => p.name === '自我測試清單 A').length;
+      if (dupCount === 1) ok('相同名稱不會建立重複清單');
+      else bad('相同名稱不會建立重複清單', `重複 ${dupCount} 個`);
+      closePlaylistNameModal(); // 名稱重複時視窗故意留著讓使用者改，測試手動關掉再往下
+      await sleep(80);
+
+      // --- 3. 開明細並截取畫面 ---
+      activePlaylistId = saved.id;
+      navigateTo('playlists');
+      await sleep(250);
+      const detailView = document.getElementById('playlistDetailView');
+      const detailRows = document.querySelectorAll('#playlistTrackTbody tr');
+      if (detailView && detailView.style.display === 'block' && detailRows.length === 3) {
+        ok('清單明細顯示全部曲目與編輯按鈕', `${detailRows.length} 列`);
+      } else {
+        bad('清單明細顯示全部曲目與編輯按鈕', `display=${detailView ? detailView.style.display : 'none'} rows=${detailRows.length}`);
+      }
+      try { window.electronAPI.captureStep(27, `清單明細 ${detailRows.length} 列：${saved.name}`); } catch (err) {}
+      await sleep(120);
+
+      // --- 4. 編輯：下移、上移、移除單曲 ---
+      const firstTitle = findPlaylist(saved.id).items[0].title;
+      movePlaylistItem(saved.id, 0, 1);
+      await sleep(80);
+      let order = findPlaylist(saved.id).items.map(t => t.title);
+      const movedDownOk = order[1] === firstTitle && order.length === 3;
+      if (movedDownOk) ok('下移單曲：順序確實往下', order.join(' → '));
+      else bad('下移單曲：順序確實往下', order.join(' → '));
+
+      movePlaylistItem(saved.id, 1, -1);
+      await sleep(80);
+      order = findPlaylist(saved.id).items.map(t => t.title);
+      if (order[0] === firstTitle) ok('上移單曲：可移回原位', order.join(' → '));
+      else bad('上移單曲：可移回原位', order.join(' → '));
+
+      const rowsNow = document.querySelectorAll('#playlistTrackTbody tr');
+      const upBtn = rowsNow[0] && rowsNow[0].querySelector('[data-action="up"]');
+      const downBtn = rowsNow[rowsNow.length - 1] && rowsNow[rowsNow.length - 1].querySelector('[data-action="down"]');
+      if (upBtn && upBtn.disabled && downBtn && downBtn.disabled) ok('第一列的上移、最後列的下移已停用');
+      else bad('第一列的上移、最後列的下移已停用', `up=${upBtn ? upBtn.disabled : 'n/a'} down=${downBtn ? downBtn.disabled : 'n/a'}`);
+
+      const removedTitle = findPlaylist(saved.id).items[1].title;
+      removePlaylistItem(saved.id, 1);
+      await sleep(80);
+      const afterRemove = findPlaylist(saved.id).items.map(t => t.title);
+      if (afterRemove.length === 2 && !afterRemove.includes(removedTitle)) {
+        ok('刪除單曲：只移除那一首', `移除「${removedTitle}」→ ${afterRemove.join(' → ')}`);
+      } else {
+        bad('刪除單曲：只移除那一首', `${afterRemove.length} 首：${afterRemove.join(' → ')}`);
+      }
+
+      // --- 5. 重新命名 ---
+      document.getElementById('btnPlaylistRename').click();
+      await sleep(120);
+      const renameInput = document.getElementById('playlistNameInput');
+      if (renameInput && renameInput.value === '自我測試清單 A') ok('重新命名會預填目前名稱');
+      else bad('重新命名會預填目前名稱', `值為「${renameInput ? renameInput.value : ''}」`);
+      renameInput.value = '自我測試清單 A 改名';
+      document.getElementById('btnPlaylistNameConfirm').click();
+      await sleep(150);
+      const renamed = findPlaylist(saved.id);
+      const stillSameItems = renamed && renamed.items.map(t => t.title).join('|') === afterRemove.join('|');
+      if (renamed && renamed.name === '自我測試清單 A 改名' && stillSameItems) ok('重新命名：名稱更新且曲目不變', renamed.name);
+      else bad('重新命名：名稱更新且曲目不變', renamed ? renamed.name : '清單不見了');
+
+      // --- 6. 淺色模式下的對比（清單標題與單曲編輯按鈕要看得清楚） ---
+      const lumOf = (colorStr) => {
+        const m = /rgba?\((\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?/.exec(String(colorStr || ''));
+        if (!m) return null;
+        const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+        return 0.2126 * f(+m[1]) + 0.7152 * f(+m[2]) + 0.0722 * f(+m[3]);
+      };
+      const opaqueBgLum = (el) => { // 半透明的容器一路往上合成，直到遇到不透明的底色
+        let node = el;
+        while (node) {
+          const bg = getComputedStyle(node).backgroundColor;
+          const m = /rgba?\((\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?/.exec(String(bg || ''));
+          if (m && (m[4] === undefined || Number(m[4]) >= 0.95)) return lumOf(bg);
+          node = node.parentElement;
+        }
+        return null;
+      };
+      const contrastRatio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+      const themeBefore = document.documentElement.getAttribute('data-theme');
+      document.documentElement.setAttribute('data-theme', 'light');
+      renderPlaylists();
+      await sleep(260);
+      try { window.electronAPI.captureStep(29, '播放清單 淺色模式'); } catch (err) {}
+      const titleEl = document.getElementById('playlistDetailTitle');
+      const editBtn = document.querySelector('#playlistTrackTbody .btn-playlist-row-edit');
+      const titleLum = titleEl ? lumOf(getComputedStyle(titleEl).color) : null;
+      const titleBg = titleEl ? opaqueBgLum(titleEl) : null;
+      const editLum = editBtn ? lumOf(getComputedStyle(editBtn).color) : null;
+      const editBg = editBtn ? opaqueBgLum(editBtn) : null;
+      const titleRatio = (titleLum !== null && titleBg !== null) ? contrastRatio(titleLum, titleBg) : 0;
+      const editRatio = (editLum !== null && editBg !== null) ? contrastRatio(editLum, editBg) : 0;
+      if (titleRatio >= 4.5 && editRatio >= 4.5) {
+        ok('淺色模式清單文字與編輯按鈕對比足夠', `標題 ${titleRatio.toFixed(1)}:1、編輯按鈕 ${editRatio.toFixed(1)}:1`);
+      } else {
+        bad('淺色模式清單文字與編輯按鈕對比足夠', `標題 ${titleRatio.toFixed(1)}:1、編輯按鈕 ${editRatio.toFixed(1)}:1`);
+      }
+      const activeNav = document.querySelector('#sidebar .nav-item.active');
+      const navLum = activeNav ? lumOf(getComputedStyle(activeNav).color) : null;
+      const navBg = activeNav ? opaqueBgLum(activeNav) : null;
+      const navRatio = (navLum !== null && navBg !== null) ? contrastRatio(navLum, navBg) : 0;
+      if (activeNav && activeNav.getAttribute('data-view') === 'playlists' && navRatio >= 4.5) {
+        ok('淺色模式左側選單選取項目文字對比足夠', `播放清單 ${navRatio.toFixed(1)}:1`);
+      } else {
+        bad('淺色模式左側選單選取項目文字對比足夠', `view=${activeNav ? activeNav.getAttribute('data-view') : 'none'} ${navRatio.toFixed(1)}:1`);
+      }
+      document.documentElement.setAttribute('data-theme', themeBefore || 'dark');
+      renderPlaylists();
+      await sleep(120);
+
+      // --- 7. M3U 匯出 / 匯入 round-trip（含不在音樂庫的路徑） ---
+      const plForExport = findPlaylist(saved.id);
+      const m3uText = ['#EXTM3U',
+        '#EXTINF:71,rooPlayer 自我測試 - 外部曲目 一',
+        'D:/External/Music/external_one.flac',
+        '#EXTINF:82,rooPlayer 自我測試 - 外部曲目 二',
+        'D:/External/Music/external_two.flac',
+        `#EXTINF:60,${plForExport.items[0].artist} - ${plForExport.items[0].title}`,
+        plForExport.items[0].filePath,
+      ].join('\n');
+      const importedItems = parseM3uItems(m3uText);
+      if (importedItems.length === 3) ok('匯入 M3U：三行曲目都讀到', importedItems.map(t => t.title).join(' → '));
+      else bad('匯入 M3U：三行曲目都讀到', `${importedItems.length} 首：${importedItems.map(t => t.title).join(' → ')}`);
+      const externalOne = importedItems.find(t => t.title === '外部曲目 一');
+      if (externalOne && externalOne.filePath === 'D:/External/Music/external_one.flac' && externalOne.artist === 'rooPlayer 自我測試') {
+        ok('不在音樂庫的路徑也保留檔案路徑，演出者與曲目分開還原', `${externalOne.artist} / ${externalOne.title} @ ${externalOne.filePath}`);
+      } else {
+        bad('不在音樂庫的路徑也保留檔案路徑，演出者與曲目分開還原', externalOne ? `${externalOne.artist} / ${externalOne.title} @ ${externalOne.filePath}` : '沒有這一首');
+      }
+
+      const roundTrip = parseM3uItems(playlistToM3u(plForExport));
+      if (roundTrip.length === plForExport.items.length && roundTrip.map(t => t.title).join('|') === plForExport.items.map(t => t.title).join('|')) {
+        ok('匯出 M3U 再匯入：曲目與順序一致', roundTrip.map(t => t.title).join(' → '));
+      } else {
+        bad('匯出 M3U 再匯入：曲目與順序一致', `${roundTrip.length} 首：${roundTrip.map(t => t.title).join(' → ')}`);
+      }
+
+      // --- 8. 持久化（重新載入後還在） ---
+      const rawStored = localStorage.getItem(PLAYLISTS_STORAGE_KEY);
+      const parsedStored = rawStored ? JSON.parse(rawStored) : [];
+      const storedTarget = parsedStored.find(p => p.id === saved.id);
+      if (storedTarget && storedTarget.name === '自我測試清單 A 改名' && storedTarget.items.length === 2) {
+        ok('清單寫入 localStorage（重新載入後還在）', `${storedTarget.name}：${storedTarget.items.length} 首`);
+      } else {
+        bad('清單寫入 localStorage（重新載入後還在）', storedTarget ? `${storedTarget.items.length} 首` : 'localStorage 裡找不到');
+      }
+
+      // --- 9. 依序播放：隊列內容就是清單內容 ---
+      const originalPlayCurrentTrack = window.playCurrentTrack;
+      let playedCalls = 0;
+      window.playCurrentTrack = () => { playedCalls++; };
+      try {
+        playPlaylist(saved.id, false, 1);
+        await sleep(120);
+      } finally {
+        window.playCurrentTrack = originalPlayCurrentTrack;
+      }
+      const queueTitles = (state.queue || []).map(t => t.title);
+      const wantTitles = storedTarget.items.map(t => t.title);
+      if (queueTitles.join('|') === wantTitles.join('|') && state.currentTrackIndex === 1 && playedCalls === 1) {
+        ok('依序播放清單：隊列與清單一致並從該首開始', `${queueTitles.join(' → ')} 從第 2 首`);
+      } else {
+        bad('依序播放清單：隊列與清單一致並從該首開始', `queue=${queueTitles.join(' → ')} idx=${state.currentTrackIndex} calls=${playedCalls}`);
+      }
+
+      // --- 10. 刪除清單 ---
+      deletePlaylist(saved.id);
+      await sleep(120);
+      const afterDelete = getPlaylists().filter(p => p.id === saved.id).length;
+      const listRows = document.querySelectorAll('#playlistsTableTbody tr');
+      if (afterDelete === 0) ok('刪除清單：整個清單移除', `剩 ${getPlaylists().length} 個清單、列表 ${listRows.length} 列`);
+      else bad('刪除清單：整個清單移除', `還在 ${afterDelete} 個`);
+    }
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  } finally {
+    try {
+      if (storedBefore === null) localStorage.removeItem(PLAYLISTS_STORAGE_KEY);
+      else localStorage.setItem(PLAYLISTS_STORAGE_KEY, storedBefore);
+      _playlistsCache = null;
+      activePlaylistId = null;
+      updatePlaylistCountBadge();
+    } catch (e) {}
+  }
+  finish();
+}
+
+try {
+  const rpPlParams = new URLSearchParams(window.location.search || '');
+  if (rpPlParams.get('testPlaylists') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runPlaylistsSelfTest(); }, 2600);
+  }
+} catch (err) {}
+
 // ----------------- Queue Drawer -----------------
 function renderQueue() {
   queueList.innerHTML = '';
@@ -11010,6 +11296,679 @@ function applyView(viewId, updateNav = true) {
 
 function capitalize(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// ----------------- 播放清單 Playlists（儲存、匯入、編輯、刪除） -----------------
+// 清單存在 localStorage（與播放紀錄、最愛同一套儲存方式）。曲目存的是可播放的快照，
+// 之後就算音樂庫重新掃描，清單仍照儲存的順序播放。
+const PLAYLISTS_STORAGE_KEY = 'roon_playlists';
+const PLAYLIST_TRACK_FIELDS = [
+  'id', 'filePath', 'fileName', 'title', 'artist', 'album', 'albumArtist', 'duration', 'trackNumber',
+  'sampleRate', 'bitsPerSample', 'channels', 'formatName', 'fileSize', 'isLossless', 'year', 'genre',
+  'cover', 'isTidal', 'tidalId', 'tidalStreamUrl', 'audioQuality', 'isKkbox', 'kkboxId', 'isDemo',
+];
+let _playlistsCache = null; // { raw, data }
+let activePlaylistId = null; // 目前開啟的清單（null = 顯示清單總覽）
+
+function playlistTrackEntry(track) {
+  if (!track) return null;
+  const out = {};
+  for (const key of PLAYLIST_TRACK_FIELDS) {
+    if (track[key] !== undefined && track[key] !== null) out[key] = track[key];
+  }
+  if (!out.title) out.title = out.fileName || '未知曲目';
+  if (!out.artist) out.artist = '未知演出者';
+  return out;
+}
+
+function getPlaylists() {
+  try {
+    const raw = localStorage.getItem(PLAYLISTS_STORAGE_KEY);
+    if (!raw) return [];
+    if (!_playlistsCache || _playlistsCache.raw !== raw) {
+      const parsed = JSON.parse(raw);
+      _playlistsCache = { raw, data: Array.isArray(parsed) ? parsed : [] };
+    }
+    return _playlistsCache.data.slice();
+  } catch (e) {
+    console.warn('Error reading roon_playlists:', e);
+  }
+  return [];
+}
+
+function persistPlaylists(list) {
+  const safeList = Array.isArray(list) ? list : [];
+  try {
+    const raw = JSON.stringify(safeList);
+    localStorage.setItem(PLAYLISTS_STORAGE_KEY, raw);
+    _playlistsCache = { raw, data: safeList };
+  } catch (e) {
+    console.warn('Error saving roon_playlists:', e);
+    showToast('❌ 播放清單儲存失敗（儲存空間不足？）');
+    return false;
+  }
+  updatePlaylistCountBadge();
+  viewDirtyState.playlists = true;
+  if (state.currentView === 'playlists') renderPlaylists();
+  return true;
+}
+
+function makePlaylistId() {
+  return 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function findPlaylist(id) {
+  if (!id) return null;
+  return getPlaylists().find(p => p && p.id === id) || null;
+}
+
+function playlistTotalDuration(playlist) {
+  return (playlist && Array.isArray(playlist.items) ? playlist.items : [])
+    .reduce((sum, t) => sum + (Number(t && t.duration) || 0), 0);
+}
+
+function updatePlaylistCountBadge() {
+  const badge = document.getElementById('playlistCountBadge');
+  if (!badge) return;
+  const count = getPlaylists().length;
+  badge.textContent = String(count);
+  badge.style.display = count > 0 ? '' : 'none';
+}
+
+function createPlaylist(name, items) {
+  const trimmedItems = (Array.isArray(items) ? items : []).map(playlistTrackEntry).filter(Boolean);
+  const playlist = {
+    id: makePlaylistId(),
+    name: String(name || '未命名清單').trim().slice(0, 60) || '未命名清單',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    items: trimmedItems,
+  };
+  const list = getPlaylists();
+  list.unshift(playlist);
+  persistPlaylists(list);
+  return playlist;
+}
+
+function updatePlaylist(id, patch) {
+  const list = getPlaylists();
+  const target = list.find(p => p && p.id === id);
+  if (!target) return null;
+  Object.assign(target, patch || {});
+  target.updatedAt = Date.now();
+  persistPlaylists(list);
+  return target;
+}
+
+function deletePlaylist(id) {
+  const list = getPlaylists().filter(p => p && p.id !== id);
+  persistPlaylists(list);
+  if (activePlaylistId === id) activePlaylistId = null;
+}
+
+function playlistNameExists(name, exceptId) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return false;
+  return getPlaylists().some(p => p && p.id !== exceptId && String(p.name || '').trim().toLowerCase() === key);
+}
+
+// 從播放隊列產生清單內容（依隊列目前的順序）
+function queueAsPlaylistItems() {
+  const queue = Array.isArray(state.queue) ? state.queue : [];
+  return queue.map(playlistTrackEntry).filter(Boolean);
+}
+
+function defaultPlaylistName() {
+  const current = state.queue && state.queue[state.currentTrackIndex];
+  const base = current && current.album ? current.album : (current && current.artist ? current.artist : '');
+  const d = new Date();
+  const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return base ? String(base).slice(0, 40) : `我的清單 ${stamp}`;
+}
+
+// ----------------- 清單命名 Modal -----------------
+let playlistNameMode = null;   // 'create' | 'rename' | 'saveQueue' | 'appendQueue'
+let playlistNameTargetId = null;
+let playlistNamePendingItems = null;
+
+function openPlaylistNameModal(mode, options = {}) {
+  const modal = document.getElementById('playlistNameModal');
+  const input = document.getElementById('playlistNameInput');
+  const titleEl = document.getElementById('playlistNameModalTitle');
+  const hintEl = document.getElementById('playlistNameModalHint');
+  if (!modal || !input) return;
+
+  playlistNameMode = mode;
+  playlistNameTargetId = options.playlistId || null;
+  playlistNamePendingItems = Array.isArray(options.items) ? options.items : null;
+
+  const queueCount = (state.queue || []).length;
+  const titles = {
+    create: '新增播放清單',
+    rename: '重新命名播放清單',
+    saveQueue: '儲存目前播放隊列',
+    appendQueue: '將播放隊列加入清單',
+  };
+  const hints = {
+    create: '建立一個空白清單，之後可用「加入目前隊列」或從專輯、曲目頁面把歌曲存進來。',
+    rename: '只改名稱，清單內的曲目與順序不變。',
+    saveQueue: queueCount > 0
+      ? `將把目前播放隊列的 ${queueCount} 首歌曲依序存成一個新的播放清單。`
+      : '目前播放隊列是空的，儲存後會得到一個空白清單。',
+    appendQueue: queueCount > 0
+      ? `將目前播放隊列的 ${queueCount} 首歌曲依序附加到「${options.playlistName || '這個清單'}」後面。`
+      : '目前播放隊列是空的，不會加入任何曲目。',
+  };
+
+  if (titleEl) titleEl.textContent = titles[mode] || '播放清單';
+  if (hintEl) hintEl.textContent = hints[mode] || '';
+  input.value = mode === 'rename' ? (options.playlistName || '') : defaultPlaylistName();
+  modal.style.display = 'flex';
+  setTimeout(() => { try { input.focus(); input.select(); } catch (e) {} }, 60);
+}
+
+function closePlaylistNameModal() {
+  const modal = document.getElementById('playlistNameModal');
+  if (modal) modal.style.display = 'none';
+  playlistNameMode = null;
+  playlistNameTargetId = null;
+  playlistNamePendingItems = null;
+}
+
+function confirmPlaylistNameModal() {
+  const input = document.getElementById('playlistNameInput');
+  const name = String(input && input.value ? input.value : '').trim();
+  if (!name) { showToast('請輸入清單名稱'); return; }
+  const mode = playlistNameMode;
+  const targetId = playlistNameTargetId;
+  const items = playlistNamePendingItems;
+  if (playlistNameExists(name, targetId)) {
+    showToast(`⚠️ 已經有一個名叫「${name}」的播放清單，請換一個名稱。`);
+    return;
+  }
+
+  if (mode === 'rename') {
+    const updated = updatePlaylist(targetId, { name });
+    closePlaylistNameModal();
+    if (updated) { showToast(`✏️ 已重新命名為「${updated.name}」`); renderPlaylists(); }
+    return;
+  }
+
+  if (mode === 'appendQueue') {
+    const target = findPlaylist(targetId);
+    if (!target) { closePlaylistNameModal(); showToast('找不到要加入的清單'); return; }
+    const newItems = queueAsPlaylistItems();
+    if (!newItems.length) { closePlaylistNameModal(); showToast('目前播放隊列是空的'); return; }
+    const merged = (Array.isArray(target.items) ? target.items : []).concat(newItems);
+    updatePlaylist(targetId, { items: merged, name: name !== target.name ? name : target.name });
+    closePlaylistNameModal();
+    showToast(`➕ 已把播放隊列的 ${newItems.length} 首加入「${target.name}」（共 ${merged.length} 首）`);
+    renderPlaylists();
+    return;
+  }
+
+  // create / saveQueue
+  const sourceItems = mode === 'saveQueue' ? queueAsPlaylistItems() : (items || []);
+  const created = createPlaylist(name, sourceItems);
+  activePlaylistId = created.id;
+  closePlaylistNameModal();
+  showToast(mode === 'saveQueue'
+    ? `💾 已儲存播放清單「${created.name}」（${created.items.length} 首）`
+    : `➕ 已建立播放清單「${created.name}」`);
+  if (state.currentView !== 'playlists') navigateTo('playlists');
+  else renderPlaylists();
+}
+
+// ----------------- 播放清單頁面渲染 -----------------
+function renderPlaylists() {
+  if (activePlaylistId && findPlaylist(activePlaylistId)) {
+    renderPlaylistDetail(activePlaylistId);
+    return;
+  }
+  activePlaylistId = null;
+  renderPlaylistsList();
+}
+
+function renderPlaylistsList() {
+  const listView = document.getElementById('playlistsListView');
+  const detailView = document.getElementById('playlistDetailView');
+  const tbody = document.getElementById('playlistsTableTbody');
+  const tableContainer = document.getElementById('playlistsTableContainer');
+  const emptyHint = document.getElementById('playlistsEmptyHint');
+  const countLabel = document.getElementById('playlistsHeaderCount');
+  if (!listView || !tbody) return;
+
+  if (detailView) detailView.style.display = 'none';
+  listView.style.display = 'block';
+
+  const playlists = getPlaylists();
+  if (countLabel) countLabel.textContent = `共 ${playlists.length} 個播放清單（曲目依儲存的順序播放）`;
+  updatePlaylistCountBadge();
+
+  tbody.innerHTML = '';
+  if (!playlists.length) {
+    if (tableContainer) tableContainer.style.display = 'none';
+    if (emptyHint) emptyHint.style.display = 'block';
+    return;
+  }
+  if (tableContainer) tableContainer.style.display = 'block';
+  if (emptyHint) emptyHint.style.display = 'none';
+
+  playlists.forEach((pl, idx) => {
+    const items = Array.isArray(pl.items) ? pl.items : [];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${idx + 1}</td>
+      <td style="text-align: center;"><button class="btn-history-play" title="依序播放這個清單">▶</button></td>
+      <td class="track-title-cell">
+        <div class="track-title-text">
+          <span class="playlist-name-text">${escapeXml(pl.name)}</span>
+        </div>
+      </td>
+      <td style="text-align: center; color: var(--text-sub);">${items.length} 首</td>
+      <td style="text-align: right;">${formatDuration(playlistTotalDuration(pl))}</td>
+      <td style="color: var(--text-muted); font-size: 12px;">${formatTimeAgo(pl.updatedAt || pl.createdAt || Date.now())}</td>
+      <td style="text-align: right;">
+        <button class="btn-playlist-row-edit" data-action="open" title="開啟並編輯這個清單">📂 編輯</button>
+        <button class="btn-playlist-row-edit" data-action="rename" title="重新命名">✏️</button>
+        <button class="btn-playlist-row-edit" data-action="delete" title="刪除這個清單">🗑️</button>
+      </td>
+    `;
+    tr.addEventListener('click', (e) => {
+      const actionBtn = e.target.closest('[data-action]');
+      const action = actionBtn ? actionBtn.getAttribute('data-action') : '';
+      if (e.target.closest('.btn-history-play') || action === 'play') {
+        playPlaylist(pl.id, false);
+        return;
+      }
+      if (action === 'open') { openPlaylistDetail(pl.id); return; }
+      if (action === 'rename') {
+        openPlaylistNameModal('rename', { playlistId: pl.id, playlistName: pl.name });
+        return;
+      }
+      if (action === 'delete') {
+        if (confirm(`確定要刪除播放清單「${pl.name}」嗎？\n（只刪清單，裡面的歌曲仍保留在音樂庫。）`)) {
+          deletePlaylist(pl.id);
+          showToast(`🗑️ 已刪除播放清單「${pl.name}」`);
+          renderPlaylists();
+        }
+        return;
+      }
+      openPlaylistDetail(pl.id);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function openPlaylistDetail(id) {
+  const pl = findPlaylist(id);
+  if (!pl) { showToast('找不到這個播放清單'); return; }
+  activePlaylistId = id;
+  renderPlaylistDetail(id);
+}
+
+function renderPlaylistDetail(id) {
+  const pl = findPlaylist(id);
+  if (!pl) { activePlaylistId = null; renderPlaylistsList(); return; }
+
+  const listView = document.getElementById('playlistsListView');
+  const detailView = document.getElementById('playlistDetailView');
+  const tbody = document.getElementById('playlistTrackTbody');
+  const tableContainer = document.getElementById('playlistTrackTableContainer');
+  const emptyHint = document.getElementById('playlistDetailEmptyHint');
+  const titleEl = document.getElementById('playlistDetailTitle');
+  const countEl = document.getElementById('playlistDetailCount');
+  if (!detailView || !tbody) return;
+
+  if (listView) listView.style.display = 'none';
+  detailView.style.display = 'block';
+
+  const items = Array.isArray(pl.items) ? pl.items : [];
+  if (titleEl) titleEl.textContent = `📃 ${pl.name}`;
+  if (countEl) countEl.textContent = `${items.length} 首歌曲 · 總時長 ${formatDuration(playlistTotalDuration(pl))} · 建立於 ${new Date(pl.createdAt || Date.now()).toLocaleString()}`;
+
+  tbody.innerHTML = '';
+  if (!items.length) {
+    if (tableContainer) tableContainer.style.display = 'none';
+    if (emptyHint) emptyHint.style.display = 'block';
+    return;
+  }
+  if (tableContainer) tableContainer.style.display = 'block';
+  if (emptyHint) emptyHint.style.display = 'none';
+
+  items.forEach((track, idx) => {
+    const tr = document.createElement('tr');
+    const isHires = (track.bitsPerSample >= 24) || (track.sampleRate > 48000);
+    const specLabel = track.isTidal ? 'TIDAL 串流' : `${track.formatName || 'PCM'} ${track.bitsPerSample ? track.bitsPerSample + 'b/' : ''}${Math.round((track.sampleRate || 44100) / 1000)}k`;
+    const missingFile = !track.filePath && !track.isTidal && !track.isKkbox && !track.isDemo;
+    tr.innerHTML = `
+      <td>${idx + 1}</td>
+      <td style="text-align: center;"><button class="btn-history-play" title="從這首開始依序播放">▶</button></td>
+      <td class="track-title-cell">
+        <div class="track-title-text">
+          <span class="track-name-span">${escapeXml(track.title || '未知曲目')}</span>
+          ${missingFile ? '<span class="format-chip">檔案已移除</span>' : ''}
+        </div>
+      </td>
+      <td>${escapeXml(track.artist || '未知演出者')}</td>
+      <td>${escapeXml(track.album || '未知專輯')}</td>
+      <td><span class="format-chip ${isHires ? 'hires' : ''}">${escapeXml(specLabel)}</span></td>
+      <td style="text-align: right;">${formatDuration(track.duration)}</td>
+      <td style="text-align: right;">
+        <button class="btn-playlist-row-edit" data-action="up" title="上移" ${idx === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn-playlist-row-edit" data-action="down" title="下移" ${idx === items.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="btn-playlist-row-edit" data-action="remove" title="從清單移除這首">✕</button>
+      </td>
+    `;
+    tr.addEventListener('click', (e) => {
+      const actionBtn = e.target.closest('[data-action]');
+      const action = actionBtn ? actionBtn.getAttribute('data-action') : '';
+      if (e.target.closest('.btn-history-play')) {
+        playPlaylist(pl.id, false, idx);
+        return;
+      }
+      if (action === 'up') { movePlaylistItem(pl.id, idx, -1); return; }
+      if (action === 'down') { movePlaylistItem(pl.id, idx, 1); return; }
+      if (action === 'remove') { removePlaylistItem(pl.id, idx); return; }
+      playPlaylist(pl.id, false, idx);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function movePlaylistItem(id, index, direction) {
+  const pl = findPlaylist(id);
+  if (!pl || !Array.isArray(pl.items)) return;
+  const target = index + direction;
+  if (target < 0 || target >= pl.items.length) return;
+  const items = pl.items.slice();
+  const tmp = items[index];
+  items[index] = items[target];
+  items[target] = tmp;
+  updatePlaylist(id, { items });
+  showToast(direction < 0 ? `↑ 已將「${(pl.items[index] && pl.items[index].title) || '這首'}」往上移` : `↓ 已將「${(pl.items[index] && pl.items[index].title) || '這首'}」往下移`);
+  renderPlaylists();
+}
+
+function removePlaylistItem(id, index) {
+  const pl = findPlaylist(id);
+  if (!pl || !Array.isArray(pl.items)) return;
+  const removed = pl.items[index];
+  const items = pl.items.slice();
+  items.splice(index, 1);
+  updatePlaylist(id, { items });
+  showToast(`✕ 已從清單移除「${(removed && removed.title) || '這首'}」（剩下 ${items.length} 首）`);
+  renderPlaylists();
+}
+
+function playPlaylist(id, shuffle, startIndex = 0) {
+  const pl = findPlaylist(id);
+  if (!pl || !Array.isArray(pl.items) || !pl.items.length) { showToast('這個清單還沒有曲目'); return; }
+  const items = pl.items.slice();
+  setShuffleState(!!shuffle);
+  const start = Math.max(0, Math.min(items.length - 1, Number(startIndex) || 0));
+  playTrackList(items, shuffle ? Math.floor(Math.random() * items.length) : start);
+  showToast(shuffle ? `🔀 隨機播放清單「${pl.name}」（${items.length} 首）` : `▶ 依序播放清單「${pl.name}」（${items.length} 首）`);
+}
+
+function saveQueueAsPlaylist() {
+  const items = queueAsPlaylistItems();
+  if (!items.length) {
+    showToast('目前播放隊列是空的：先播放專輯或曲目，再按「儲存目前隊列」。');
+    return;
+  }
+  openPlaylistNameModal('saveQueue', { items });
+}
+
+function appendQueueToActivePlaylist() {
+  if (!activePlaylistId) return;
+  const pl = findPlaylist(activePlaylistId);
+  if (!pl) return;
+  openPlaylistNameModal('appendQueue', { playlistId: pl.id, playlistName: pl.name });
+}
+
+// ----------------- 清單檔匯入／匯出（.m3u / .m3u8 / .json） -----------------
+function normalizeTrackPathKey(p) {
+  return String(p || '').trim().replace(/\\/g, '/').toLowerCase();
+}
+
+function findLibraryTrackByPath(candidatePath) {
+  const key = normalizeTrackPathKey(candidatePath);
+  if (!key) return null;
+  const nameHint = key.split('/').pop() || '';
+  const tracks = Array.isArray(state.tracks) ? state.tracks : [];
+  for (const t of tracks) {
+    if (!t || !t.filePath) continue;
+    const tk = normalizeTrackPathKey(t.filePath);
+    if (tk === key || tk.endsWith('/' + nameHint) || key.endsWith('/' + tk.split('/').pop())) return t;
+  }
+  return null;
+}
+
+function buildTrackFromPathLine(rawPath, titleHint, artistHint) {
+  const clean = String(rawPath || '').trim().replace(/^file:\/\/\/?/i, '');
+  if (!clean || /^https?:\/\//i.test(clean)) return null;
+  const m = /([^/\\]+)$/.exec(clean);
+  const fileName = m ? m[1] : clean;
+  const extMatch = /\.([a-z0-9]{2,4})$/i.exec(fileName);
+  const ext = extMatch ? extMatch[1].toUpperCase() : '';
+  if (!['FLAC','WAV','AIFF','AIF','DSF','DFF','MP3','M4A','AAC','OGG','OPUS','WV','DSD'].includes(ext)) return null;
+  return {
+    filePath: clean,
+    fileName: fileName,
+    title: (titleHint || fileName.replace(/\.[a-z0-9]{2,4}$/i, '')).trim() || '未知曲目',
+    artist: (artistHint || '').trim() || '未知演出者',
+    album: '未知專輯',
+    duration: 0,
+    formatName: ext,
+    sampleRate: 0,
+    bitsPerSample: 0,
+  };
+}
+
+function parseM3uItems(text) {
+  const items = [];
+  let pendingTitle = '';
+  let pendingArtist = '';
+  const lines = String(text || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/^#EXTINF/i.test(line)) {
+      // M3U 的常見寫法是「演出者 - 曲目」，能拆開就分開存，清單裡兩欄才不會混在一起
+      const rawTitle = line.split(',').slice(1).join(',').trim();
+      const splitMatch = /^(.+?)\s+-\s+(.+)$/.exec(rawTitle);
+      if (splitMatch && splitMatch[1].length <= 80) {
+        pendingArtist = splitMatch[1].trim();
+        pendingTitle = splitMatch[2].trim();
+      } else {
+        pendingArtist = '';
+        pendingTitle = rawTitle;
+      }
+      continue;
+    }
+    if (line.startsWith('#')) continue;
+    const matched = findLibraryTrackByPath(line);
+    const entry = matched
+      ? playlistTrackEntry(matched)
+      : playlistTrackEntry(buildTrackFromPathLine(line, pendingTitle, pendingArtist));
+    if (entry) items.push(entry);
+    pendingTitle = '';
+    pendingArtist = '';
+  }
+  return items;
+}
+
+function parseJsonPlaylistItems(text) {
+  let data = null;
+  try { data = JSON.parse(String(text || '')); } catch (e) { return null; }
+  if (!data) return null;
+  if (Array.isArray(data)) {
+    if (data.length && data[0] && Array.isArray(data[0].items)) {
+      return { multiple: data.map(p => ({ name: p.name || p.title || '匯入的清單', items: p.items })) };
+    }
+    return { items: data };
+  }
+  if (Array.isArray(data.items) || Array.isArray(data.tracks)) {
+    return { name: data.name || data.title, items: data.items || data.tracks };
+  }
+  return null;
+}
+
+function fillMissingPlaylistDurations(items) {
+  const targets = items.filter(t => t && t.filePath && !(Number(t.duration) > 0));
+  if (!targets.length || !window.electronAPI || !window.electronAPI.getAudioDuration) return Promise.resolve();
+  return Promise.all(targets.map(t =>
+    window.electronAPI.getAudioDuration(t.filePath)
+      .then(d => { const sec = Number(d && (d.duration || d)); if (Number.isFinite(sec) && sec > 0) t.duration = sec; })
+      .catch(() => {})
+  ));
+}
+
+async function importPlaylistFile() {
+  if (!window.electronAPI || !window.electronAPI.readPlaylistFile) { showToast('匯入功能尚未可用'); return; }
+  let res = null;
+  try { res = await window.electronAPI.readPlaylistFile(); } catch (e) { showToast(`❌ 匯入失敗：${e.message}`); return; }
+  if (!res) return;
+  if (res.canceled) return;
+  if (!res.success) { showToast(`❌ ${res.error || '匯入失敗'}`); return; }
+
+  const fileName = res.fileName || 'playlist';
+  const baseName = fileName.replace(/\.[a-z0-9]+$/i, '') || '匯入的清單';
+  const text = String(res.text || '');
+  let parsed = null;
+  let items = [];
+  const looksJson = /\.json$/i.test(fileName) || /^\s*[\[{]/.test(text);
+  if (looksJson) {
+    parsed = parseJsonPlaylistItems(text);
+    if (!parsed) { showToast('❌ 這個 JSON 裡找不到播放清單結構（items 或 tracks）。'); return; }
+  } else {
+    items = parseM3uItems(text);
+    if (!items.length) { showToast('❌ 這個檔案裡沒有可用的曲目（.m3u 每行一個檔案路徑）。'); return; }
+  }
+
+  await fillMissingPlaylistDurations(items);
+
+  if (parsed && parsed.multiple) {
+    let added = 0;
+    for (const p of parsed.multiple) {
+      const plItems = (Array.isArray(p.items) ? p.items : []).map(playlistTrackEntry).filter(Boolean);
+      if (!plItems.length) continue;
+      await fillMissingPlaylistDurations(plItems);
+      createPlaylist(p.name || baseName, plItems);
+      added++;
+    }
+    showToast(added ? `📥 已匯入 ${added} 個播放清單（來自 ${fileName}）` : '❌ 檔案裡的清單都是空的。');
+    if (state.currentView !== 'playlists') navigateTo('playlists'); else renderPlaylists();
+    return;
+  }
+
+  if (parsed) items = (Array.isArray(parsed.items) ? parsed.items : []).map(playlistTrackEntry).filter(Boolean);
+  if (!items.length) { showToast('❌ 這個檔案裡沒有可用的曲目。'); return; }
+  await fillMissingPlaylistDurations(items);
+
+  const created = createPlaylist(parsed && parsed.name ? parsed.name : baseName, items);
+  activePlaylistId = created.id;
+  showToast(`📥 已匯入播放清單「${created.name}」（${created.items.length} 首）`);
+  if (state.currentView !== 'playlists') navigateTo('playlists'); else renderPlaylists();
+}
+
+function playlistToM3u(playlist) {
+  const lines = ['#EXTM3U', `#PLAYLIST:${playlist.name}`];
+  (Array.isArray(playlist.items) ? playlist.items : []).forEach(t => {
+    const dur = Number(t.duration) > 0 ? Math.round(t.duration) : -1;
+    lines.push(`#EXTINF:${dur},${t.artist || '未知演出者'} - ${t.title || '未知曲目'}`);
+    lines.push(t.filePath || `${t.artist || ''} - ${t.title || ''}`);
+  });
+  return lines.join('\n') + '\n';
+}
+
+function playlistToJson(playlist) {
+  return JSON.stringify({
+    app: 'rooPlayer',
+    type: 'playlist',
+    name: playlist.name,
+    createdAt: new Date(playlist.createdAt || Date.now()).toISOString(),
+    items: playlist.items,
+  }, null, 2);
+}
+
+async function exportActivePlaylist(format) {
+  if (!activePlaylistId) return;
+  const pl = findPlaylist(activePlaylistId);
+  if (!pl) return;
+  if (!window.electronAPI || !window.electronAPI.writePlaylistFile) { showToast('匯出功能尚未可用'); return; }
+  const ext = format === 'json' ? 'json' : 'm3u8';
+  const text = ext === 'json' ? playlistToJson(pl) : playlistToM3u(pl);
+  let res = null;
+  try { res = await window.electronAPI.writePlaylistFile(`${pl.name}.${ext}`, text, ext); } catch (e) { showToast(`❌ 匯出失敗：${e.message}`); return; }
+  if (!res) return;
+  if (res.canceled) return;
+  if (!res.success) { showToast(`❌ ${res.error || '匯出失敗'}`); return; }
+  showToast(`💾 已匯出「${pl.name}」（${(pl.items || []).length} 首）→ ${res.path}`);
+}
+
+function setupPlaylistEvents() {
+  const btnNew = document.getElementById('btnPlaylistNew');
+  if (btnNew) btnNew.addEventListener('click', () => openPlaylistNameModal('create'));
+
+  const btnSaveQueue = document.getElementById('btnPlaylistSaveQueue');
+  if (btnSaveQueue) btnSaveQueue.addEventListener('click', () => saveQueueAsPlaylist());
+
+  const btnImport = document.getElementById('btnPlaylistImport');
+  if (btnImport) btnImport.addEventListener('click', () => { importPlaylistFile(); });
+
+  const btnBack = document.getElementById('btnPlaylistBack');
+  if (btnBack) btnBack.addEventListener('click', () => { activePlaylistId = null; renderPlaylistsList(); });
+
+  const btnRename = document.getElementById('btnPlaylistRename');
+  if (btnRename) btnRename.addEventListener('click', () => {
+    const pl = findPlaylist(activePlaylistId);
+    if (pl) openPlaylistNameModal('rename', { playlistId: pl.id, playlistName: pl.name });
+  });
+
+  const btnAppend = document.getElementById('btnPlaylistAppendQueue');
+  if (btnAppend) btnAppend.addEventListener('click', () => appendQueueToActivePlaylist());
+
+  const btnExportM3u = document.getElementById('btnPlaylistExportM3u');
+  if (btnExportM3u) btnExportM3u.addEventListener('click', () => exportActivePlaylist('m3u8'));
+
+  const btnExportJson = document.getElementById('btnPlaylistExportJson');
+  if (btnExportJson) btnExportJson.addEventListener('click', () => exportActivePlaylist('json'));
+
+  const btnDelete = document.getElementById('btnPlaylistDelete');
+  if (btnDelete) btnDelete.addEventListener('click', () => {
+    const pl = findPlaylist(activePlaylistId);
+    if (!pl) return;
+    if (confirm(`確定要刪除播放清單「${pl.name}」嗎？\n（只刪清單，裡面的歌曲仍保留在音樂庫。）`)) {
+      deletePlaylist(pl.id);
+      showToast(`🗑️ 已刪除播放清單「${pl.name}」`);
+      activePlaylistId = null;
+      renderPlaylistsList();
+    }
+  });
+
+  const btnPlayAll = document.getElementById('btnPlaylistPlayAll');
+  if (btnPlayAll) btnPlayAll.addEventListener('click', () => playPlaylist(activePlaylistId, false));
+
+  const btnShuffle = document.getElementById('btnPlaylistShuffle');
+  if (btnShuffle) btnShuffle.addEventListener('click', () => playPlaylist(activePlaylistId, true));
+
+  // 播放隊列上的「儲存清單」按鈕：把目前隊列依序存成播放清單
+  const btnQueueSave = document.getElementById('btnSaveQueuePlaylist');
+  if (btnQueueSave) btnQueueSave.addEventListener('click', () => saveQueueAsPlaylist());
+
+  const btnNameConfirm = document.getElementById('btnPlaylistNameConfirm');
+  if (btnNameConfirm) btnNameConfirm.addEventListener('click', () => confirmPlaylistNameModal());
+  const btnNameCancel = document.getElementById('btnPlaylistNameCancel');
+  if (btnNameCancel) btnNameCancel.addEventListener('click', () => closePlaylistNameModal());
+  const btnNameClose = document.getElementById('btnClosePlaylistName');
+  if (btnNameClose) btnNameClose.addEventListener('click', () => closePlaylistNameModal());
+  const nameInput = document.getElementById('playlistNameInput');
+  if (nameInput) nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); confirmPlaylistNameModal(); }
+    if (e.key === 'Escape') { e.preventDefault(); closePlaylistNameModal(); }
+  });
 }
 
 // ----------------- Playback History View Rendering -----------------
