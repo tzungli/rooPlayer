@@ -30,8 +30,9 @@ const TEST_QUEUE_CONTRAST = process.argv.includes('--test-queue-contrast'); // �
 const TEST_SPECTRUM_SMOOTH = process.argv.includes('--test-spectrum-smooth'); // 執行期測試 NOW PLAYING 頻譜的播放位置是否連續推進
 const TEST_DLNA_HINT = process.argv.includes('--test-dlna-hint'); // 執行期測試 DLNA 串流準備（記憶體緩衝）提示與重複按播放的保護
 const TEST_PLAYLISTS = process.argv.includes('--test-playlists'); // 執行期測試播放清單：儲存、匯入、編輯（上移/下移/移除單曲）、刪除
+const TEST_GENRE_SIZE = process.argv.includes('--test-genre-size'); // 執行期測試曲風流派頁的封面尺寸切換（小/中/大）
 const FAKE_DLNA_PORT = 49152; // 測試用假 UPnP MediaRenderer _listen port（probeIp 的候選位址之一）
-if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS) {
+if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS || TEST_GENRE_SIZE) {
   // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
   // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -378,6 +379,33 @@ function runCaptureSequence() {
         app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
         return;
       }
+      if (TEST_GENRE_SIZE) {
+        console.log('[test-genre-size] waiting for renderer genre size self-test result');
+        // 渲染端發 30（大尺寸封面）、32（小尺寸封面）兩個截圖點，最後發 31（測試報告）
+        const reportPromise = waitRendererInfo(31, 120000);
+        const sizeShots = [
+          { signal: 30, file: 'genres-size-large.png', label: '大尺寸封面' },
+          { signal: 32, file: 'genres-size-small.png', label: '小尺寸封面' },
+        ];
+        for (const shot of sizeShots) {
+          const shotInfo = await waitShotSignal(shot.signal, 60000);
+          if (shotInfo === null) {
+            console.warn(`[test-genre-size] 沒有截圖訊號 ${shot.signal}（${shot.label}）：自我測試在截圖點之前就結束了`);
+            continue;
+          }
+          try {
+            const img = await mainWindow.webContents.capturePage();
+            const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', shot.file);
+            fs.writeFileSync(shotPath, img.toPNG());
+            console.log(`[test-genre-size] screenshot saved: ${shotPath} (${shotInfo})`);
+          } catch (e) { console.warn(`[test-genre-size] ${shot.file} screenshot failed:`, e); }
+        }
+        const report = await reportPromise;
+        console.log('[test-genre-size] renderer report: ' + report);
+        console.log('[test] done');
+        app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
+        return;
+      }
       if (TEST_PLAYLISTS) {
         console.log('[test-playlists] waiting for renderer playlist self-test result');
         // 渲染端先發 27（清單明細在畫面上，深色）與 29（淺色模式），最後發 28（測試報告）
@@ -521,6 +549,9 @@ function createWindow() {
   } else if (TEST_LABELS) {
     // 不帶 rpCapture：截圖流程的 UI 自動化會開 modal / 注入示範專輯，干擾本測試的 DOM 計數
     mainWindow.loadFile('index.html', { query: { testLabels: '1' } });
+  } else if (TEST_GENRE_SIZE) {
+    // 不帶 rpCapture：截圖流程的 UI 自動化會切換頁面，干擾曲風尺寸測試的 DOM 斷言
+    mainWindow.loadFile('index.html', { query: { testGenreSize: '1' } });
   } else if (TEST_PLAYLISTS) {
     // 不帶 rpCapture：截圖流程的 UI 自動化會開 modal / 注入示範專輯，干擾播放清單的 DOM 斷言
     mainWindow.loadFile('index.html', { query: { testPlaylists: '1' } });
@@ -555,10 +586,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS) runCaptureSequence();
+    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS || TEST_GENRE_SIZE) runCaptureSequence();
   });
 
-  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS) {
+  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS || TEST_GENRE_SIZE) {
     // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {

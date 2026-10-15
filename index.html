@@ -861,8 +861,16 @@
             <h1 class="page-title">曲風風格 Genres</h1>
             <p class="page-subtitle" id="genresHeaderCount">共 0 個音樂曲風與流派，以專輯風格探索您的發燒音樂庫</p>
           </div>
+          <div class="cover-size-control" id="genreSizeControl">
+            <span class="size-control-label">封面尺寸：</span>
+            <div class="pill-group size-pill-group" id="genreSizePills">
+              <button class="pill size-pill" data-genre-size="small" title="小尺寸封面">小</button>
+              <button class="pill size-pill active" data-genre-size="medium" title="中尺寸封面 (預設)">中</button>
+              <button class="pill size-pill" data-genre-size="large" title="大尺寸封面">大</button>
+            </div>
+          </div>
         </div>
-        <div class="genre-grid" id="genresGrid">
+        <div class="genre-grid genre-size-medium" id="genresGrid">
           <!-- Injected via JS -->
         </div>
       </section>
@@ -1491,7 +1499,7 @@
                   <p>提供多維度的音樂分類瀏覽與高度自訂視覺配置：</p>
                   <ul>
                     <li><strong>依新增順序排列 (預設)</strong>：專輯庫預設以最新新增時間排序，亦支援依專輯名稱 A-Z、演出者 A-Z、發行年份、曲目數與播放次數排列。</li>
-                    <li><strong>封面尺寸切換 (小 / 中 / 大)</strong>：自由切換密集緊湊或大器發燒卡片檢視，系統自動記憶個人偏好。</li>
+                    <li><strong>封面尺寸切換 (小 / 中 / 大)</strong>：專輯庫、演出者頭像、<strong>曲風流派</strong>與 TIDAL 探索頁的標題列皆提供尺寸切換，自由切換密集緊湊或大器發燒卡片檢視，各頁面獨立記憶個人偏好。</li>
                     <li><strong>極簡沉浸式元資料</strong>：專輯詳情頁於封面右側俐落標示演出者、發行廠牌、發行年份、曲目總數與總時長，免除雜亂底色與框線干擾。</li>
                     <li><strong>AI/關聯推薦擴展</strong>：同曲風推薦專輯與關聯演出者自動擴展涵蓋 TIDAL 線上發燒名盤（登入時）。</li>
                   </ul>

@@ -260,6 +260,7 @@ const state = {
   albumCoverSize: localStorage.getItem('rooplayer_album_cover_size') || 'medium',
   detailCoverSize: localStorage.getItem('rooplayer_detail_cover_size') || 'medium',
   artistCardSize: localStorage.getItem('rooplayer_artist_card_size') || 'medium',
+  genreCardSize: localStorage.getItem('rooplayer_genre_card_size') || 'medium',
   tidalCoverSize: localStorage.getItem('rooplayer_tidal_cover_size') || 'medium',
   dsp: (() => {
     try {
@@ -3838,6 +3839,8 @@ function getGenreIllustrationInfo(genreName) {
 function renderGenres() {
   if (!genresGrid) return;
   genresGrid.innerHTML = '';
+  // 封面尺寸（小/中/大）是個人在這頁的偏好，重新渲染後要照原樣套回去
+  applyGenreSize(state.genreCardSize || 'medium');
 
   const headerCount = document.getElementById('genresHeaderCount');
 
@@ -11011,6 +11014,118 @@ try {
   }
 } catch (err) {}
 
+// ----------------- 曲風流派封面尺寸自我測試（main.js --test-genre-size） -----------------
+// 曲風頁的「封面尺寸：小 / 中 / 大」會直接改變 grid 的實際欄寬與卡片內文大小，
+// 這裡用 computed style 量實際欄寬，確認三種尺寸真的不同、偏好會記住、重新渲染後還在。
+async function runGenreSizeSelfTest() {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(31, report); } catch (err) {}
+  };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const sizeBefore = state.genreCardSize || 'medium';
+
+  const firstTrackWidth = (grid) => {
+    const raw = String(getComputedStyle(grid).gridTemplateColumns || '');
+    const widths = raw.split(' ').map(v => parseFloat(v)).filter(v => Number.isFinite(v));
+    return widths.length ? widths[0] : 0;
+  };
+  const playBtnSize = (grid) => {
+    const btn = grid.querySelector('.card-play-btn');
+    if (!btn) return 0;
+    return Math.round(parseFloat(getComputedStyle(btn).width) || 0);
+  };
+
+  try {
+    // --- 1. 控制項在曲風頁的標題列，三個尺寸、預設中 ---
+    const control = document.getElementById('genreSizeControl');
+    const pills = Array.from(document.querySelectorAll('#genreSizePills .size-pill'));
+    const sizes = pills.map(p => p.getAttribute('data-genre-size'));
+    const labels = pills.map(p => p.textContent.trim());
+    const inGenresView = !!(control && control.closest('#viewGenres'));
+    const mediumOn = pills.some(p => p.getAttribute('data-genre-size') === 'medium' && p.classList.contains('active'));
+    if (inGenresView && sizes.length === 3 && sizes.join(',') === 'small,medium,large' && labels.join(',') === '小,中,大' && mediumOn) {
+      ok('曲風頁標題有封面尺寸小/中/大，預設中', `按鈕 ${labels.join('/')}、位置 ${control.closest('.view-header') ? '標題列內' : '其他'}`);
+    } else {
+      bad('曲風頁標題有封面尺寸小/中/大，預設中', `inGenres=${inGenresView} sizes=${sizes.join(',')} labels=${labels.join(',')} mediumOn=${mediumOn}`);
+    }
+
+    // --- 2. 實際欄寬：小 < 中 < 大 ---
+    navigateTo('genres');
+    await sleep(500);
+    const grid = document.getElementById('genresGrid');
+    const cardCount = grid ? grid.querySelectorAll('.album-card').length : 0;
+    if (!grid || cardCount === 0) {
+      bad('曲風卡片已渲染出來', `cards=${cardCount}`);
+    } else {
+      applyGenreSize('medium');
+      await sleep(250);
+      const widthMedium = firstTrackWidth(grid);
+      const btnMedium = playBtnSize(grid);
+
+      const largePill = document.querySelector('#genreSizePills .size-pill[data-genre-size="large"]');
+      largePill.click();
+      await sleep(300);
+      const widthLarge = firstTrackWidth(grid);
+      const btnLarge = playBtnSize(grid);
+      const largeClassOk = grid.classList.contains('genre-size-large') && largePill.classList.contains('active');
+      if (largeClassOk && widthLarge > widthMedium + 30 && btnLarge > btnMedium) {
+        ok('按「大」之後卡片與播放按鈕變大', `欄寬 ${Math.round(widthMedium)}px → ${Math.round(widthLarge)}px、播放鈕 ${btnMedium}px → ${Math.round(btnLarge)}px`);
+      } else {
+        bad('按「大」之後卡片與播放按鈕變大', `class=${grid.className} 欄寬 ${Math.round(widthMedium)}→${Math.round(widthLarge)}、鈕 ${btnMedium}→${btnLarge}`);
+      }
+      try { window.electronAPI.captureStep(30, `大尺寸封面 ${cardCount} 張（欄寬 ${Math.round(widthLarge)}px）`); } catch (err) {}
+      await sleep(150);
+
+      const smallPill = document.querySelector('#genreSizePills .size-pill[data-genre-size="small"]');
+      smallPill.click();
+      await sleep(300);
+      const widthSmall = firstTrackWidth(grid);
+      const btnSmall = playBtnSize(grid);
+      const smallClassOk = grid.classList.contains('genre-size-small') && smallPill.classList.contains('active')
+        && !largePill.classList.contains('active');
+      if (smallClassOk && widthSmall < widthMedium - 30 && btnSmall < btnMedium) {
+        ok('按「小」之後卡片與播放按鈕變小、且只有「小」是選取狀態', `欄寬 ${Math.round(widthMedium)}px → ${Math.round(widthSmall)}px、播放鈕 ${btnMedium}px → ${Math.round(btnSmall)}px`);
+      } else {
+        bad('按「小」之後卡片與播放按鈕變小、且只有「小」是選取狀態', `class=${grid.className} 欄寬 ${Math.round(widthMedium)}→${Math.round(widthSmall)}、鈕 ${btnMedium}→${btnSmall}`);
+      }
+      try { window.electronAPI.captureStep(32, `小尺寸封面 ${cardCount} 張（欄寬 ${Math.round(widthSmall)}px）`); } catch (err) {}
+      await sleep(150);
+
+      // --- 3. 偏好記住，且重新渲染曲風頁後仍然保持 ---
+      const stored = localStorage.getItem('rooplayer_genre_card_size');
+      if (stored === 'small' && state.genreCardSize === 'small') {
+        ok('尺寸偏好寫入 localStorage', `rooplayer_genre_card_size=${stored}`);
+      } else {
+        bad('尺寸偏好寫入 localStorage', `stored=${stored} state=${state.genreCardSize}`);
+      }
+      viewDirtyState.genres = true;
+      renderGenres();
+      await sleep(300);
+      const stillSmall = grid.classList.contains('genre-size-small') && firstTrackWidth(grid) === widthSmall
+        && document.querySelector('#genreSizePills .size-pill[data-genre-size="small"]').classList.contains('active');
+      if (stillSmall) ok('重新渲染曲風頁後尺寸仍保持小', `欄寬 ${Math.round(firstTrackWidth(grid))}px`);
+      else bad('重新渲染曲風頁後尺寸仍保持小', `class=${grid.className} 欄寬 ${Math.round(firstTrackWidth(grid))}px`);
+    }
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  } finally {
+    applyGenreSize(sizeBefore); // 還原使用者原本的尺寸偏好
+  }
+  finish();
+}
+
+try {
+  const rpGenreParams = new URLSearchParams(window.location.search || '');
+  if (rpGenreParams.get('testGenreSize') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runGenreSizeSelfTest(); }, 2600);
+  }
+} catch (err) {}
+
 // ----------------- Queue Drawer -----------------
 function renderQueue() {
   queueList.innerHTML = '';
@@ -12552,6 +12667,27 @@ function applyArtistSize(size) {
   });
 }
 
+function applyGenreSize(size) {
+  state.genreCardSize = size;
+  try {
+    localStorage.setItem('rooplayer_genre_card_size', size);
+  } catch (e) {}
+
+  document.querySelectorAll('#genreSizePills .size-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-genre-size') === size);
+  });
+
+  const genreGrids = [
+    document.getElementById('genresGrid')
+  ];
+
+  genreGrids.forEach(grid => {
+    if (!grid) return;
+    grid.classList.remove('genre-size-small', 'genre-size-medium', 'genre-size-large');
+    grid.classList.add(`genre-size-${size}`);
+  });
+}
+
 function applyTidalCoverSize(size) {
   state.tidalCoverSize = size;
   try {
@@ -12617,10 +12753,21 @@ function setupCoverSizeControls() {
     });
   });
 
+  // 5. Genres Page Cover Size Controls
+  const genrePills = document.querySelectorAll('#genreSizePills .size-pill');
+  genrePills.forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const size = pill.getAttribute('data-genre-size');
+      applyGenreSize(size);
+    });
+  });
+
   // Apply initial saved sizes
   applyAlbumCoverSize(state.albumCoverSize || 'medium');
   applyDetailCoverSize(state.detailCoverSize || 'medium');
   applyArtistSize(state.artistCardSize || 'medium');
+  applyGenreSize(state.genreCardSize || 'medium');
   applyTidalCoverSize(state.tidalCoverSize || 'medium');
 }
 

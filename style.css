@@ -5618,6 +5618,71 @@ body.table-col-resizing * {
   font-size: 13px !important;
 }
 
+/* Genres Grid Size Modes（曲風流派頁的封面尺寸：小 / 中 / 大） */
+.genre-grid.genre-size-small {
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
+  gap: 14px !important;
+}
+.genre-grid.genre-size-small .album-card {
+  padding: 8px !important;
+  border-radius: 10px !important;
+}
+.genre-grid.genre-size-small .album-title {
+  font-size: 12px !important;
+  margin-bottom: 2px !important;
+}
+.genre-grid.genre-size-small .album-artist {
+  font-size: 11px !important;
+}
+.genre-grid.genre-size-small .album-year {
+  font-size: 10px !important;
+}
+.genre-grid.genre-size-small .album-quality-tag {
+  font-size: 8px !important;
+  padding: 2px 5px !important;
+}
+.genre-grid.genre-size-small .card-play-btn {
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+  bottom: 6px;
+  right: 6px;
+}
+
+.genre-grid.genre-size-medium {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important;
+  gap: 22px !important;
+}
+
+.genre-grid.genre-size-large {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)) !important;
+  gap: 26px !important;
+}
+.genre-grid.genre-size-large .album-card {
+  padding: 16px !important;
+  border-radius: 14px !important;
+}
+.genre-grid.genre-size-large .album-title {
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  margin-bottom: 4px !important;
+}
+.genre-grid.genre-size-large .album-artist {
+  font-size: 13px !important;
+}
+.genre-grid.genre-size-large .album-year {
+  font-size: 12px !important;
+}
+.genre-grid.genre-size-large .album-quality-tag {
+  font-size: 10px !important;
+  padding: 3px 8px !important;
+}
+.genre-grid.genre-size-large .card-play-btn {
+  width: 46px;
+  height: 46px;
+  font-size: 16px;
+}
+
 /* Detail Modal Cover Size Column */
 .detail-cover-column {
   display: flex;
