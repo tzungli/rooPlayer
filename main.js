@@ -25,7 +25,8 @@ const TEST_EXCLUSIVE = process.argv.includes('--test-exclusive'); // 執行期�
 const TEST_LABELS = process.argv.includes('--test-labels'); // 執行期測試發行公司（RECORD LABEL）頁面
 const TEST_KKBOX_MATCH = process.argv.includes('--test-kkbox-match'); // 執行期測試 KKBOX 清單的本機 / TIDAL 比對欄位
 const TEST_RECOMMEND = process.argv.includes('--test-recommend'); // 執行期測試專輯頁「同類型推薦專輯」關聯評分
-if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND) {
+const TEST_UF_LAYOUT = process.argv.includes('--test-uf-layout'); // 執行期測試自訂濾波器編輯器的左右配置
+if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT) {
   // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
   // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -308,6 +309,24 @@ function runCaptureSequence() {
         app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
         return;
       }
+      if (TEST_UF_LAYOUT) {
+        console.log('[test-uf-layout] waiting for renderer custom-filter editor layout self-test result');
+        // 渲染端先發 19（左右配置已渲染，截取畫面），最後發 20（測試報告）
+        const shotSignal = new Promise((resolve) => { captureSignals[19] = (info) => { captureSignals[19] = null; resolve(info); }; });
+        const reportPromise = waitRendererInfo(20, 120000);
+        const shotInfo = await shotSignal;
+        try {
+          const img = await mainWindow.webContents.capturePage();
+          const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'uf-layout-test.png');
+          fs.writeFileSync(shotPath, img.toPNG());
+          console.log('[test-uf-layout] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
+        } catch (e) { console.warn('[test-uf-layout] screenshot failed:', e); }
+        const report = await reportPromise;
+        console.log('[test-uf-layout] renderer report: ' + report);
+        console.log('[test] done');
+        app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
+        return;
+      }
       await sleep(4500); // 等 initApp / demo 展示渲染完成
       console.log('[capture] step 1: home');
       await captureShot('home.png');
@@ -385,7 +404,9 @@ function createWindow() {
     console.warn('Failed to configure kkboxSession:', e);
   }
 
-  if (TEST_RECOMMEND) {
+  if (TEST_UF_LAYOUT) {
+    mainWindow.loadFile('index.html', { query: { testUfLayout: '1' } });
+  } else if (TEST_RECOMMEND) {
     // 不帶 rpCapture：截圖流程的 UI 自動化會開 modal / 注入示範專輯，干擾本測試的 DOM 斷言
     mainWindow.loadFile('index.html', { query: { testRecommend: '1' } });
   } else if (TEST_KKBOX_MATCH) {
@@ -412,10 +433,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND) runCaptureSequence();
+    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT) runCaptureSequence();
   });
 
-  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND) {
+  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT) {
     // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {

@@ -2034,104 +2034,6 @@
 
               <!-- User Filter Toolbox (使用者自訂濾波槽：純參數 JSON，安全範圍由引擎夾限；
                    編輯器與管理直接在條列內展開，所有操作同一視窗完成) -->
-              <div class="user-filter-strip" id="userFilterStrip">
-                <div class="user-filter-strip-head">
-                  <span class="user-filter-strip-title">🛠️ 自訂濾波器</span>
-                  <span class="user-filter-strip-actions">
-                    <button class="uf-mini-btn" id="ufNewBtn">＋ 新建</button>
-                    <button class="uf-mini-btn uf-manage-btn" id="ufManageBtn">⚙ 管理</button>
-                  </span>
-                </div>
-                <div class="user-filter-chips" id="ufChipRow"><span class="uf-chips-empty">尚無自訂濾波器 — 點「＋ 新建」於安全範圍內設計專屬濾波器</span></div>
-
-                <!-- Inline editor panel -->
-                <div class="uf-panel" id="ufEditorPanel" style="display: none;">
-                  <div class="uf-panel-head">
-                    <span id="ufEditorTitle">新建濾波器</span>
-                    <button class="uf-mini-btn" id="ufCloseEditor">收合 ✕</button>
-                  </div>
-                  <div class="uf-form-col">
-                    <div class="uf-grid2">
-                      <div class="uf-field">
-                        <label for="ufNameInput">名稱</label>
-                        <input type="text" id="ufNameInput" class="form-control" maxlength="40" placeholder="例如：暖聲緩降" style="width:100%;box-sizing:border-box;">
-                      </div>
-                      <div class="uf-field">
-                        <label for="ufSlotSelect">儲存槽</label>
-                        <select id="ufSlotSelect" class="form-control" style="width:100%;box-sizing:border-box;"></select>
-                      </div>
-                    </div>
-                    <div class="uf-field">
-                      <label for="ufSoundInput">聲音特色描述（顯示於濾波器按鈕滑鼠提示）</label>
-                      <input type="text" id="ufSoundInput" class="form-control" maxlength="80" placeholder="例如：高頻柔化、鈴振不可聽" style="width:100%;box-sizing:border-box;">
-                    </div>
-                    <div class="uf-field">
-                      <label title="窗函數決定「過渡帶寬度」與「鏡像抑制深度」的取捨：過渡越窄=高頻越精準鮮明；止帶越深=背景越黑、鏡像泄漏越不可聽">窗函數 <span class="uf-info">ⓘ 對聲音的影響</span></label>
-                      <div id="ufWindowSeg">
-                        <div class="uf-seg-group">餘弦窗（固定性格）</div>
-                        <div class="uf-seg">
-                          <button class="uf-seg-btn" data-window="hann" title="Hann：過渡帶窄，高頻轉折精準鮮明；止帶較淺(-31dB)，些微鏡像泄漏通常在超聲頻不可聽">Hann</button>
-                          <button class="uf-seg-btn" data-window="hamming" title="Hamming：與 Hann 相近但鏡像抑制較深(-42dB)；高頻聽感些微明亮">Hamming</button>
-                          <button class="uf-seg-btn" data-window="blackman" title="Blackman：過渡帶較寬，高頻以柔和斜率緩降、聽感溫潤；鏡像泄漏 -58dB 不可聽">Blackman</button>
-                          <button class="uf-seg-btn active" data-window="blackmanHarris" title="Blackman-Harris：止帶極深(-92dB)、鏡像完全不可聽；過渡帶略寬於 Blackman，整體乾淨透明">Blackman-Harris</button>
-                          <button class="uf-seg-btn" data-window="nuttall" title="Nuttall：過渡帶與 Blackman-Harris 同寬，但旁瓣隨頻率衰減更快——鏡像帶抑制再深約 12dB，遠處背景更黑">Nuttall</button>
-                          <button class="uf-seg-btn" data-window="blackmanNuttall" title="Blackman-Nuttall：Nuttall 家族的平衡版，旁瓣峰值略低；鏡像抑制略淺於 Nuttall，其餘特性相近">Blackman-Nuttall</button>
-                        </div>
-                        <div class="uf-seg-group">參數窗（滑桿可調）</div>
-                        <div class="uf-seg">
-                          <button class="uf-seg-btn" data-window="kaiser" title="Kaiser：用下方「止帶深度」滑桿自由取捨——60dB 溫潤柔和，140dB 以上參考級乾淨">Kaiser</button>
-                          <button class="uf-seg-btn" data-window="chebyshev" title="Chebyshev（等漣波）：用下方「止帶深度」滑桿——止帶平坦恰在設定深度；高止帶設定下緊接轉折處的抑制比 Kaiser 更深，截止聽感最銳利">Chebyshev</button>
-                          <button class="uf-seg-btn" data-window="gauss" title="Gauss：完全無旁瓣漣波（高斯頻譜單調滾降）——零鏡像泄漏、零鈴振；用下方「Gauss 窗寬 σ」滑桿取捨：σ 小止帶深且柔，σ 大截止直接">Gauss</button>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="uf-field" id="ufAsRow" style="display:none;">
-                      <label title="止帶深度＝鏡像與雜訊被壓低多少 dB：數值越小過渡帶越窄高頻越鮮明(聽感偏直接)；越大背景越黑高頻越柔(聽感偏潤色)">止帶深度 <span class="uf-info">ⓘ</span> <span class="uf-val" id="ufAsVal">100 dB</span></label>
-                      <input type="range" id="ufAsSlider" min="40" max="180" step="5" value="100">
-                    </div>
-                    <div class="uf-field" id="ufSigmaRow" style="display:none;">
-                      <label title="σ 是窗寬相對濾波長度的比例：σ 越小窗越窄、止帶越深背景越黑，但過渡帶變寬、高頻更早開始滾降；σ 越大截止越直接鮮明，但截斷使止帶變淺">Gauss 窗寬 σ <span class="uf-info">ⓘ</span> <span class="uf-val" id="ufSigmaVal">0.30 ×L</span></label>
-                      <input type="range" id="ufSigmaSlider" min="20" max="50" step="1" value="30">
-                    </div>
-                    <div class="uf-grid2">
-                      <div class="uf-field">
-                        <label title="截止延伸＝濾波器對源高頻的處理性格：低於 1.0× 高頻先柔和滾降(類比味、最安全)；1.0~1.2× 平衡；1.2× 以上最大化超頻延伸與透明度，但過渡帶變寬、鏡像抑制變淺">截止延伸 <span class="uf-info">ⓘ</span> <span class="uf-val" id="ufCutVal">1.13 ×源Nyq</span></label>
-                        <input type="range" id="ufCutSlider" min="80" max="135" step="1" value="113">
-                      </div>
-                      <div class="uf-field">
-                        <label title="濾波長度＝過渡帶陡度與鈴振長度：較短高頻漸進滾降、鈴振短而自然(省 CPU)；較長滾降陡峭精準、背景更靜，但預鈴振較長">濾波長度 <span class="uf-info">ⓘ</span> <span class="uf-val" id="ufTapVal">96 taps</span> <span class="uf-load" id="ufLoadBadge">低負荷</span></label>
-                        <input type="range" id="ufTapSlider" min="16" max="512" step="8" value="96">
-                      </div>
-                    </div>
-                    <div class="uf-field">
-                      <label>相位性格 <span class="uf-info">ⓘ 對聲音的影響</span></label>
-                      <div class="uf-seg" id="ufPhaseSeg">
-                        <button class="uf-seg-btn active" data-phase="linear" title="線性相位：零相位失真，定位、音場與形體最精準；代價是預鈴振對稱分佈在瞬態之前(鈴振敏感者可察)">線性相位</button>
-                        <button class="uf-seg-btn" data-phase="minimum" title="最小相位：預鈴振嚴格為零，鼓擊與瞬態領先凌厲(多數人認為更自然)；代價是些微高頻相位偏移">最小相位 (零預響鈴)</button>
-                      </div>
-                    </div>
-                    <div class="uf-editor-actions">
-                      <button class="uf-mini-btn uf-save-btn" id="ufSaveBtn">💾 儲存並套用</button>
-                      <button class="uf-mini-btn uf-delete-btn" id="ufDeleteBtn" style="display:none;">刪除</button>
-                    </div>
-                  </div>
-                  <div class="uf-preview-col">
-                    <div class="uf-preview-title">頻率響應預覽 <span class="uf-preview-note" id="ufPreviewCtxNote"></span></div>
-                    <canvas id="ufPreviewCanvas" width="440" height="200"></canvas>
-                    <div class="uf-preview-legend">通帶平坦區・源Nyquist 標記・鏡像泄漏區・止帶（-120dB 底）</div>
-                  </div>
-                </div>
-
-                <!-- Inline manage panel -->
-                <div class="uf-panel" id="ufManagePanel" style="display: none;">
-                  <div class="uf-panel-head">
-                    <span>自訂濾波器管理</span>
-                    <button class="uf-mini-btn" id="ufCloseManage">收合 ✕</button>
-                  </div>
-                  <div id="ufManageList" class="uf-manage-list"></div>
-                  <div class="uf-manage-hint">自訂濾波器以純參數儲存，引擎自動做安全驗證與夾限；任何異常自動退回線性相位，不影響播放穩定。</div>
-                </div>
-              </div>
             </div>
           </div>
 
@@ -2197,6 +2099,105 @@
           </div>
         </div>
       </div>
+      <!-- 自訂濾波器：改放於訊號路徑視窗底部，滿寬可用，編輯器得以左右配置 -->
+    <div class="user-filter-strip" id="userFilterStrip">
+      <div class="user-filter-strip-head">
+        <span class="user-filter-strip-title">🛠️ 自訂濾波器</span>
+        <span class="user-filter-strip-actions">
+          <button class="uf-mini-btn" id="ufNewBtn">＋ 新建</button>
+          <button class="uf-mini-btn uf-manage-btn" id="ufManageBtn">⚙ 管理</button>
+        </span>
+      </div>
+      <div class="user-filter-chips" id="ufChipRow"><span class="uf-chips-empty">尚無自訂濾波器 — 點「＋ 新建」於安全範圍內設計專屬濾波器</span></div>
+
+      <!-- Inline editor panel -->
+      <div class="uf-panel" id="ufEditorPanel" style="display: none;">
+        <div class="uf-panel-head">
+          <span id="ufEditorTitle">新建濾波器</span>
+          <button class="uf-mini-btn" id="ufCloseEditor">收合 ✕</button>
+        </div>
+        <div class="uf-form-col">
+          <div class="uf-grid2">
+            <div class="uf-field">
+              <label for="ufNameInput">名稱</label>
+              <input type="text" id="ufNameInput" class="form-control" maxlength="40" placeholder="例如：暖聲緩降" style="width:100%;box-sizing:border-box;">
+            </div>
+            <div class="uf-field">
+              <label for="ufSlotSelect">儲存槽</label>
+              <select id="ufSlotSelect" class="form-control" style="width:100%;box-sizing:border-box;"></select>
+            </div>
+          </div>
+          <div class="uf-field">
+            <label for="ufSoundInput">聲音特色描述（顯示於濾波器按鈕滑鼠提示）</label>
+            <input type="text" id="ufSoundInput" class="form-control" maxlength="80" placeholder="例如：高頻柔化、鈴振不可聽" style="width:100%;box-sizing:border-box;">
+          </div>
+          <div class="uf-field">
+            <label title="窗函數決定「過渡帶寬度」與「鏡像抑制深度」的取捨：過渡越窄=高頻越精準鮮明；止帶越深=背景越黑、鏡像泄漏越不可聽">窗函數 <span class="uf-info">ⓘ 對聲音的影響</span></label>
+            <div id="ufWindowSeg">
+              <div class="uf-seg-group">餘弦窗（固定性格）</div>
+              <div class="uf-seg">
+                <button class="uf-seg-btn" data-window="hann" title="Hann：過渡帶窄，高頻轉折精準鮮明；止帶較淺(-31dB)，些微鏡像泄漏通常在超聲頻不可聽">Hann</button>
+                <button class="uf-seg-btn" data-window="hamming" title="Hamming：與 Hann 相近但鏡像抑制較深(-42dB)；高頻聽感些微明亮">Hamming</button>
+                <button class="uf-seg-btn" data-window="blackman" title="Blackman：過渡帶較寬，高頻以柔和斜率緩降、聽感溫潤；鏡像泄漏 -58dB 不可聽">Blackman</button>
+                <button class="uf-seg-btn active" data-window="blackmanHarris" title="Blackman-Harris：止帶極深(-92dB)、鏡像完全不可聽；過渡帶略寬於 Blackman，整體乾淨透明">Blackman-Harris</button>
+                <button class="uf-seg-btn" data-window="nuttall" title="Nuttall：過渡帶與 Blackman-Harris 同寬，但旁瓣隨頻率衰減更快——鏡像帶抑制再深約 12dB，遠處背景更黑">Nuttall</button>
+                <button class="uf-seg-btn" data-window="blackmanNuttall" title="Blackman-Nuttall：Nuttall 家族的平衡版，旁瓣峰值略低；鏡像抑制略淺於 Nuttall，其餘特性相近">Blackman-Nuttall</button>
+              </div>
+              <div class="uf-seg-group">參數窗（滑桿可調）</div>
+              <div class="uf-seg">
+                <button class="uf-seg-btn" data-window="kaiser" title="Kaiser：用下方「止帶深度」滑桿自由取捨——60dB 溫潤柔和，140dB 以上參考級乾淨">Kaiser</button>
+                <button class="uf-seg-btn" data-window="chebyshev" title="Chebyshev（等漣波）：用下方「止帶深度」滑桿——止帶平坦恰在設定深度；高止帶設定下緊接轉折處的抑制比 Kaiser 更深，截止聽感最銳利">Chebyshev</button>
+                <button class="uf-seg-btn" data-window="gauss" title="Gauss：完全無旁瓣漣波（高斯頻譜單調滾降）——零鏡像泄漏、零鈴振；用下方「Gauss 窗寬 σ」滑桿取捨：σ 小止帶深且柔，σ 大截止直接">Gauss</button>
+              </div>
+            </div>
+          </div>
+          <div class="uf-field" id="ufAsRow" style="display:none;">
+            <label title="止帶深度＝鏡像與雜訊被壓低多少 dB：數值越小過渡帶越窄高頻越鮮明(聽感偏直接)；越大背景越黑高頻越柔(聽感偏潤色)">止帶深度 <span class="uf-info">ⓘ</span> <span class="uf-val" id="ufAsVal">100 dB</span></label>
+            <input type="range" id="ufAsSlider" min="40" max="180" step="5" value="100">
+          </div>
+          <div class="uf-field" id="ufSigmaRow" style="display:none;">
+            <label title="σ 是窗寬相對濾波長度的比例：σ 越小窗越窄、止帶越深背景越黑，但過渡帶變寬、高頻更早開始滾降；σ 越大截止越直接鮮明，但截斷使止帶變淺">Gauss 窗寬 σ <span class="uf-info">ⓘ</span> <span class="uf-val" id="ufSigmaVal">0.30 ×L</span></label>
+            <input type="range" id="ufSigmaSlider" min="20" max="50" step="1" value="30">
+          </div>
+          <div class="uf-grid2">
+            <div class="uf-field">
+              <label title="截止延伸＝濾波器對源高頻的處理性格：低於 1.0× 高頻先柔和滾降(類比味、最安全)；1.0~1.2× 平衡；1.2× 以上最大化超頻延伸與透明度，但過渡帶變寬、鏡像抑制變淺">截止延伸 <span class="uf-info">ⓘ</span> <span class="uf-val" id="ufCutVal">1.13 ×源Nyq</span></label>
+              <input type="range" id="ufCutSlider" min="80" max="135" step="1" value="113">
+            </div>
+            <div class="uf-field">
+              <label title="濾波長度＝過渡帶陡度與鈴振長度：較短高頻漸進滾降、鈴振短而自然(省 CPU)；較長滾降陡峭精準、背景更靜，但預鈴振較長">濾波長度 <span class="uf-info">ⓘ</span> <span class="uf-val" id="ufTapVal">96 taps</span> <span class="uf-load" id="ufLoadBadge">低負荷</span></label>
+              <input type="range" id="ufTapSlider" min="16" max="512" step="8" value="96">
+            </div>
+          </div>
+          <div class="uf-field">
+            <label>相位性格 <span class="uf-info">ⓘ 對聲音的影響</span></label>
+            <div class="uf-seg" id="ufPhaseSeg">
+              <button class="uf-seg-btn active" data-phase="linear" title="線性相位：零相位失真，定位、音場與形體最精準；代價是預鈴振對稱分佈在瞬態之前(鈴振敏感者可察)">線性相位</button>
+              <button class="uf-seg-btn" data-phase="minimum" title="最小相位：預鈴振嚴格為零，鼓擊與瞬態領先凌厲(多數人認為更自然)；代價是些微高頻相位偏移">最小相位 (零預響鈴)</button>
+            </div>
+          </div>
+          <div class="uf-editor-actions">
+            <button class="uf-mini-btn uf-save-btn" id="ufSaveBtn">💾 儲存並套用</button>
+            <button class="uf-mini-btn uf-delete-btn" id="ufDeleteBtn" style="display:none;">刪除</button>
+          </div>
+        </div>
+        <div class="uf-preview-col">
+          <div class="uf-preview-title">頻率響應預覽 <span class="uf-preview-note" id="ufPreviewCtxNote"></span></div>
+          <canvas id="ufPreviewCanvas" width="340" height="300"></canvas>
+          <div class="uf-preview-legend">通帶平坦區・源Nyquist 標記・鏡像泄漏區・止帶（-120dB 底）</div>
+        </div>
+      </div>
+
+      <!-- Inline manage panel -->
+      <div class="uf-panel" id="ufManagePanel" style="display: none;">
+        <div class="uf-panel-head">
+          <span>自訂濾波器管理</span>
+          <button class="uf-mini-btn" id="ufCloseManage">收合 ✕</button>
+        </div>
+        <div id="ufManageList" class="uf-manage-list"></div>
+        <div class="uf-manage-hint">自訂濾波器以純參數儲存，引擎自動做安全驗證與夾限；任何異常自動退回線性相位，不影響播放穩定。</div>
+      </div>
+    </div>
     </div>
   </div>
 

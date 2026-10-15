@@ -1762,7 +1762,7 @@ body.table-col-resizing * {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
 }
 .signal-path-container {
-  width: 1400px;
+  width: 1560px;
   max-width: 96vw;
   max-height: 94vh;
   overflow-y: auto;
@@ -2068,6 +2068,9 @@ body.table-col-resizing * {
   background: rgba(52, 211, 153, 0.05);
   border-radius: 10px;
   padding: 10px 14px;
+  /* 供編輯器以容器查詢判斷是否改用左右配置 */
+  container-type: inline-size;
+  container-name: ufstrip;
 }
 
 .user-filter-strip-head {
@@ -2317,6 +2320,50 @@ body.table-col-resizing * {
 .uf-preview-legend {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* 自訂濾波器編輯器採左右配置：左側放操作參數（窗函數、截止延伸、濾波長度、相位性格…），
+   右側放頻率響應預覽。直向空間因此大幅縮減，預覽也能放大。
+   以容器查詢依「自訂濾波器」區塊實際可用寬度決定，不靠視窗尺寸猜。 */
+#ufEditorPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@container ufstrip (min-width: 640px) {
+  #ufEditorPanel {
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+    grid-template-areas:
+      "head head"
+      "form preview";
+    align-items: start;
+    gap: 12px 22px;
+  }
+
+  #ufEditorPanel .uf-panel-head { grid-area: head; }
+
+  #ufEditorPanel .uf-form-col {
+    grid-area: form;
+    /* 以細線與右側預覽區隔 */
+    padding-right: 18px;
+    border-right: 1px solid rgba(52, 211, 153, 0.18);
+  }
+
+  /* 預覽跟著滑桿留在可見範圍內 */
+  #ufEditorPanel .uf-preview-col {
+    grid-area: preview;
+    position: sticky;
+    top: 14px;
+  }
+}
+
+/* 空間充足時讓頻率響應預覽固定佔右側 340–380px，操作區取其餘 */
+@container ufstrip (min-width: 860px) {
+  #ufEditorPanel {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 380px);
+  }
 }
 
 /* 管理面板（內聯） */

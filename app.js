@@ -8204,7 +8204,10 @@ async function ufDoPreview() {
   const note = document.getElementById('ufPreviewCtxNote');
   if (note) note.textContent = `${(ctx.srcRate / 1000).toFixed(1)}k → ${ctx.targetRate >= 1e6 ? (ctx.targetRate / 1e6).toFixed(2) + 'M' : (ctx.targetRate / 1000).toFixed(1)}k 脈絡`;
   let data = null;
-  try { data = await window.electronAPI.previewFilterSpec(ufSpecFromForm(), ctx.srcRate, ctx.targetRate); } catch (e) {}
+  // 預覽不需要名稱（引擎驗證要求名稱）；尚未命名時用預覽專用名稱，讓滑桿可以邊拖邊看
+  const previewSpec = ufSpecFromForm();
+  if (!previewSpec.name) previewSpec.name = '預覽用濾波器';
+  try { data = await window.electronAPI.previewFilterSpec(previewSpec, ctx.srcRate, ctx.targetRate); } catch (e) {}
   drawUfPreview(cv, data);
 }
 
@@ -8293,6 +8296,159 @@ function closeUfEditor() {
   if (panel) panel.style.display = 'none';
   clearTimeout(ufPreviewTimer);
 }
+
+// ----------------- 自訂濾波器編輯器版面自我測試（main.js --test-uf-layout） -----------------
+// 驗證編輯器為「左側操作參數、右側頻率響應預覽」的左右配置，以及因此省下的直向空間。
+async function runUfLayoutSelfTest() {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(20, report); } catch (err) {}
+  };
+  const waitFor = (pred, ms) => new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => {
+      let value = false;
+      try { value = !!pred(); } catch (e) { value = false; }
+      if (value) { resolve(true); return; }
+      if (Date.now() - t0 > ms) { resolve(false); return; }
+      setTimeout(tick, 120);
+    };
+    tick();
+  });
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  try {
+    if (!window.electronAPI || !window.electronAPI.captureStep) { bad('capture IPC available'); finish(); return; }
+
+    const modal = document.getElementById('signalPathModal');
+    const strip = document.getElementById('userFilterStrip');
+    const panel = document.getElementById('ufEditorPanel');
+    if (!modal || !strip || !panel) { bad('訊號路徑視窗與自訂濾波器面板存在'); finish(); return; }
+    const modalWasOpen = (modal.style.display || '') === 'flex';
+    modal.style.display = 'flex';
+
+    openUfEditor();
+    const ready = await waitFor(() => {
+      const r = panel.getBoundingClientRect();
+      return r.width > 200 && r.height > 200;
+    }, 8000);
+    await sleep(1800); // 等頻率響應預覽繪製完成
+
+    const form = panel.querySelector('.uf-form-col');
+    const preview = panel.querySelector('.uf-preview-col');
+    const cv = document.getElementById('ufPreviewCanvas');
+    if (!form || !preview || !cv) { bad('編輯表單與預覽欄位存在', `form=${!!form} preview=${!!preview} canvas=${!!cv}`); finish(); return; }
+
+    const stripW = strip.clientWidth;
+    // 除錯：由內而外列出各層容器寬度，確認版面空間從哪裡來
+    try {
+      const chain = [];
+      let node = strip;
+      while (node && node !== document.body && chain.length < 8) {
+        const label = node.id ? `#${node.id}` : `.${String(node.className || 'div').split(' ')[0]}`;
+        chain.push(`${label}=${node.clientWidth}`);
+        node = node.parentElement;
+      }
+      lines.push('NOTE 寬度鏈 ' + chain.join(' < '));
+    } catch (e) {}
+    const panelR = panel.getBoundingClientRect();
+    const formR = form.getBoundingClientRect();
+    const previewR = preview.getBoundingClientRect();
+
+    if (stripW >= 640) ok('自訂濾波器區塊寬度足以啟用左右配置', `strip width=${stripW}px`);
+    else bad('自訂濾波器區塊寬度足以啟用左右配置', `strip width=${stripW}px（需要 ≥640px）`);
+
+    const panelDisplay = window.getComputedStyle(panel).display;
+    if (panelDisplay === 'grid') ok('編輯器改用左右 grid 配置', `display=${panelDisplay}`);
+    else bad('編輯器改用左右 grid 配置', `display=${panelDisplay}`);
+
+    if (previewR.left > formR.left && previewR.right > formR.right && previewR.left >= formR.right - 2) {
+      ok('操作功能在左、頻率響應預覽在右', `form x=${Math.round(formR.left)}–${Math.round(formR.right)}｜preview x=${Math.round(previewR.left)}–${Math.round(previewR.right)}`);
+    } else {
+      bad('操作功能在左、頻率響應預覽在右', `form x=${Math.round(formR.left)}–${Math.round(formR.right)}｜preview x=${Math.round(previewR.left)}–${Math.round(previewR.right)}｜ready=${ready}`);
+    }
+
+    if (Math.abs(formR.top - previewR.top) < 60) ok('兩欄同列對齊（預覽對準操作區頂端）', `top 差 ${Math.round(Math.abs(formR.top - previewR.top))}px`);
+    else bad('兩欄同列對齊（預覽對準操作區頂端）', `top 差 ${Math.round(Math.abs(formR.top - previewR.top))}px`);
+
+    const stackedHeight = formR.height + previewR.height;
+    if (panelR.height < stackedHeight - 40) {
+      ok('直向空間確實縮減', `面板 ${Math.round(panelR.height)}px < 上下堆疊 ${Math.round(stackedHeight)}px（省下 ${Math.round(stackedHeight - panelR.height)}px）`);
+    } else {
+      bad('直向空間確實縮減', `面板 ${Math.round(panelR.height)}px、堆疊 ${Math.round(stackedHeight)}px`);
+    }
+
+    if (formR.width >= 380) ok('左側操作區維持可用寬度', `${Math.round(formR.width)}px`);
+    else bad('左側操作區維持可用寬度', `${Math.round(formR.width)}px`);
+
+    if (cv.width === 340 && cv.height === 300) ok('預覽畫布放大到 340×300', `canvas ${cv.width}×${cv.height}`);
+    else bad('預覽畫布放大到 340×300', `canvas ${cv.width}×${cv.height}`);
+
+    // 預覽管線本身要能回傳響應資料（未命名時也用預覽專用名稱）
+    let previewData = null;
+    try {
+      const spec = ufSpecFromForm();
+      if (!spec.name) spec.name = '預覽用濾波器';
+      const ctx = ufPreviewContext();
+      previewData = await window.electronAPI.previewFilterSpec(spec, ctx.srcRate, ctx.targetRate);
+    } catch (e) {}
+    if (previewData && previewData.xs && previewData.xs.length > 10) {
+      ok('頻率響應預覽管線可用', `點數 ${previewData.xs.length}｜源Nyq ${Math.round(previewData.srcNyq / 1000)}kHz`);
+    } else {
+      bad('頻率響應預覽管線可用', 'previewFilterSpec 未回傳資料');
+    }
+
+    // 曲線與網格會延伸到畫布右側；只有錯誤提示時右側是空的
+    let rightInkColumns = 0;
+    try {
+      const img = cv.getContext('2d').getImageData(Math.floor(cv.width * 0.82), 0, Math.floor(cv.width * 0.16), cv.height).data;
+      const colW = Math.floor(cv.width * 0.16);
+      for (let x = 0; x < colW; x++) {
+        let ink = false;
+        for (let y = 0; y < cv.height; y++) {
+          if (img[(y * colW + x) * 4 + 3] > 0) { ink = true; break; }
+        }
+        if (ink) rightInkColumns++;
+      }
+    } catch (e) { rightInkColumns = -1; }
+    if (rightInkColumns >= 5) ok('頻率響應曲線與網格已實際繪製', `右側有墨點欄位 ${rightInkColumns}`);
+    else bad('頻率響應曲線與網格已實際繪製', `右側有墨點欄位 ${rightInkColumns}（可能只剩錯誤提示）`);
+
+    const previewPos = window.getComputedStyle(preview).position;
+    if (previewPos === 'sticky') ok('預覽欄滑動時保持在可見範圍', `position=${previewPos}`);
+    else bad('預覽欄滑動時保持在可見範圍', `position=${previewPos}`);
+
+    try { window.electronAPI.captureStep(19, 'custom filter editor side by side'); } catch (err) {}
+    await sleep(3000);
+
+    closeUfEditor();
+    const closedDisplay = window.getComputedStyle(panel).display;
+    if (closedDisplay === 'none') ok('收合後編輯器恢復隱藏', `display=${closedDisplay}`);
+    else bad('收合後編輯器恢復隱藏', `display=${closedDisplay}`);
+
+    if (!modalWasOpen) modal.style.display = 'none';
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  } finally {
+    try {
+      closeUfEditor();
+      const m = document.getElementById('signalPathModal');
+      if (m && (m.style.display || '') === 'flex' && !window.__ufLayoutKeepModalOpen) m.style.display = 'none';
+    } catch (e) {}
+  }
+  finish();
+}
+
+try {
+  const rpUfLayoutParams = new URLSearchParams(window.location.search || '');
+  if (rpUfLayoutParams.get('testUfLayout') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runUfLayoutSelfTest(); }, 2600);
+  }
+} catch (err) {}
 
 async function ufSaveFlow() {
   const spec = ufSpecFromForm();
