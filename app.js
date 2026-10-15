@@ -231,7 +231,8 @@ const state = {
   repeatMode: 'off', // 'off' | 'all' | 'one'
   shuffleOrder: [],
   shufflePointer: -1,
-  volume: 0.8,
+  volume: 1.0, // 程式開啟預設音量：最大
+  lineOut: false, // Line Out：最大音量輸出鎖定（鎖定時不可調音量）
   theme: 'dark',
   currentView: 'overview',
   activeAlbumDetail: null,
@@ -8566,32 +8567,68 @@ scrubberBar.addEventListener('click', (e) => {
   }
 });
 
-volumeSlider.addEventListener('input', (e) => {
-  state.volume = parseFloat(e.target.value);
-  nativeAudio.volume = state.volume;
+// ----------------- Volume & Line Out -----------------
+// Line Out：輸出音量鎖定為最大（100%）；鎖定期間音量滑桿與靜音按鈕停用。
+let lastVolume = 1; // 解除靜音時回復的音量（預設最大）
+let lineOutRestoreVolume = null; // 解除 Line Out 時回復的音量
+
+function applyVolume(v) {
+  if (v > 0) lastVolume = v;
+  state.volume = v;
+  nativeAudio.volume = v;
   if (audioCtx && currentSynthNodes.length) {
     const masterGain = currentSynthNodes[currentSynthNodes.length - 1];
     if (masterGain && masterGain.gain) {
-      masterGain.gain.setValueAtTime(state.volume * 0.15, audioCtx.currentTime);
+      masterGain.gain.setValueAtTime(v * 0.15, audioCtx.currentTime);
     }
   }
-  btnVolumeIcon.textContent = state.volume === 0 ? '🔇' : (state.volume < 0.5 ? '🔉' : '🔊');
+  btnVolumeIcon.textContent = v === 0 ? '🔇' : (v < 0.5 ? '🔉' : '🔊');
 
   if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
     if (window.electronAPI && window.electronAPI.setDlnaVolume) {
-      const vol100 = Math.round(state.volume * 100);
+      const vol100 = Math.round(v * 100);
       window.electronAPI.setDlnaVolume(state.activeDlnaDevice.id, vol100);
     }
   }
+}
+
+volumeSlider.addEventListener('input', (e) => {
+  if (state.lineOut) { e.target.value = 1; return; } // Line Out 鎖定中：不可調音量
+  applyVolume(parseFloat(e.target.value));
 });
 
 btnVolumeIcon.addEventListener('click', () => {
+  if (state.lineOut) return; // Line Out 鎖定中：靜音亦屬音量調整，停用
   if (state.volume > 0) {
     volumeSlider.value = 0;
     volumeSlider.dispatchEvent(new Event('input'));
   } else {
-    volumeSlider.value = 0.8;
+    volumeSlider.value = lastVolume > 0 ? lastVolume : 1;
     volumeSlider.dispatchEvent(new Event('input'));
+  }
+});
+
+const btnLineOut = document.getElementById('btnLineOut');
+btnLineOut.addEventListener('click', () => {
+  if (!state.lineOut) {
+    lineOutRestoreVolume = state.volume;
+    state.lineOut = true;
+    volumeSlider.value = 1;
+    volumeSlider.disabled = true;
+    btnVolumeIcon.disabled = true;
+    btnLineOut.classList.add('line-out-active');
+    applyVolume(1);
+    showToast('🔌 Line Out 已啟用：輸出音量鎖定為最大');
+  } else {
+    state.lineOut = false;
+    volumeSlider.disabled = false;
+    btnVolumeIcon.disabled = false;
+    btnLineOut.classList.remove('line-out-active');
+    const restore = lineOutRestoreVolume === null ? 1 : lineOutRestoreVolume;
+    lineOutRestoreVolume = null;
+    volumeSlider.value = restore;
+    applyVolume(restore);
+    showToast('🔌 Line Out 已解除：恢復音量調整');
   }
 });
 
@@ -10501,6 +10538,10 @@ async function switchAudioZone(target) {
       state.activeDlnaDevice = dev;
       if (window.electronAPI && window.electronAPI.selectDlnaDevice) {
         window.electronAPI.selectDlnaDevice(dev.id).catch(() => {});
+      }
+      // 套用目前音量到新裝置（Line Out 鎖定時為 100）
+      if (window.electronAPI && window.electronAPI.setDlnaVolume) {
+        window.electronAPI.setDlnaVolume(dev.id, Math.round((state.lineOut ? 1 : state.volume) * 100)).catch(() => {});
       }
 
       if (currentZoneName) currentZoneName.textContent = `📡 ${dev.name}`;

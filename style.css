@@ -3940,6 +3940,38 @@ body.table-col-resizing * {
   color: #d8b4fe;
 }
 
+/* Line Out 鎖定按鈕（最大音量輸出鎖定） */
+.line-out-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+}
+
+.line-out-label {
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.line-out-btn.line-out-active {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: var(--accent-green, #10b981);
+  color: var(--accent-green, #10b981);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.35);
+}
+
+.volume-slider:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .zone-icon {
   font-size: 12px;
 }
