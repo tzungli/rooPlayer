@@ -2331,15 +2331,15 @@ body.table-col-resizing * {
   gap: 12px;
 }
 
-@container ufstrip (min-width: 640px) {
+@container ufstrip (min-width: 560px) {
   #ufEditorPanel {
     display: grid;
-    grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
     grid-template-areas:
       "head head"
       "form preview";
     align-items: start;
-    gap: 12px 22px;
+    gap: 12px 20px;
   }
 
   #ufEditorPanel .uf-panel-head { grid-area: head; }
@@ -2347,7 +2347,7 @@ body.table-col-resizing * {
   #ufEditorPanel .uf-form-col {
     grid-area: form;
     /* 以細線與右側預覽區隔 */
-    padding-right: 18px;
+    padding-right: 16px;
     border-right: 1px solid rgba(52, 211, 153, 0.18);
   }
 
@@ -2360,10 +2360,12 @@ body.table-col-resizing * {
 }
 
 /* 空間充足時讓頻率響應預覽固定佔右側 340–380px，操作區取其餘 */
-@container ufstrip (min-width: 860px) {
+@container ufstrip (min-width: 820px) {
   #ufEditorPanel {
     grid-template-columns: minmax(0, 1fr) minmax(340px, 380px);
+    gap: 12px 22px;
   }
+  #ufEditorPanel .uf-form-col { padding-right: 20px; }
 }
 
 /* 管理面板（內聯） */

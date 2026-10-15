@@ -8212,8 +8212,17 @@ async function ufDoPreview() {
 }
 
 function drawUfPreview(cv, data) {
+  // 依實際顯示寬度（含 devicePixelRatio）設定畫布解析度：欄寬再窄，座標軸文字與曲線都保持清晰
+  const rect = cv.getBoundingClientRect();
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const cssW = Math.max(220, Math.round(rect.width || cv.width));
+  const cssH = Math.max(170, Math.round(cssW * 0.88));
+  const backW = Math.round(cssW * dpr), backH = Math.round(cssH * dpr);
+  if (cv.width !== backW || cv.height !== backH) { cv.width = backW; cv.height = backH; }
+  cv.style.height = cssH + 'px';
   const g = cv.getContext('2d');
-  const W = cv.width, H = cv.height;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); // 之後一律以 CSS 像素作單位
+  const W = cssW, H = cssH;
   g.clearRect(0, 0, W, H);
   const cs = getComputedStyle(document.documentElement);
   const gridCol = 'rgba(128,128,128,0.18)';
@@ -8359,8 +8368,8 @@ async function runUfLayoutSelfTest() {
     const formR = form.getBoundingClientRect();
     const previewR = preview.getBoundingClientRect();
 
-    if (stripW >= 640) ok('自訂濾波器區塊寬度足以啟用左右配置', `strip width=${stripW}px`);
-    else bad('自訂濾波器區塊寬度足以啟用左右配置', `strip width=${stripW}px（需要 ≥640px）`);
+    if (stripW >= 560) ok('自訂濾波器區塊寬度足以啟用左右配置', `strip width=${stripW}px`);
+    else bad('自訂濾波器區塊寬度足以啟用左右配置', `strip width=${stripW}px（需要 ≥560px）`);
 
     const panelDisplay = window.getComputedStyle(panel).display;
     if (panelDisplay === 'grid') ok('編輯器改用左右 grid 配置', `display=${panelDisplay}`);
@@ -8382,11 +8391,21 @@ async function runUfLayoutSelfTest() {
       bad('直向空間確實縮減', `面板 ${Math.round(panelR.height)}px、堆疊 ${Math.round(stackedHeight)}px`);
     }
 
-    if (formR.width >= 380) ok('左側操作區維持可用寬度', `${Math.round(formR.width)}px`);
+    if (formR.width >= 320) ok('左側操作區維持可用寬度', `${Math.round(formR.width)}px`);
     else bad('左側操作區維持可用寬度', `${Math.round(formR.width)}px`);
 
-    if (cv.width === 340 && cv.height === 300) ok('預覽畫布放大到 340×300', `canvas ${cv.width}×${cv.height}`);
-    else bad('預覽畫布放大到 340×300', `canvas ${cv.width}×${cv.height}`);
+    // 畫布解析度要跟著實際顯示寬度走（含 devicePixelRatio），否則窄欄下文字會糊
+    const cvRect = cv.getBoundingClientRect();
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const wantW = Math.round(Math.round(cvRect.width) * dpr);
+    const wantH = Math.round(Math.round(cvRect.width) * 0.88 * dpr);
+    if (Math.abs(cv.width - wantW) <= 2 && Math.abs(cv.height - wantH) <= 2) {
+      ok('預覽畫布依實際欄寬設定解析度', `顯示 ${Math.round(cvRect.width)}×${Math.round(cvRect.height)}px、畫布 ${cv.width}×${cv.height}（dpr ${dpr}）`);
+    } else {
+      bad('預覽畫布依實際欄寬設定解析度', `顯示 ${Math.round(cvRect.width)}×${Math.round(cvRect.height)}px、畫布 ${cv.width}×${cv.height}（預期 ${wantW}×${wantH}，dpr ${dpr}）`);
+    }
+    if (cvRect.width >= 220 && cvRect.height >= 170) ok('預覽實際顯示尺寸可用', `${Math.round(cvRect.width)}×${Math.round(cvRect.height)}px`);
+    else bad('預覽實際顯示尺寸可用', `${Math.round(cvRect.width)}×${Math.round(cvRect.height)}px`);
 
     // 預覽管線本身要能回傳響應資料（未命名時也用預覽專用名稱）
     let previewData = null;
@@ -8424,6 +8443,31 @@ async function runUfLayoutSelfTest() {
 
     try { window.electronAPI.captureStep(19, 'custom filter editor side by side'); } catch (err) {}
     await sleep(3000);
+
+    // 模擬較寬的視窗：把訊號路徑視窗的右欄放大（等同使用者把視窗最大化），驗證寬欄層級
+    const columnsEl = document.querySelector('.signal-path-columns');
+    if (columnsEl) {
+      const prevGrid = columnsEl.style.gridTemplateColumns;
+      columnsEl.style.gridTemplateColumns = 'minmax(0, 0.55fr) minmax(0, 3fr)';
+      ufSchedulePreview();
+      await sleep(1200);
+      const widePreviewR = preview.getBoundingClientRect();
+      const wideFormR = form.getBoundingClientRect();
+      const wideCvR = cv.getBoundingClientRect();
+      if (widePreviewR.width >= 340 && widePreviewR.width <= 381) {
+        ok('寬視窗層級：預覽固定佔右側 340–380px', `預覽 ${Math.round(widePreviewR.width)}px｜操作區 ${Math.round(wideFormR.width)}px`);
+      } else {
+        bad('寬視窗層級：預覽固定佔右側 340–380px', `預覽 ${Math.round(widePreviewR.width)}px｜操作區 ${Math.round(wideFormR.width)}px`);
+      }
+      if (wideFormR.width >= 500) ok('寬視窗層級：操作區取得剩餘寬度', `${Math.round(wideFormR.width)}px`);
+      else bad('寬視窗層級：操作區取得剩餘寬度', `${Math.round(wideFormR.width)}px`);
+      const wantWideW = Math.round(Math.round(wideCvR.width) * dpr);
+      if (Math.abs(cv.width - wantWideW) <= 2) ok('欄寬改變後預覽解析度跟著更新', `顯示 ${Math.round(wideCvR.width)}px → 畫布 ${cv.width}px`);
+      else bad('欄寬改變後預覽解析度跟著更新', `顯示 ${Math.round(wideCvR.width)}px → 畫布 ${cv.width}px（預期 ${wantWideW}）`);
+      columnsEl.style.gridTemplateColumns = prevGrid;
+      ufSchedulePreview();
+      await sleep(600);
+    }
 
     closeUfEditor();
     const closedDisplay = window.getComputedStyle(panel).display;
@@ -8549,6 +8593,12 @@ function initUserFilterControls() {
   });
   $('ufCloseEditor').addEventListener('click', closeUfEditor);
   $('ufCloseManage').addEventListener('click', () => { $('ufManagePanel').style.display = 'none'; });
+
+  // 視窗尺寸改變時（欄寬隨之改變），若編輯器開著就依新寬度重設預覽解析度並重繪
+  window.addEventListener('resize', () => {
+    const panel = $('ufEditorPanel');
+    if (panel && panel.style.display !== 'none') ufSchedulePreview();
+  });
 
   $('ufWindowSeg').addEventListener('click', (e) => {
     const b = e.target.closest('.uf-seg-btn');
