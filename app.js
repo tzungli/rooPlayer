@@ -7102,7 +7102,7 @@ let ufSlots = [];
 let ufEditingId = null;
 let ufPreviewTimer = null;
 
-const UF_WINDOW_LABELS = { hann: 'Hann', hamming: 'Hamming', blackman: 'Blackman', blackmanHarris: 'Blackman-Harris', kaiser: 'Kaiser' };
+const UF_WINDOW_LABELS = { hann: 'Hann', hamming: 'Hamming', blackman: 'Blackman', blackmanHarris: 'Blackman-Harris', kaiser: 'Kaiser', nuttall: 'Nuttall', blackmanNuttall: 'Blackman-Nuttall', gauss: 'Gauss', chebyshev: 'Chebyshev' };
 
 function ufPreviewContext() {
   const track = (state.queue && state.queue[0]) || (state.tracks && state.tracks[0]) || null;
@@ -7165,7 +7165,8 @@ function ufSpecFromForm() {
     phase: phaseBtn ? phaseBtn.getAttribute('data-phase') : 'linear',
     cutoffRel: (parseInt(document.getElementById('ufCutSlider').value, 10) || 113) / 100,
     taps: parseInt(document.getElementById('ufTapSlider').value, 10) || 96,
-    asDb: parseInt(document.getElementById('ufAsSlider').value, 10) || 100
+    asDb: parseInt(document.getElementById('ufAsSlider').value, 10) || 100,
+    sigmaRel: (parseInt(document.getElementById('ufSigmaSlider').value, 10) || 30) / 100
   };
 }
 
@@ -7174,7 +7175,9 @@ function ufUpdateFormReadouts() {
   document.getElementById('ufAsVal').textContent = spec.asDb + ' dB';
   document.getElementById('ufCutVal').textContent = spec.cutoffRel.toFixed(2) + ' ×源Nyq';
   document.getElementById('ufTapVal').textContent = spec.taps + ' taps';
-  document.getElementById('ufAsRow').style.display = spec.window === 'kaiser' ? '' : 'none';
+  document.getElementById('ufSigmaVal').textContent = spec.sigmaRel.toFixed(2) + ' ×L';
+  document.getElementById('ufAsRow').style.display = (spec.window === 'kaiser' || spec.window === 'chebyshev') ? '' : 'none';
+  document.getElementById('ufSigmaRow').style.display = spec.window === 'gauss' ? '' : 'none';
   const ctx = ufPreviewContext();
   const mmac = Math.round(spec.taps * ctx.targetRate * 2 / 1e6);
   const badge = document.getElementById('ufLoadBadge');
@@ -7283,6 +7286,7 @@ function openUfEditor(slotId) {
   document.getElementById('ufCutSlider').value = slot ? Math.round(slot.cutoffRel * 100) : 113;
   document.getElementById('ufTapSlider').value = slot ? slot.taps : 96;
   document.getElementById('ufAsSlider').value = slot ? slot.asDb : 100;
+  document.getElementById('ufSigmaSlider').value = slot ? Math.round((slot.sigmaRel || 0.3) * 100) : 30;
   const win = slot ? slot.window : 'blackmanHarris';
   document.querySelectorAll('#ufWindowSeg .uf-seg-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-window') === win));
   const phase = slot ? slot.phase : 'linear';
@@ -7357,7 +7361,7 @@ function renderUfManageList() {
     nm.textContent = `🔧 ${s.name}`;
     const sp = document.createElement('div');
     sp.className = 'uf-mr-spec';
-    sp.textContent = `${UF_WINDOW_LABELS[s.window] || s.window} 窗・截止 ${s.cutoffRel.toFixed(2)}×・${s.taps} taps・${s.phase === 'minimum' ? '最小相位' : '線性相位'}${s.window === 'kaiser' ? '・止帶 ' + s.asDb + 'dB' : ''}`;
+    sp.textContent = `${UF_WINDOW_LABELS[s.window] || s.window} 窗・截止 ${s.cutoffRel.toFixed(2)}×・${s.taps} taps・${s.phase === 'minimum' ? '最小相位' : '線性相位'}${(s.window === 'kaiser' || s.window === 'chebyshev') ? '・止帶 ' + s.asDb + 'dB' : ''}${s.window === 'gauss' ? '・σ ' + (s.sigmaRel || 0.3).toFixed(2) : ''}`;
     info.appendChild(nm);
     info.appendChild(sp);
     const acts = document.createElement('div');

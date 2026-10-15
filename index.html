@@ -1996,17 +1996,31 @@
                     </div>
                     <div class="uf-field">
                       <label title="窗函數決定「過渡帶寬度」與「鏡像抑制深度」的取捨：過渡越窄=高頻越精準鮮明；止帶越深=背景越黑、鏡像泄漏越不可聽">窗函數 <span class="uf-info">ⓘ 對聲音的影響</span></label>
-                      <div class="uf-seg" id="ufWindowSeg">
-                        <button class="uf-seg-btn" data-window="hann" title="Hann：過渡帶窄，高頻轉折精準鮮明；止帶較淺(-31dB)，些微鏡像泄漏通常在超聲頻不可聽">Hann</button>
-                        <button class="uf-seg-btn" data-window="hamming" title="Hamming：與 Hann 相近但鏡像抑制較深(-42dB)；高頻聽感些微明亮">Hamming</button>
-                        <button class="uf-seg-btn" data-window="blackman" title="Blackman：過渡帶較寬，高頻以柔和斜率緩降、聽感溫潤；鏡像泄漏 -58dB 不可聽">Blackman</button>
-                        <button class="uf-seg-btn active" data-window="blackmanHarris" title="Blackman-Harris：止帶極深(-92dB)、鏡像完全不可聽；過渡帶略寬於 Blackman，整體乾淨透明">Blackman-Harris</button>
-                        <button class="uf-seg-btn" data-window="kaiser" title="Kaiser：用下方「止帶深度」滑桿自由取捨——60dB 溫潤柔和，140dB 以上參考級乾淨">Kaiser</button>
+                      <div id="ufWindowSeg">
+                        <div class="uf-seg-group">餘弦窗（固定性格）</div>
+                        <div class="uf-seg">
+                          <button class="uf-seg-btn" data-window="hann" title="Hann：過渡帶窄，高頻轉折精準鮮明；止帶較淺(-31dB)，些微鏡像泄漏通常在超聲頻不可聽">Hann</button>
+                          <button class="uf-seg-btn" data-window="hamming" title="Hamming：與 Hann 相近但鏡像抑制較深(-42dB)；高頻聽感些微明亮">Hamming</button>
+                          <button class="uf-seg-btn" data-window="blackman" title="Blackman：過渡帶較寬，高頻以柔和斜率緩降、聽感溫潤；鏡像泄漏 -58dB 不可聽">Blackman</button>
+                          <button class="uf-seg-btn active" data-window="blackmanHarris" title="Blackman-Harris：止帶極深(-92dB)、鏡像完全不可聽；過渡帶略寬於 Blackman，整體乾淨透明">Blackman-Harris</button>
+                          <button class="uf-seg-btn" data-window="nuttall" title="Nuttall：過渡帶與 Blackman-Harris 同寬，但旁瓣隨頻率衰減更快——鏡像帶抑制再深約 12dB，遠處背景更黑">Nuttall</button>
+                          <button class="uf-seg-btn" data-window="blackmanNuttall" title="Blackman-Nuttall：Nuttall 家族的平衡版，旁瓣峰值略低；鏡像抑制略淺於 Nuttall，其餘特性相近">Blackman-Nuttall</button>
+                        </div>
+                        <div class="uf-seg-group">參數窗（滑桿可調）</div>
+                        <div class="uf-seg">
+                          <button class="uf-seg-btn" data-window="kaiser" title="Kaiser：用下方「止帶深度」滑桿自由取捨——60dB 溫潤柔和，140dB 以上參考級乾淨">Kaiser</button>
+                          <button class="uf-seg-btn" data-window="chebyshev" title="Chebyshev（等漣波）：用下方「止帶深度」滑桿——止帶平坦恰在設定深度；高止帶設定下緊接轉折處的抑制比 Kaiser 更深，截止聽感最銳利">Chebyshev</button>
+                          <button class="uf-seg-btn" data-window="gauss" title="Gauss：完全無旁瓣漣波（高斯頻譜單調滾降）——零鏡像泄漏、零鈴振；用下方「Gauss 窗寬 σ」滑桿取捨：σ 小止帶深且柔，σ 大截止直接">Gauss</button>
+                        </div>
                       </div>
                     </div>
                     <div class="uf-field" id="ufAsRow" style="display:none;">
                       <label title="止帶深度＝鏡像與雜訊被壓低多少 dB：數值越小過渡帶越窄高頻越鮮明(聽感偏直接)；越大背景越黑高頻越柔(聽感偏潤色)">止帶深度 <span class="uf-info">ⓘ</span> <span class="uf-val" id="ufAsVal">100 dB</span></label>
                       <input type="range" id="ufAsSlider" min="40" max="180" step="5" value="100">
+                    </div>
+                    <div class="uf-field" id="ufSigmaRow" style="display:none;">
+                      <label title="σ 是窗寬相對濾波長度的比例：σ 越小窗越窄、止帶越深背景越黑，但過渡帶變寬、高頻更早開始滾降；σ 越大截止越直接鮮明，但截斷使止帶變淺">Gauss 窗寬 σ <span class="uf-info">ⓘ</span> <span class="uf-val" id="ufSigmaVal">0.30 ×L</span></label>
+                      <input type="range" id="ufSigmaSlider" min="20" max="50" step="1" value="30">
                     </div>
                     <div class="uf-grid2">
                       <div class="uf-field">

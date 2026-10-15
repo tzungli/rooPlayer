@@ -2224,6 +2224,18 @@ body.table-col-resizing * {
   gap: 6px;
 }
 
+.uf-seg-group {
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.75;
+  letter-spacing: 0.5px;
+  margin: 6px 0 2px;
+}
+
+.uf-seg-group:first-child {
+  margin-top: 0;
+}
+
 .uf-seg-btn {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border-color);

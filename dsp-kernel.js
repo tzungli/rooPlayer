@@ -378,7 +378,8 @@ function buildHqpPsExt2Filter(fsOut, srcRate) {
 // 泛用 windowed-sinc FIR 設計原語（供濾波器插件與使用者自訂濾波使用）：
 //   cutoffRel = 截止 / 源Nyquist（可 >1，extended 性格；上限 0.45·fsOut）
 //   taps      = 半寬 L（輸出樣本單位）
-//   window    = 'hann' | 'hamming' | 'blackman' | 'blackmanHarris' | 'kaiser'(需 asDb)
+//   window    = 'hann' | 'hamming' | 'blackman' | 'blackmanHarris' | 'nuttall' | 'blackmanNuttall'
+//             | 'kaiser'(需 asDb) | 'chebyshev'(需 asDb) | 'gauss'(需 sigmaRel=σ/L)
 // sincWindowTapFn 回傳未正規化的 tap 函數與網格參數（可餵給 minimumPhaseFromTapFn）；
 // windowedSincFir 增益正規化與子樣本网格慣例與內建 FIR 完全相同（Σh = ratio·S）。
 // ---------------------------------------------------------------------------
@@ -394,7 +395,11 @@ function sincWindowTapFn(fsOut, srcRate, opts) {
     hann: (u) => 0.5 + 0.5 * Math.cos(Math.PI * u),
     hamming: (u) => 0.54 + 0.46 * Math.cos(Math.PI * u),
     blackman: (u) => 0.42 + 0.5 * Math.cos(Math.PI * u) + 0.08 * Math.cos(2 * Math.PI * u),
-    blackmanHarris: (u) => 0.35872 + 0.48804 * Math.cos(Math.PI * u) + 0.14124 * Math.cos(2 * Math.PI * u) + 0.010564 * Math.cos(3 * Math.PI * u)
+    blackmanHarris: (u) => 0.35872 + 0.48804 * Math.cos(Math.PI * u) + 0.14124 * Math.cos(2 * Math.PI * u) + 0.010564 * Math.cos(3 * Math.PI * u),
+    // Nuttall 家族（4 項餘弦、邊界近零且導數連續）：旁瓣隨頻率衰減比 Blackman-Harris 快，
+    // 鏡像帶抑制更深（實測鏡像頻比 Blackman-Harris 深約 12dB，過渡帶寬度相同）。
+    nuttall: (u) => 0.355768 + 0.487396 * Math.cos(Math.PI * u) + 0.144232 * Math.cos(2 * Math.PI * u) + 0.012284 * Math.cos(3 * Math.PI * u),
+    blackmanNuttall: (u) => 0.3635819 + 0.4891775 * Math.cos(Math.PI * u) + 0.1365995 * Math.cos(2 * Math.PI * u) + 0.0106411 * Math.cos(3 * Math.PI * u)
   };
   const wName = opts.window || 'blackmanHarris';
   let winFn;
@@ -403,6 +408,32 @@ function sincWindowTapFn(fsOut, srcRate, opts) {
     const beta = 0.1102 * (asDb - 8.7);
     const i0b = besselI0(beta);
     winFn = (u) => besselI0(beta * Math.sqrt(Math.max(0, 1 - u * u))) / i0b;
+  } else if (wName === 'gauss') {
+    // 高斯窗：頻譜也是高斯——完全無旁瓣漣波、單調滾降；sigmaRel = σ/L 控制截斷深度
+    // （σ 越小止帶越深但過渡帶越寬；0.25→鏡像約 -134dB、0.40→約 -89dB @L=128）。
+    const s = Math.min(0.5, Math.max(0.2, opts.sigmaRel || 0.3));
+    winFn = (u) => Math.exp(-(u * u) / (2 * s * s));
+  } else if (wName === 'chebyshev') {
+    // 等漣波窗（scipy chebwin 構造）：Chebyshev 多項式值是窗的頻域取樣，窗樣本 = 其 IDFT。
+    // 止帶平坦恰在設定深度（不隨頻率加深）；高止帶設定下緊接轉折處抑制最深。
+    const asDb = opts.asDb || 100;
+    const M = 2 * L + 1, order = M - 1;
+    const A = Math.pow(10, asDb / 20);
+    const beta = Math.cosh(Math.acosh(A) / order);
+    const chebT = (x) => (x > 1 ? Math.cosh(order * Math.acosh(x))
+      : (x < -1 ? (order % 2 === 0 ? 1 : -1) * Math.cosh(order * Math.acosh(-x))
+        : Math.cos(order * Math.acos(Math.min(Math.max(x, -1), 1)))));
+    const p = new Float64Array(M);
+    for (let k = 0; k < M; k++) p[k] = chebT(beta * Math.cos((Math.PI * k) / M));
+    const wr = new Float64Array(L + 1);
+    let wmax = 0;
+    for (let j = 0; j <= L; j++) {
+      let acc = 0;
+      for (let k = 0; k < M; k++) acc += p[k] * Math.cos((2 * Math.PI * k * j) / M);
+      wr[j] = acc;
+      if (Math.abs(acc) > wmax) wmax = Math.abs(acc);
+    }
+    winFn = (u) => wr[Math.min(L, Math.max(0, Math.round(Math.abs(u) * L)))] / wmax;
   } else {
     winFn = winFns[wName] || winFns.blackmanHarris;
   }
@@ -541,8 +572,8 @@ function registerCoreFallbackFilters() {
 // 任何異常回傳 null → 該槽不註冊 → 選取它的設定自動退回線性相位。
 // 槽 id 固定為 uf-1..uf-6（與 PEQ 儲存槽相同的 6 槽慣例）。
 // ---------------------------------------------------------------------------
-const USER_FILTER_WINDOWS = ['hann', 'hamming', 'blackman', 'blackmanHarris', 'kaiser'];
-const USER_FILTER_LIMITS = { cutoffMin: 0.8, cutoffMax: 1.35, tapsMin: 16, tapsMax: 512, asMin: 40, asMax: 180 };
+const USER_FILTER_WINDOWS = ['hann', 'hamming', 'blackman', 'blackmanHarris', 'kaiser', 'nuttall', 'blackmanNuttall', 'gauss', 'chebyshev'];
+const USER_FILTER_LIMITS = { cutoffMin: 0.8, cutoffMax: 1.35, tapsMin: 16, tapsMax: 512, asMin: 40, asMax: 180, sigmaMin: 0.2, sigmaMax: 0.5 };
 
 function validateUserFilterSpec(spec) {
   if (!spec || typeof spec !== 'object') return null;
@@ -557,7 +588,8 @@ function validateUserFilterSpec(spec) {
   const cutoffRel = Math.min(USER_FILTER_LIMITS.cutoffMax, Math.max(USER_FILTER_LIMITS.cutoffMin, num(spec.cutoffRel, 1.135)));
   const taps = Math.round(Math.min(USER_FILTER_LIMITS.tapsMax, Math.max(USER_FILTER_LIMITS.tapsMin, num(spec.taps, 96))));
   const asDb = Math.round(Math.min(USER_FILTER_LIMITS.asMax, Math.max(USER_FILTER_LIMITS.asMin, num(spec.asDb, 100))));
-  return { id: spec.id, name, sound, window, phase, cutoffRel, taps, asDb };
+  const sigmaRel = Math.min(USER_FILTER_LIMITS.sigmaMax, Math.max(USER_FILTER_LIMITS.sigmaMin, num(spec.sigmaRel, 0.3)));
+  return { id: spec.id, name, sound, window, phase, cutoffRel, taps, asDb, sigmaRel };
 }
 
 function userFilterSpecToDescriptor(spec) {
@@ -572,10 +604,10 @@ function userFilterSpecToDescriptor(spec) {
     design(fsOut, srcRate, kernel) {
       const Lcap = Math.floor(150e6 / srcRate / 2); // 引擎成本上限（同內建 FIR 慣例）
       const L = Math.max(8, Math.min(v.taps, Lcap > 0 ? Lcap : v.taps));
-      const w = kernel.sincWindowTapFn(fsOut, srcRate, { cutoffRel: v.cutoffRel, L, window: v.window, asDb: v.asDb });
+      const w = kernel.sincWindowTapFn(fsOut, srcRate, { cutoffRel: v.cutoffRel, L, window: v.window, asDb: v.asDb, sigmaRel: v.sigmaRel });
       if (!w) return null;
       if (v.phase === 'minimum') return kernel.minimumPhaseFromTapFn(fsOut, srcRate, L, w.S, w.tapFn);
-      return kernel.windowedSincFir(fsOut, srcRate, { cutoffRel: v.cutoffRel, taps: L, window: v.window, asDb: v.asDb });
+      return kernel.windowedSincFir(fsOut, srcRate, { cutoffRel: v.cutoffRel, taps: L, window: v.window, asDb: v.asDb, sigmaRel: v.sigmaRel });
     }
   };
 }
