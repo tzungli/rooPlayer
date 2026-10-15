@@ -7,15 +7,15 @@
 <meta name="description" content="rooPlayer：純 Node.js 64-bit 音訊引擎的發燒級音樂播放器。原生 DSD、升頻引擎、濾波器插件與自訂工具箱、PEQ、卷積、DLNA 串流。">
 <style>
   :root {
-    --bg: #0f1013; --bg2: #16181d; --card: #1b1e25; --border: #2a2e38;
-    --text: #e8eaf0; --text2: #9aa1ad; --purple: #8b5cf6; --purple2: #a78bfa;
-    --green: #34d399; --amber: #f59e0b; --cyan: #22d3ee;
+    --bg: #f6f7f9; --bg2: #e9ecf1; --card: #ffffff; --border: #d9dee5;
+    --text: #1c2128; --text2: #57606a; --purple: #7c3aed; --purple2: #6d28d9;
+    --green: #047857; --amber: #b45309; --cyan: #0e7490;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: var(--bg); color: var(--text); font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif; line-height: 1.7; }
   .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
 
-  header { position: sticky; top: 0; background: rgba(15,16,19,.92); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); z-index: 10; }
+  header { position: sticky; top: 0; background: rgba(246,247,249,.92); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); z-index: 10; }
   .nav { display: flex; align-items: center; justify-content: space-between; height: 60px; }
   .logo { font-size: 20px; font-weight: 800; letter-spacing: .5px; }
   .logo span { color: var(--purple2); }
@@ -31,8 +31,8 @@
   .hero .tagline { color: var(--text2); font-size: 18px; margin-top: 14px; }
   .hero .badges { margin-top: 22px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
   .badge { font-size: 12.5px; font-weight: 700; padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border); color: var(--text2); }
-  .badge.p { border-color: rgba(139,92,246,.5); color: var(--purple2); }
-  .badge.g { border-color: rgba(52,211,153,.5); color: var(--green); }
+  .badge.p { border-color: rgba(124,58,237,.45); color: var(--purple2); }
+  .badge.g { border-color: rgba(4,120,87,.45); color: var(--green); }
   .hero .cta { margin-top: 30px; display: flex; gap: 12px; justify-content: center; }
 
   .shot { margin: 34px 0; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--bg2); }
@@ -49,16 +49,16 @@
   .card h3 .ico { margin-right: 8px; }
   .card p { font-size: 14px; color: var(--text2); }
   .card .tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; margin: 8px 4px 0 0; }
-  .tag.p { background: rgba(139,92,246,.15); color: var(--purple2); }
-  .tag.g { background: rgba(52,211,153,.15); color: var(--green); }
-  .tag.a { background: rgba(245,158,11,.15); color: var(--amber); }
-  .tag.c { background: rgba(34,211,238,.15); color: var(--cyan); }
+  .tag.p { background: rgba(124,58,237,.10); color: var(--purple2); }
+  .tag.g { background: rgba(4,120,87,.10); color: var(--green); }
+  .tag.a { background: rgba(180,83,9,.10); color: var(--amber); }
+  .tag.c { background: rgba(14,116,144,.10); color: var(--cyan); }
 
   .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 820px) { .cols2 { grid-template-columns: 1fr; } .hero h1 { font-size: 30px; } }
 
   .run { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 22px 26px; }
-  .run code { display: block; background: #0a0b0e; border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; font-family: Consolas, monospace; font-size: 14px; color: #d4d7de; margin: 8px 0; }
+  .run code { display: block; background: #f3f5f8; border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; font-family: Consolas, monospace; font-size: 14px; color: #24292f; margin: 8px 0; }
   .run .note { font-size: 13px; color: var(--text2); }
 
   footer { margin-top: 64px; border-top: 1px solid var(--border); padding: 26px 0 40px; color: var(--text2); font-size: 13px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
