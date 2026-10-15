@@ -27,7 +27,8 @@ const TEST_KKBOX_MATCH = process.argv.includes('--test-kkbox-match'); // 執行�
 const TEST_RECOMMEND = process.argv.includes('--test-recommend'); // 執行期測試專輯頁「同類型推薦專輯」關聯評分
 const TEST_UF_LAYOUT = process.argv.includes('--test-uf-layout'); // 執行期測試自訂濾波器編輯器的左右配置
 const TEST_QUEUE_CONTRAST = process.argv.includes('--test-queue-contrast'); // 執行期測試播放佇列在淺色／深色的文字對比度
-if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST) {
+const TEST_SPECTRUM_SMOOTH = process.argv.includes('--test-spectrum-smooth'); // 執行期測試 NOW PLAYING 頻譜的播放位置是否連續推進
+if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH) {
   // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
   // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -184,8 +185,8 @@ function writeDemoIrWav(filePath) {
 }
 
 // 獨佔輸出測試素材：6 秒 44.1kHz 24-bit 立體聲正弦 WAV（引擎原生解碼，不需外部依賴）
-function writeExclusiveTestFixture(filePath) {
-  const sr = 44100, secs = 6, n = Math.round(sr * secs);
+function writeExclusiveTestFixture(filePath, secs = 6) {
+  const sr = 44100, n = Math.round(sr * secs);
   const data = Buffer.alloc(n * 6); // stereo s24le
   for (let i = 0; i < n; i++) {
     const l = Math.round(0.25 * 8388607 * Math.sin(2 * Math.PI * 440 * i / sr));
@@ -346,6 +347,24 @@ function runCaptureSequence() {
         app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
         return;
       }
+      if (TEST_SPECTRUM_SMOOTH) {
+        console.log('[test-spectrum-smooth] waiting for renderer spectrum smoothness self-test result');
+        // 渲染端先發 23（正在取頻譜窗，截取畫面），最後發 24（測試報告）
+        const shotSignal = new Promise((resolve) => { captureSignals[23] = (info) => { captureSignals[23] = null; resolve(info); }; });
+        const reportPromise = waitRendererInfo(24, 120000);
+        const shotInfo = await shotSignal;
+        try {
+          const img = await mainWindow.webContents.capturePage();
+          const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'spectrum-smooth.png');
+          fs.writeFileSync(shotPath, img.toPNG());
+          console.log('[test-spectrum-smooth] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
+        } catch (e) { console.warn('[test-spectrum-smooth] screenshot failed:', e); }
+        const report = await reportPromise;
+        console.log('[test-spectrum-smooth] renderer report: ' + report);
+        console.log('[test] done');
+        app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
+        return;
+      }
       await sleep(4500); // 等 initApp / demo 展示渲染完成
       console.log('[capture] step 1: home');
       await captureShot('home.png');
@@ -436,6 +455,13 @@ function createWindow() {
   } else if (TEST_LABELS) {
     // 不帶 rpCapture：截圖流程的 UI 自動化會開 modal / 注入示範專輯，干擾本測試的 DOM 計數
     mainWindow.loadFile('index.html', { query: { testLabels: '1' } });
+  } else if (TEST_SPECTRUM_SMOOTH) {
+    // 較長的測試音（14s）：本測試要連續取樣約 5 秒，6 秒的音檔會在結尾前就結束
+    try {
+      writeExclusiveTestFixture(EXCLUSIVE_TEST_FIXTURE, 14);
+      console.log('[test-spectrum-smooth] fixture written:', EXCLUSIVE_TEST_FIXTURE);
+    } catch (e) { console.warn('[test-spectrum-smooth] fixture write failed:', e); }
+    mainWindow.loadFile('index.html', { query: { testSpectrumSmooth: '1', fixture: EXCLUSIVE_TEST_FIXTURE } });
   } else if (TEST_EXCLUSIVE) {
     try {
       writeExclusiveTestFixture(EXCLUSIVE_TEST_FIXTURE);
@@ -454,10 +480,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST) runCaptureSequence();
+    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH) runCaptureSequence();
   });
 
-  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST) {
+  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH) {
     // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {

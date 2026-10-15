@@ -9041,7 +9041,7 @@ function getCurrentPlaybackTime() {
   if (state.activeAudioZone !== 'local' && state.activeDlnaDevice) {
     return state.dlnaCurrentSec || 0;
   }
-  if (exclusiveActive) return exclusivePosSec || 0; // 獨佔輸出由 helper 的位置事件驅動
+  if (exclusiveActive) return exclusiveSmoothedPosSec() || 0; // 獨佔輸出：連續推算的位置（helper 事件每 250ms 才一次）
   if (isCurrentDsd) {
     return (currentDsdOffset || 0) + (nativeAudio.currentTime || 0);
   }
@@ -9863,6 +9863,47 @@ let exclusiveEndedFired = false;
 let exclusiveFallbackAt = 0;       // 最近一次退回共享的時間戳（避免每首都重試、每首都跳訊息）
 let exclusiveEventTap = null;      // 自我測試攔截點：回傳 true 表示事件已由測試接管
 
+// helper 的 pos 事件最快 250ms 一次（tools/rp-wasapi-exclusive.cs）。播放位置若只跟著事件走，
+// 就會出現 0.25 秒的階梯：進度條跳格、NOW PLAYING 頻譜連續幾次取到同一窗再突然跳一格（卡頓）。
+// 這裡以「最近權威位置 + 之後經過的牆鐘時間」推算連續位置，新事件到達時在 400ms 內平滑吸收誤差；
+// 推算最多外推 0.6 秒（暫停時不會一路往前爬）。
+let exclusivePosClockMs = 0;       // 最近一次權威位置的牆鐘時間戳（performance.now）
+let exclusivePosPendingSec = 0;    // 待平滑吸收的誤差
+let exclusivePosPendingT0 = 0;
+let exclusivePosShownSec = 0;      // 已顯示出去的位置（只往前，不回頭）
+const EXCLUSIVE_POS_EXTRAPOLATE_MAX_SEC = 0.6;
+const EXCLUSIVE_POS_CORRECTION_SPAN_MS = 400;
+
+function exclusiveSetAuthoritativePos(sec) {
+  const now = performance.now();
+  const prevProgress = exclusivePosPendingSec
+    ? Math.min(1, (now - exclusivePosPendingT0) / EXCLUSIVE_POS_CORRECTION_SPAN_MS) : 0;
+  const estimate = exclusivePosSec + (now - exclusivePosClockMs) / 1000 + exclusivePosPendingSec * prevProgress;
+  const delta = sec - estimate;
+  // 大跳躍（跳播、重新開串流、seek）直接採用，不硬吸收
+  if (Math.abs(delta) > 1.5) { exclusivePosPendingSec = 0; exclusivePosShownSec = sec; }
+  else { exclusivePosPendingSec = delta; exclusivePosPendingT0 = now; }
+  exclusivePosSec = sec;
+  exclusivePosClockMs = now;
+}
+
+function exclusiveSmoothedPosSec() {
+  if (!exclusiveActive || !exclusiveRate) return exclusivePosSec;
+  const now = performance.now();
+  let corr = 0;
+  if (exclusivePosPendingSec) {
+    const p = (now - exclusivePosPendingT0) / EXCLUSIVE_POS_CORRECTION_SPAN_MS;
+    if (p >= 1) { exclusivePosPendingSec = 0; }
+    else corr = exclusivePosPendingSec * p;
+  }
+  const elapsed = Math.min(EXCLUSIVE_POS_EXTRAPOLATE_MAX_SEC, (now - exclusivePosClockMs) / 1000);
+  const value = Math.max(0, exclusivePosSec + elapsed + corr);
+  // 吸收誤差時可能短暫往回；進度與頻譜只允許往前，避免倒走造成的跳動
+  if (value < exclusivePosShownSec) return exclusivePosShownSec;
+  exclusivePosShownSec = value;
+  return value;
+}
+
 function exclusiveApiOk() {
   return !!(window.electronAPI && window.electronAPI.exclusiveStart && window.electronAPI.exclusiveProbe);
 }
@@ -9939,7 +9980,7 @@ async function exclusiveStartStream(track, startSec, streamUrl, rate) {
   exclusiveActive = true;
   exclusiveRate = rate;
   exclusiveStreamStartSec = startSec;
-  exclusivePosSec = startSec;
+  exclusiveSetAuthoritativePos(startSec);
   exclusiveEndedFired = false;
   updateExclusiveBtnState();
   return true;
@@ -9950,6 +9991,8 @@ function exclusiveStopStream() {
   exclusiveActive = false;
   exclusiveRate = 0;
   exclusiveStreamStartSec = 0;
+  exclusivePosPendingSec = 0;
+  exclusivePosShownSec = 0;
   if (wasActive && exclusiveApiOk()) {
     try { window.electronAPI.exclusiveStop(); } catch (err) {}
   }
@@ -9977,7 +10020,7 @@ function exclusiveHandleEnded() {
 function exclusiveSeekTo(targetSec) {
   if (!exclusiveActive || !exclusiveApiOk()) return false;
   const rel = Math.max(0, targetSec - exclusiveStreamStartSec);
-  exclusivePosSec = targetSec;
+  exclusiveSetAuthoritativePos(targetSec);
   exclusiveEndedFired = false;
   try { window.electronAPI.exclusiveSeek(rel); } catch (err) {}
   return true;
@@ -9987,7 +10030,7 @@ function renderExclusiveProgress() {
   const track = state.queue[state.currentTrackIndex];
   if (!track) return;
   const total = (track.duration && track.duration > 0) ? track.duration : 0;
-  const current = Math.max(0, exclusivePosSec);
+  const current = Math.max(0, exclusiveSmoothedPosSec());
   currentTimeLabel.textContent = formatDuration(current);
   if (total > 0) {
     scrubberFill.style.width = `${Math.min(100, (current / total) * 100)}%`;
@@ -10003,7 +10046,7 @@ if (exclusiveApiOk() && window.electronAPI.onExclusiveStatus) {
     if (ev.ev === 'pos') {
       if (!exclusiveActive || !exclusiveRate) return;
       const audible = Number(ev.audible) || 0;
-      exclusivePosSec = exclusiveStreamStartSec + audible / exclusiveRate;
+      exclusiveSetAuthoritativePos(exclusiveStreamStartSec + audible / exclusiveRate);
       renderExclusiveProgress();
       const track = state.queue[state.currentTrackIndex];
       const total = (track && track.duration) ? track.duration : 0;
@@ -10206,6 +10249,153 @@ try {
   const rpParams = new URLSearchParams(window.location.search || '');
   if (rpParams.get('testExclusive') === '1' && window.electronAPI && window.electronAPI.captureStep) {
     setTimeout(() => { runExclusiveSelfTest(rpParams.get('fixture') || ''); }, 2600);
+  }
+} catch (err) {}
+
+// ----------------- 頻譜順滑度自我測試（main.js --test-spectrum-smooth） -----------------
+// helper 的 pos 事件最快 250ms 一次；若播放位置只跟著事件走，NOW PLAYING 頻譜會連續幾次
+// 取到同一個窗再突然跳一格（卡頓）。這裡直接量「播放位置推進是否連續」與「頻譜窗是否重複」。
+async function runSpectrumSmoothSelfTest(fixturePath) {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    exclusiveEventTap = null;
+    restoreNowPlaying();
+    try { exclusiveStopStream(); } catch (err) {}
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(24, report); } catch (err) {}
+  };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const waitForEvent = (pred, ms) => new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => {
+      const hit = events.find(pred);
+      if (hit) { resolve(hit); return; }
+      if (Date.now() - t0 > ms) { resolve(null); return; }
+      setTimeout(tick, 100);
+    };
+    tick();
+  });
+  const sampleClock = (getValue, ms) => new Promise((resolve) => {
+    const samples = [];
+    const t0 = performance.now();
+    const tick = () => {
+      samples.push({ t: performance.now() - t0, v: Number(getValue()) || 0 });
+      if (performance.now() - t0 >= ms) { resolve(samples); return; }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  });
+  const analyzeClock = (samples) => {
+    let maxFreezeMs = 0, lastChangeT = samples[0].t, lastV = samples[0].v, changes = 0, backwards = 0;
+    for (const s of samples) {
+      if (s.v < lastV - 1e-6) backwards++;
+      if (Math.abs(s.v - lastV) > 1e-6) {
+        maxFreezeMs = Math.max(maxFreezeMs, s.t - lastChangeT);
+        lastChangeT = s.t; lastV = s.v; changes++;
+      }
+    }
+    const spanMs = samples[samples.length - 1].t - samples[0].t;
+    const advancedSec = samples[samples.length - 1].v - samples[0].v;
+    return { n: samples.length, maxFreezeMs, changes, backwards, spanMs, advancedSec, ratio: advancedSec / (spanMs / 1000) };
+  };
+
+  const events = [];
+  let savedQueue = null, savedIndex = -1, savedPlaying = false, savedIsSox = false, npOpened = false;
+  const restoreNowPlaying = () => {
+    try {
+      if (npOpened) { closeNowPlayingModal(); npOpened = false; }
+      state.queue = savedQueue;
+      state.currentTrackIndex = savedIndex;
+      state.isPlaying = savedPlaying;
+      isCurrentSox = savedIsSox;
+    } catch (err) {}
+  };
+  try {
+    if (!fixturePath || !window.electronAPI || !window.electronAPI.getSoxStreamUrl) {
+      bad('fixture / stream IPC available', 'fixture=' + fixturePath); finish(); return;
+    }
+    const cap = await exclusiveEnsureCapability(true);
+    const rates = exclusiveSupportedRates();
+    if (!cap || !cap.ok || !rates.length) {
+      bad('probe exclusive capability', JSON.stringify(cap || {}).slice(0, 160)); finish(); return;
+    }
+    const rate = exclusiveChooseRate(44100, 96000) || rates[0];
+    const url = await window.electronAPI.getSoxStreamUrl(fixturePath, 0, rate, '', 5, 'linear', '', '');
+    if (!url) { bad('build engine sox-stream url'); finish(); return; }
+
+    // 記錄事件但交還給 app 正常處理（exclusiveEventTap 回傳 false），否則位置不會被更新
+    exclusiveEventTap = (ev) => { events.push(ev); return false; };
+    const started = await exclusiveStartStream({ filePath: fixturePath, sampleRate: 44100, duration: 14 }, 0, url, rate);
+    if (!started) { bad('exclusive start accepted'); finish(); return; }
+    const ready = await waitForEvent(e => e.ev === 'ready', 20000);
+    if (!ready) { bad('helper ready event', 'no ready within 20s'); finish(); return; }
+    await sleep(1500);
+
+    // 開 NOW PLAYING 並把這筆測試音放進佇列狀態，讓真正的頻譜迴圈一起跑（截圖才有內容）
+    savedQueue = state.queue; savedIndex = state.currentTrackIndex; savedPlaying = state.isPlaying; savedIsSox = isCurrentSox;
+    state.queue = [{ title: 'Spectrum Test Tone', artist: 'rooPlayer 自我測試', filePath: fixturePath, duration: 14, sampleRate: 44100, bitsPerSample: 24 }];
+    state.currentTrackIndex = 0;
+    state.isPlaying = true;
+    isCurrentSox = true; // 與實際獨佔播放相同：playSoxTrack 會先標記為引擎串流
+    openNowPlayingModal();
+    npOpened = true;
+    const specCanvas = document.getElementById('nowPlayingSpectrum');
+    const canvasReady = await new Promise((resolve) => {
+      const t0 = Date.now();
+      const tick = () => {
+        if (specCanvas && specCanvas.clientWidth > 100 && specCanvas.clientHeight > 40) { resolve(true); return; }
+        if (Date.now() - t0 > 6000) { resolve(false); return; }
+        setTimeout(tick, 120);
+      };
+      tick();
+    });
+    if (canvasReady) ok('NOW PLAYING 頻譜畫布已啟動', `${specCanvas.clientWidth}×${specCanvas.clientHeight}px`);
+    else bad('NOW PLAYING 頻譜畫布已啟動', '畫布未可見');
+    await sleep(600);
+
+    const posEvents = events.filter(e => e.ev === 'pos');
+    lines.push(`NOTE helper pos 事件 ${posEvents.length} 次（每 250ms 上限），取樣期間 ${posEvents.length ? ((posEvents[posEvents.length - 1].audible - posEvents[0].audible) / rate).toFixed(2) : '0'}s`);
+
+    const a = analyzeClock(await sampleClock(() => getCurrentPlaybackTime(), 2500));
+    // 門檻 120ms：要擋的是 helper 事件 250ms 一次的階梯；rAF 取樣本身會因掉幀有幾十毫秒抖動
+    if (a.maxFreezeMs <= 120) ok('播放位置連續推進（沒有 0.25 秒階梯）', `最大停滯 ${Math.round(a.maxFreezeMs)}ms、更新 ${a.changes} 次 / ${(a.spanMs / 1000).toFixed(1)}s`);
+    else bad('播放位置連續推進（沒有 0.25 秒階梯）', `最大停滯 ${Math.round(a.maxFreezeMs)}ms（需要 ≤120ms）`);
+    if (a.ratio > 0.9 && a.ratio < 1.1) ok('推算位置與牆鐘一致', `比例 ${a.ratio.toFixed(3)}（推進 ${a.advancedSec.toFixed(2)}s / ${a.spanMs.toFixed(0)}ms）`);
+    else bad('推算位置與牆鐘一致', `比例 ${a.ratio.toFixed(3)}`);
+    if (a.backwards === 0) ok('推算位置不回跳');
+    else bad('推算位置不回跳', `回跳 ${a.backwards} 次`);
+
+    // 頻譜窗：相鄰兩次取窗若內容完全相同，就是頻譜卡頓的直接原因
+    try { window.electronAPI.captureStep(23, 'spectrum windows sampling'); } catch (err) {}
+    const wins = [];
+    for (let i = 0; i < 16; i++) {
+      const t = getCurrentPlaybackTime();
+      let res = null;
+      try { res = await window.electronAPI.getAudioSpectrum(null, t); } catch (err) {}
+      const key = (res && res.left && res.left.length >= 16)
+        ? Array.from(res.left.slice(res.left.length - 8)).map(x => x.toFixed(6)).join(',') : 'null';
+      wins.push({ t, key });
+      await sleep(90);
+    }
+    const got = wins.filter(w => w.key !== 'null');
+    let repeats = 0;
+    for (let i = 1; i < got.length; i++) if (got[i].key === got[i - 1].key) repeats++;
+    const pairs = Math.max(1, got.length - 1);
+    if (got.length >= 12 && repeats / pairs <= 0.1) ok('頻譜窗持續前進（不會重複取同一窗）', `${got.length} 次取窗、相鄰重複 ${repeats} 次`);
+    else bad('頻譜窗持續前進（不會重複取同一窗）', `取得 ${got.length} 次、相鄰重複 ${repeats}/${pairs}`);
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  }
+  finish();
+}
+
+try {
+  const rpSpecParams = new URLSearchParams(window.location.search || '');
+  if (rpSpecParams.get('testSpectrumSmooth') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runSpectrumSmoothSelfTest(rpSpecParams.get('fixture') || ''); }, 2600);
   }
 } catch (err) {}
 
@@ -14587,7 +14777,7 @@ function updateTidalUIStatus() {
     requestAnimationFrame(frame);
     if (!canvas.clientWidth || canvas.clientWidth !== cw || canvas.clientHeight !== ch) resize();
     if (!cw || !ch || !ctx) return; // modal closed: no drawing, no fetching
-    if (state.isPlaying && !fetching && ts - lastFetch > 120) {
+    if (state.isPlaying && !fetching && ts - lastFetch > 90) {
       lastFetch = ts; fetching = true;
       Promise.resolve().then(fetchSpectrum).finally(() => { fetching = false; });
     }
