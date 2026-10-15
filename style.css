@@ -3065,7 +3065,7 @@ body.table-col-resizing * {
 }
 
 .btn-clear-queue:hover, .btn-close-queue:hover {
-  color: #fff;
+  color: var(--text-main);
 }
 
 .queue-list {
@@ -3101,7 +3101,8 @@ body.table-col-resizing * {
 .queue-item-title {
   font-size: 12px;
   font-weight: 600;
-  color: #fff;
+  /* 用主題文字色：淺色模式下白色字在淺底看不清楚 */
+  color: var(--text-main);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3109,7 +3110,7 @@ body.table-col-resizing * {
 
 .queue-item-artist {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-sub);
 }
 
 /* ----------------- Bottom Playback Bar ----------------- */
@@ -3492,6 +3493,46 @@ body.table-col-resizing * {
 
 [data-theme="light"] .queue-drawer {
   box-shadow: -2px 0 10px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* 播放佇列（淺色）：白色 hover 與半透明列在淺底看不清楚 */
+[data-theme="light"] .queue-item:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .queue-item.current {
+  background-color: rgba(124, 58, 237, 0.10);
+}
+
+[data-theme="light"] .queue-item-artist {
+  color: #475569;
+}
+
+[data-theme="light"] .queue-header h3 {
+  color: #0f172a;
+}
+
+[data-theme="light"] .btn-clear-queue,
+[data-theme="light"] .btn-close-queue {
+  color: #475569;
+}
+
+[data-theme="light"] .btn-clear-queue:hover,
+[data-theme="light"] .btn-close-queue:hover {
+  color: #0f172a;
+}
+
+[data-theme="light"] .queue-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+[data-theme="light"] .queue-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .queue-list::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 4px;
 }
 
 [data-theme="light"] .hero-title {

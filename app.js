@@ -10217,12 +10217,12 @@ function renderQueue() {
     const item = document.createElement('div');
     item.className = `queue-item ${idx === state.currentTrackIndex ? 'current' : ''}`;
     item.innerHTML = `
-      <div style="font-size: 11px; width: 20px; color: var(--text-muted);">${idx + 1}</div>
+      <div style="font-size: 11px; width: 20px; color: var(--text-sub);">${idx + 1}</div>
       <div class="queue-item-meta">
         <div class="queue-item-title">${escapeXml(t.title)}</div>
         <div class="queue-item-artist">${escapeXml(t.artist)}</div>
       </div>
-      <div style="font-size: 11px; color: var(--text-muted);">${formatDuration(t.duration)}</div>
+      <div style="font-size: 11px; color: var(--text-sub);">${formatDuration(t.duration)}</div>
     `;
     item.addEventListener('click', () => {
       state.currentTrackIndex = idx;
@@ -10246,6 +10246,152 @@ function updateQueueActiveItem() {
     el.classList.toggle('current', idx === state.currentTrackIndex);
   });
 }
+
+// ----------------- 播放佇列對比度自我測試（main.js --test-queue-contrast） -----------------
+// 淺色模式下佇列曾用固定白色字，淺底看不清楚；這裡直接量文字與背景的對比度。
+async function runQueueContrastSelfTest() {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(22, report); } catch (err) {}
+  };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const parseRgb = (s) => {
+    const m = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?/.exec(String(s || ''));
+    return m ? { r: +m[1], g: +m[2], b: +m[3], a: m[4] === undefined ? 1 : +m[4] } : null;
+  };
+  const over = (fg, bg) => { // 半透明前景合成到背景上
+    const a = fg.a;
+    return { r: Math.round(fg.r * a + bg.r * (1 - a)), g: Math.round(fg.g * a + bg.g * (1 - a)), b: Math.round(fg.b * a + bg.b * (1 - a)), a: 1 };
+  };
+  const lum = (c) => {
+    const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+  };
+  const contrast = (fg, bg) => {
+    const L1 = lum(fg), L2 = lum(bg);
+    return (Math.max(L1, L2) + 0.05) / (Math.min(L1, L2) + 0.05);
+  };
+  const resolveBg = (colorStr, baseRgb) => { // 半透明背景依序合成到實際底色
+    const c = parseRgb(colorStr);
+    if (!c) return null;
+    if (c.a >= 1) return { r: c.r, g: c.g, b: c.b, a: 1 };
+    const base = baseRgb || { r: 255, g: 255, b: 255, a: 1 };
+    return over(c, base);
+  };
+  const check = (label, colorStr, bgStr, minRatio, baseRgb) => {
+    const fg = parseRgb(colorStr);
+    const bg = resolveBg(bgStr, baseRgb);
+    if (!fg || !bg) { bad(label, `無法解析顏色 ${colorStr} / ${bgStr}`); return null; }
+    const ratio = contrast(fg.a < 1 ? over(fg, bg) : fg, bg);
+    const text = `${label} 對比 ${ratio.toFixed(2)}:1`;
+    if (ratio >= minRatio) ok(text);
+    else bad(text, `需要 ≥${minRatio}:1`);
+    return ratio;
+  };
+
+  const savedTheme = state.theme;
+  const savedQueue = state.queue;
+  const savedIndex = state.currentTrackIndex;
+  const drawer = document.getElementById('queueDrawer');
+  try {
+    if (!window.electronAPI || !window.electronAPI.captureStep) { bad('capture IPC available'); finish(); return; }
+    if (!drawer || !queueList) { bad('播放佇列元素存在'); finish(); return; }
+
+    state.queue = [
+      { title: 'Kind of Blue', artist: 'Miles Davis', duration: 276 },
+      { title: 'Blue Rondo à la Turk', artist: 'Dave Brubeck', duration: 291 },
+      { title: 'Take Five', artist: 'Dave Brubeck', duration: 324 },
+      { title: 'Time Was', artist: 'Dave Brubeck', duration: 168 },
+    ];
+    state.currentTrackIndex = 1;
+
+    for (const theme of ['light', 'dark']) {
+      setTheme(theme);
+      renderQueue();
+      drawer.classList.add('open');
+      const visible = await new Promise((resolve) => {
+        const t0 = Date.now();
+        const tick = () => {
+          const r = drawer.getBoundingClientRect();
+          if (r.width > 100 && queueList.querySelector('.queue-item')) { resolve(true); return; }
+          if (Date.now() - t0 > 6000) { resolve(false); return; }
+          setTimeout(tick, 120);
+        };
+        tick();
+      });
+      if (!visible) { bad(`${theme}：佇列可見`, '表單未渲染'); continue; }
+      await sleep(400);
+
+      const drawerBg = getComputedStyle(drawer).backgroundColor;
+      const bgInfo = parseRgb(drawerBg);
+      if (!bgInfo) { bad(`${theme}：佇列背景可解析`, String(drawerBg)); continue; }
+      const bg = bgInfo.a < 1 ? over(bgInfo, { r: 255, g: 255, b: 255, a: 1 }) : bgInfo;
+      const bgLum = lum(bg);
+      if (theme === 'light' && bgLum < 0.5) bad('light：佇列背景為淺色', `亮度 ${bgLum.toFixed(3)}（${drawerBg}）`);
+      if (theme === 'dark' && bgLum > 0.25) bad('dark：佇列背景為深色', `亮度 ${bgLum.toFixed(3)}（${drawerBg}）`);
+
+      const item = queueList.querySelector('.queue-item');
+      const current = queueList.querySelector('.queue-item.current');
+      const targets = [
+        ['佇列標題', getComputedStyle(item.querySelector('.queue-item-title')).color, drawerBg, 4.5],
+        ['佇列演出者', getComputedStyle(item.querySelector('.queue-item-artist')).color, drawerBg, 4.5],
+        ['佇列序號', getComputedStyle(item.firstElementChild).color, drawerBg, 4.5],
+        ['佇列時間', getComputedStyle(item.lastElementChild).color, drawerBg, 4.5],
+        ['佇列標題（目前播放列）', getComputedStyle(current.querySelector('.queue-item-title')).color, getComputedStyle(current).backgroundColor, 4.5],
+      ];
+      for (const [label, color, bgRef, minRatio] of targets) {
+        if (!color) continue;
+        check(`${theme}：${label}`, color, bgRef, minRatio, bg);
+      }
+
+      // hover 列在淺色下若仍是白色半透明，就等於沒有回饋
+      const hoverRule = [...document.styleSheets].some((ss) => {
+        let rules = null;
+        try { rules = ss.cssRules; } catch (e) { return false; }
+        if (!rules) return false;
+        for (const r of rules) {
+          if (r.selectorText && r.selectorText.includes('[data-theme="light"] .queue-item:hover')) {
+            const c = r.style && r.style.backgroundColor;
+            return !!c && /rgba?\(\s*0[,\s]/.test(c);
+          }
+        }
+        return false;
+      });
+      if (hoverRule) ok(`${theme === 'light' ? 'light' : 'dark'}：淺色 hover 改用深色半透明（有視覺回饋）`);
+      else if (theme === 'light') bad('light：淺色 hover 改用深色半透明（有視覺回饋）', '找不到 [data-theme="light"] .queue-item:hover 規則');
+
+      if (theme === 'light') {
+        try { window.electronAPI.captureStep(21, 'queue drawer light theme contrast'); } catch (err) {}
+        await sleep(2500);
+      }
+      drawer.classList.remove('open');
+      await sleep(300);
+    }
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  } finally {
+    try {
+      state.queue = savedQueue;
+      state.currentTrackIndex = savedIndex;
+      renderQueue();
+      const d = document.getElementById('queueDrawer');
+      if (d) d.classList.remove('open');
+      setTheme(savedTheme);
+    } catch (e) {}
+  }
+  finish();
+}
+
+try {
+  const rpQueueParams = new URLSearchParams(window.location.search || '');
+  if (rpQueueParams.get('testQueueContrast') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runQueueContrastSelfTest(); }, 2600);
+  }
+} catch (err) {}
 
 // ----------------- Navigation & Filters -----------------
 function setupNavigation() {
