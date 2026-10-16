@@ -428,7 +428,6 @@
   const I18N_PATTERNS = [
     [/^共 (\d+) 個播放清單（曲目依儲存的順序播放）$/, '$1 playlists (tracks play in the saved order)'],
     [/^最近播放的 (\d+) 首歌曲 \(依時間由最近到最久排序\)$/, 'Your last $1 tracks (newest first)'],
-    [/^(\d+) 首歌曲 · 總時長 (.+)$/, '$1 tracks · total length $2'],
     [/^已緩衝 ([\d.]+) 秒音訊 \/ 目標 ([\d.]+) 秒 · ([\d.]+) MB · 已等 ([\d.]+) 秒$/, 'Buffered $1 s of audio / target $2 s · $3 MB · waiting $4 s'],
     [/^已等 ([\d.]+) 秒$/, 'waiting $1 s'],
     [/^串流準備中：已緩衝 ([\d.]+) 秒音訊$/, 'Preparing stream: $1 s of audio buffered'],
@@ -464,10 +463,55 @@
     [/^國家\/地區: (\w+) \| 連線就緒$/, 'Country/region: $1 | connection ready'],
   ];
 
+  // ---------------- 訊息模板（‖ 代表程式插值處，編譯成 ^…$ regex） ----------------
+  // 中文模板裡的 ‖ → (.+?)；英文模板的 ‖ 依序對應 $1、$2…。
+  // 較長的 Toast / 狀態文案收錄在 i18n-messages-en.js（window.I18N_MESSAGE_TEMPLATES）。
+  const PH = '‖';
+  const escapeLiteral = (ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  function templateToRegex(tpl) {
+    let out = '^';
+    for (const ch of tpl) out += (ch === PH) ? '(.+?)' : escapeLiteral(ch);
+    return new RegExp(out + '$');
+  }
+  function templateToReplacement(tpl) {
+    let n = 0, out = '';
+    for (const ch of tpl) {
+      if (ch === PH) { out += '$' + (++n); continue; }
+      out += ch.replace(/\$/g, '$$$$');
+    }
+    return out;
+  }
+  const placeholderCount = (tpl) => (String(tpl).match(/‖/g) || []).length;
+  // 字面文字較長的模板先試，避免「‖ 首歌曲 · 總時長 ‖」這種短模板把更長的句子吞掉。
+  const literalLength = (tpl) => String(tpl).length - placeholderCount(tpl);
+  const MESSAGE_TEMPLATES = [
+    ['共 ‖ 個播放清單（曲目依儲存的順序播放）', '‖ playlists (tracks play in the saved order)'],
+    ['最近播放的 ‖ 首歌曲 (依時間由最近到最久排序)', 'Your last ‖ tracks (newest first)'],
+    ['‖ 首歌曲 · 總時長 ‖', '‖ tracks · total length ‖'],
+    ['已緩衝 ‖ 秒音訊 / 目標 ‖ 秒 · ‖ MB · 已等 ‖ 秒', 'Buffered ‖ s of audio / target ‖ s · ‖ MB · waiting ‖ s'],
+    ['已等 ‖ 秒', 'waiting ‖ s'],
+    ['串流準備中：已緩衝 ‖ 秒音訊', 'Preparing stream: ‖ s of audio buffered'],
+    ['高解析度即時升頻：‖', 'Real-time high-resolution upsampling: ‖'],
+    ['參數化等化器：‖ 段作用中', 'Parametric EQ: ‖ bands active'],
+    ['參數化等化器：未啟用', 'Parametric EQ: off'],
+    ['分割式頻域卷積：IR 作用中', 'Partitioned frequency-domain convolution: IR active'],
+    ['分割式頻域卷積：未載入 IR', 'Partitioned frequency-domain convolution: no IR loaded'],
+    ['輸出至 ‖', 'Output to ‖'],
+    ['輸出至本機預設音訊裝置', 'Output to the local default audio device'],
+    ['自訂濾波器：‖', 'Custom filter: ‖'],
+    ['掃描完成：‖', 'Scan complete: ‖'],
+    ['國家/地區: ‖ | 連線就緒', 'Country/region: ‖ | connection ready'],
+  ].concat(Array.isArray(window.I18N_MESSAGE_TEMPLATES) ? window.I18N_MESSAGE_TEMPLATES : [])
+    .filter((pair) => Array.isArray(pair) && typeof pair[0] === 'string' && typeof pair[1] === 'string')
+    // 插值少、字面長的先試，避免被較寬鬆的模板抢先匹配
+    .sort((a, b) => (literalLength(b[0]) - literalLength(a[0])) || (placeholderCount(a[0]) - placeholderCount(b[0])));
+  const MESSAGE_PATTERNS = MESSAGE_TEMPLATES.map(([zh, en]) => [templateToRegex(zh), templateToReplacement(en)]);
+
   // ---------------- 通用統計字串（「共 N 張專輯，N 位演出者…」）逐段翻譯 ----------------
   // 單位寫成 [單數, 複數]，數量為 1 時用單數，避免 "1 items" 這種怪英文。
   const UNIT_MAP = {
-    '張專輯': ['album', 'albums'], '位演出者': ['artist', 'artists'], '首曲目': ['track', 'tracks'],
+    '張專輯': ['album', 'albums'], '張作品': ['album', 'albums'], '首歌曲': ['track', 'tracks'],
+    '首曲目': ['track', 'tracks'], '位演出者': ['artist', 'artists'],
     '種曲風': ['genre', 'genres'], '種格式': ['format', 'formats'],
     '個音樂曲風與流派': ['music style and genre', 'music styles and genres'],
     '個音樂風格與流派': ['music style and genre', 'music styles and genres'],
@@ -536,6 +580,9 @@
     if (!key || !CJK.test(key)) return null;
     if (I18N_TEXT[key] !== undefined) return I18N_TEXT[key];
     for (const [re, en] of I18N_PATTERNS) {
+      if (re.test(key)) return key.replace(re, en);
+    }
+    for (const [re, en] of MESSAGE_PATTERNS) {
       if (re.test(key)) return key.replace(re, en);
     }
     return translateCountSummary(key);
@@ -662,11 +709,25 @@
 
   window.I18N_TEXT = I18N_TEXT;
   window.I18N_PATTERNS = I18N_PATTERNS;
+  // confirm / alert 是原生對話框，內容不在 DOM 裡，只能攔截傳進去的訊息文字。
+  const nativeAlert = typeof window.alert === 'function' ? window.alert.bind(window) : null;
+  const nativeConfirm = typeof window.confirm === 'function' ? window.confirm.bind(window) : null;
+  function translateMessage(msg) {
+    const text = (msg === undefined || msg === null) ? '' : String(msg);
+    if (currentLang !== 'en') return text;
+    const translated = translateString(text);
+    return (typeof translated === 'string' && translated) ? translated : text;
+  }
+  window.alert = function (msg) { if (nativeAlert) nativeAlert(translateMessage(msg)); };
+  window.confirm = function (msg) { return nativeConfirm ? nativeConfirm(translateMessage(msg)) : false; };
+
   window.I18N = {
     getLanguage: () => currentLang,
     setLanguage: (lang) => applyLanguage(lang),
     applyLanguage: applyLanguage,
     translate: translateString,
+    // Toast / confirm / alert 這類不在 DOM 裡的訊息，用這個翻（找不到就回原字串）
+    translateMessage: translateMessage,
     refresh: () => { applyToHtmlBlocks(); walk(document.body); },
     isEnglish: () => currentLang === 'en',
     // 除錯用：列出元素內各文字節點與其原文記錄

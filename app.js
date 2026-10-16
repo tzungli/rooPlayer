@@ -9610,6 +9610,10 @@ function updateRepeatUI() {
 // Audiophile Floating Toast
 let toastTimer = null;
 function showToast(message) {
+  // 英文介面下把 Toast 訊息先翻好再顯示（找不到對應文案就保持原文）
+  if (window.I18N && window.I18N.isEnglish && window.I18N.isEnglish()) {
+    try { message = window.I18N.translate(message) || message; } catch (e) {}
+  }
   let toastEl = document.getElementById('appToast');
   if (!toastEl) {
     toastEl = document.createElement('div');
@@ -11188,6 +11192,31 @@ async function runLanguageSelfTest() {
     const storedEn = localStorage.getItem('rooplayer_language');
     if (storedEn === 'en') ok('語言偏好寫入 localStorage', `rooplayer_language=${storedEn}`);
     else bad('語言偏好寫入 localStorage', `stored=${storedEn}`);
+
+    // --- Toast 訊息與 confirm 對話框也跟著換語言（不在 DOM 裡的訊息走 translateMessage） ---
+    try { showToast('🗑️ 已清空播放紀錄'); } catch (e) {}
+    await sleep(120);
+    const toastPlain = textOf('#appToast');
+    if (toastPlain === '🗑️ Play history cleared') ok('Toast 訊息直接以英文顯示', toastPlain);
+    else bad('Toast 訊息直接以英文顯示', String(toastPlain));
+
+    try { showToast('🛠️ 已建立自訂濾波器「測試濾波器」並套用'); } catch (e) {}
+    await sleep(120);
+    const toastNamed = textOf('#appToast');
+    if (toastNamed && toastNamed.startsWith('🛠️ Created custom filter') && toastNamed.includes('測試濾波器')) {
+      ok('含動態內容的 Toast 翻譯成英文，濾波器名稱等資料保持原文', toastNamed);
+    } else {
+      bad('含動態內容的 Toast 翻譯成英文，濾波器名稱等資料保持原文', String(toastNamed));
+    }
+
+    const confirmText = window.I18N.translateMessage('確定要清空所有最近播放紀錄嗎？');
+    const confirmLong = window.I18N.translateMessage('目前播放隊列是空的：先播放專輯或曲目，再按「儲存目前隊列」。');
+    const unknownText = window.I18N.translateMessage('這是一段沒有收錄在詞彙表裡的中文句子');
+    if (confirmText === 'Clear all play history?' && /^The queue is empty/.test(confirmLong || '') && unknownText === '這是一段沒有收錄在詞彙表裡的中文句子') {
+      ok('confirm / alert 訊息翻譯，詞彙表沒收的維持中文', `${confirmText} / ${confirmLong} / ${unknownText}`);
+    } else {
+      bad('confirm / alert 訊息翻譯，詞彙表沒收的維持中文', `${confirmText} / ${confirmLong} / ${unknownText}`);
+    }
 
     try { window.electronAPI.captureStep(33, 'English UI'); } catch (err) {}
     await sleep(200);
