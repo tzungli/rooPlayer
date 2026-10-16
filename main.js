@@ -385,6 +385,7 @@ function runCaptureSequence() {
         // 渲染端發 33（English 介面）、34（繁體中文介面）兩個截圖點，最後發 35（測試報告）
         const reportPromise = waitRendererInfo(35, 120000);
         const langShots = [
+          { signal: 36, file: 'language-menu-open.png', label: '語言選單開啟' },
           { signal: 33, file: 'language-english.png', label: 'English 介面' },
           { signal: 34, file: 'language-chinese.png', label: '繁體中文介面' },
         ];

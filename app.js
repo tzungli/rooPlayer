@@ -651,26 +651,43 @@ function setupLanguageControls() {
   const btn = document.getElementById('btnLanguageToggle');
   const menu = document.getElementById('languageMenu');
 
+  const closeLanguageMenu = () => { if (menu) menu.style.display = 'none'; };
+  // 選單是 body 層級浮層：依按鈕位置算出 left / top，並保證不會超出視窗
+  const openLanguageMenu = () => {
+    if (!btn || !menu) return;
+    menu.style.display = 'block';
+    const rect = btn.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    // 按鈕在標題列內：選單要落到標題列下方，否則會蓋住標題列
+    const titlebarEl = document.getElementById('titlebar');
+    const titlebarBottom = titlebarEl ? titlebarEl.getBoundingClientRect().bottom : rect.bottom;
+    const anchorTop = Math.max(rect.bottom, titlebarBottom);
+    const left = Math.max(8, Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+    const top = Math.max(8, Math.min(anchorTop + 6, window.innerHeight - menuRect.height - 8));
+    menu.style.left = Math.round(left) + 'px';
+    menu.style.top = Math.round(top) + 'px';
+  };
+
   if (btn && menu) {
-    menu.style.display = 'none';
+    closeLanguageMenu();
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      menu.style.display = (menu.style.display === 'none' || !menu.style.display) ? 'block' : 'none';
+      if (menu.style.display === 'block') closeLanguageMenu(); else openLanguageMenu();
     });
     menu.addEventListener('click', (e) => e.stopPropagation());
     document.querySelectorAll('#languageMenu .language-option').forEach((opt) => {
       opt.addEventListener('click', () => {
-        menu.style.display = 'none';
+        closeLanguageMenu();
         const lang = opt.getAttribute('data-lang-option');
         if (lang === 'en' || lang === 'zh-TW') window.I18N.setLanguage(lang);
       });
     });
-    document.addEventListener('click', () => {
-      if (menu.style.display !== 'none') menu.style.display = 'none';
-    });
+    document.addEventListener('click', closeLanguageMenu);
+    window.addEventListener('resize', closeLanguageMenu);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLanguageMenu(); });
   }
 
-  // 先把既有介面換成上次選擇的語言（不觸發重新渲染）
+  // 先把介面換成上次選擇的語言；沒選過的話由 i18n.js 依系統地區決定預設值（不觸發重新渲染）
   window.I18N.applyLanguage(window.I18N.getLanguage(), { notify: false });
   updateLanguageControlUI();
 }
@@ -11132,15 +11149,52 @@ async function runLanguageSelfTest() {
       bad('語言選擇在深色/淺色按鈕右方，選項為 繁體中文 / English', `toRight=${toRight} inTitlebar=${inTitlebar} opts=${opts.join(',')}`);
     }
 
-    // --- 2. 選 English：選單、表格、說明頁都變成英文 ---
+    // --- 2. 語言選單不會擋住視窗：body 層級浮層、出現在按鈕下方、完整在視窗內 ---
+    window.I18N.setLanguage('zh-TW');
+    await sleep(600);
     const navAlbumsZh = textOf('#sidebar .nav-item[data-view="albums"] .nav-label');
     const demoTrackName = (() => {
       const t = (state.tracks && state.tracks[0]) ? String(state.tracks[0].title || '') : '';
       return t;
     })();
-    window.I18N.setLanguage('en');
-    await sleep(700);
 
+    if (langBtn) langBtn.click();
+    await sleep(200);
+    const menuStyle = menu ? window.getComputedStyle(menu) : null;
+    const menuOpenDisplay = menuStyle ? menuStyle.display : 'none';
+    const menuPosition = menuStyle ? menuStyle.position : '';
+    const menuR = menu ? menu.getBoundingClientRect() : null;
+    const btnR = langBtn ? langBtn.getBoundingClientRect() : null;
+    const titlebarEl = document.getElementById('titlebar');
+    const titlebarBottom = titlebarEl ? titlebarEl.getBoundingClientRect().bottom : 48;
+    const insideViewport = !!(menuR && menuR.left >= -1 && menuR.top >= -1 && menuR.right <= window.innerWidth + 1 && menuR.bottom <= window.innerHeight + 1);
+    const belowTitlebar = !!(menuR && menuR.top >= titlebarBottom - 1);
+    const belowButton = !!(menuR && btnR && menuR.top >= btnR.bottom - 1);
+    const parentIsBody = !!(menu && menu.parentElement === document.body);
+    const geoDetail = menuR
+      ? `display=${menuOpenDisplay} position=${menuPosition} 選單 ${Math.round(menuR.left)},${Math.round(menuR.top)}–${Math.round(menuR.right)},${Math.round(menuR.bottom)}｜按鈕底 ${Math.round(btnR ? btnR.bottom : 0)}｜標題列底 ${Math.round(titlebarBottom)}｜視窗 ${window.innerWidth}×${window.innerHeight}`
+      : `display=${menuOpenDisplay} position=${menuPosition}（量不到選單）`;
+    if (menuOpenDisplay === 'block' && menuPosition === 'fixed' && parentIsBody && insideViewport && belowTitlebar && belowButton) {
+      ok('語言選單是 body 層級浮層，出現在按鈕下方且完整在視窗內（不被標題列裁切、不擋住視窗）', geoDetail);
+    } else {
+      bad('語言選單是 body 層級浮層，出現在按鈕下方且完整在視窗內（不被標題列裁切、不擋住視窗）', geoDetail);
+    }
+
+    try { window.electronAPI.captureStep(36, 'language menu open'); } catch (err) {}
+    await sleep(150);
+
+    const enOption = document.querySelector('#languageMenu .language-option[data-lang-option="en"]');
+    if (enOption) enOption.click();
+    await sleep(700);
+    const menuClosedDisplay = menu ? window.getComputedStyle(menu).display : 'none';
+    const langAfterOption = window.I18N.getLanguage();
+    if (menuClosedDisplay === 'none' && langAfterOption === 'en') {
+      ok('點選 English 後選單自動關閉並套用語言', `display=${menuClosedDisplay} lang=${langAfterOption}`);
+    } else {
+      bad('點選 English 後選單自動關閉並套用語言', `display=${menuClosedDisplay} lang=${langAfterOption}`);
+    }
+
+    // --- 3. 選 English：選單、表格、說明頁都變成英文 ---
     const navAlbumsEn = textOf('#sidebar .nav-item[data-view="albums"] .nav-label');
     const navGenresEn = textOf('#sidebar .nav-item[data-view="genres"] .nav-label');
     const navPlaylistsEn = textOf('#sidebar .nav-item[data-view="playlists"] .nav-label');
@@ -11192,6 +11246,35 @@ async function runLanguageSelfTest() {
     const storedEn = localStorage.getItem('rooplayer_language');
     if (storedEn === 'en') ok('語言偏好寫入 localStorage', `rooplayer_language=${storedEn}`);
     else bad('語言偏好寫入 localStorage', `stored=${storedEn}`);
+
+    // --- 預設語言：只有台灣 / 中國 / 香港預設中文，其他地區預設英文；選過的語言一律記住 ---
+    const detectCases = [
+      [['zh-TW', 'zh-Hant', 'en-US'], 'Asia/Taipei', 'zh-TW'],
+      [['zh-CN', 'zh-Hans-CN'], 'Asia/Shanghai', 'zh-TW'],
+      [['zh-HK', 'en-GB'], 'Asia/Hong_Kong', 'zh-TW'],
+      [['en-US'], 'Asia/Taipei', 'zh-TW'],
+      [['en-US', 'zh-TW'], 'America/Los_Angeles', 'zh-TW'],
+      [['en-US'], 'America/New_York', 'en'],
+      [['ja-JP'], 'Asia/Tokyo', 'en'],
+      [['de-DE', 'en-GB'], 'Europe/Berlin', 'en'],
+      [['ko-KR'], 'Asia/Seoul', 'en'],
+      [['zh'], 'Europe/London', 'en'],
+    ];
+    const detectBad = [];
+    for (const c of detectCases) {
+      window.__I18N_TEST_LOCALES = c[0];
+      window.__I18N_TEST_TIMEZONE = c[1];
+      const got = window.I18N.detectSystemLanguage();
+      if (got !== c[2]) detectBad.push(`${c[0].join('+')} @ ${c[1]} → ${got}（應為 ${c[2]}）`);
+    }
+    delete window.__I18N_TEST_LOCALES;
+    delete window.__I18N_TEST_TIMEZONE;
+    const remembered = window.I18N.resolveInitialLanguage();
+    if (detectBad.length === 0 && remembered === storedEn) {
+      ok('預設語言只對台灣 / 中國 / 香港用中文，其他地區英文，且記住已選過的語言', `${detectCases.length} 個地區案例全對；已選 en 後 resolveInitialLanguage() = ${remembered}`);
+    } else {
+      bad('預設語言只對台灣 / 中國 / 香港用中文，其他地區英文，且記住已選過的語言', `錯誤案例：${detectBad.join(' ; ') || '無'}；resolveInitialLanguage()=${remembered}（應為 ${storedEn}）`);
+    }
 
     // --- Toast 訊息與 confirm 對話框也跟著換語言（不在 DOM 裡的訊息走 translateMessage） ---
     try { showToast('🗑️ 已清空播放紀錄'); } catch (e) {}

@@ -9,7 +9,11 @@
  * 4) I18N_DOC_EN（i18n-docs-en.js）：說明頁各段落以 data-i18n-html="key" 標記，整段換成英文。
  * 5) MutationObserver：動態渲染出來的中文（列表、副標、按鈕）一樣會被翻譯，
  *    所以不需要把 app.js 裡每個字串都改成 t()。
- * 語言選擇存在 localStorage（rooplayer_language），預設繁體中文。
+ * 6) I18N_MESSAGE_TEMPLATES（i18n-messages-en.js）：Toast / confirm / 狀態文字這類含插值的訊息，
+ *    用「‖」當插值佔位符對照英文，編譯成 ^…$ 的 regex；原生 alert / confirm 直接攔截訊息文字再翻。
+ * 預設語言：使用者選過的一律記住（localStorage rooplayer_language）；沒選過時，只有系統地區是
+ * 台灣 / 中國 / 香港（zh-TW、zh-HK、zh-CN 語言標籤，或台北、香港、上海等時區）預設繁體中文，
+ * 其他地區預設 English。
  */
 (function () {
   'use strict';
@@ -563,12 +567,53 @@
   const originalAttr = new WeakMap(); // 元素 → { attr: 原文 }
   const originalHtml = new Map();     // data-i18n-html 元素 key → 原文 innerHTML
 
-  let currentLang = (() => {
+  // 預設語言：使用者選過的一律記住；沒選過時，只有台灣 / 中國 / 香港預設繁體中文，其他地區預設英文。
+  const ZH_REGIONS = ['tw', 'hk', 'cn'];
+  // 台灣、中國、香港常見的 IANA 時區（Chromium 會照系統時區回報）
+  const ZH_REGION_TIMEZONES = [
+    'taipei', 'taichung', 'kaohsiung', 'taoyuan', 'tainan', 'hualien', 'taitung', 'kinmen', 'matsu',
+    'hong kong', 'kowloon',
+    'shanghai', 'beijing', 'chongqing', 'guangzhou', 'shenzhen', 'urumqi', 'kashgar', 'harbin',
+    'changchun', 'chengdu', 'wuhan', 'xiamen', 'hangzhou', 'kunming', 'dalian', 'tianjin',
+  ];
+  function safeTimezone() {
+    try { return String((Intl.DateTimeFormat() || {}).resolvedOptions().timeZone || ''); } catch (e) { return ''; }
+  }
+  // 測試可用 window.__I18N_TEST_LOCALES / window.__I18N_TEST_TIMEZONE 覆寫系統資訊
+  function detectSystemLanguage() {
+    const testLocales = Array.isArray(window.__I18N_TEST_LOCALES) ? window.__I18N_TEST_LOCALES : null;
+    const testTimezone = typeof window.__I18N_TEST_TIMEZONE === 'string' ? window.__I18N_TEST_TIMEZONE : null;
+    const tags = [];
     try {
-      const saved = localStorage.getItem(LANG_KEY);
-      return saved === 'en' ? 'en' : 'zh-TW';
-    } catch (e) { return 'zh-TW'; }
-  })();
+      if (testLocales) tags.push.apply(tags, testLocales);
+      else {
+        const nav = window.navigator || {};
+        if (Array.isArray(nav.languages)) tags.push.apply(tags, nav.languages);
+        if (nav.language) tags.push(nav.language);
+      }
+    } catch (e) {}
+    const joined = tags.join(' ').toLowerCase().replace(/_/g, '-');
+    const timezone = String(testTimezone || safeTimezone()).toLowerCase().replace(/_/g, ' ');
+
+    const zhRegion = ZH_REGIONS.some((region) => {
+      const re = new RegExp('zh(?:-[a-z]+)?-' + region + '(?:-|$|\\s)');
+      return re.test(joined);
+    });
+    const zoneMatch = ZH_REGION_TIMEZONES.some((hint) => timezone.indexOf(hint) !== -1);
+    if (zhRegion || zoneMatch) return 'zh-TW';
+    return 'en';
+  }
+
+  function resolveInitialLanguage() {
+    let saved = null;
+    try { saved = localStorage.getItem(LANG_KEY); } catch (e) {}
+    if (saved === 'en' || saved === 'zh-TW') return saved; // 使用者選過的語言：一律記住，不再受系統地區影響
+    const detected = detectSystemLanguage();
+    try { localStorage.setItem(LANG_KEY, detected); } catch (e) {}
+    return detected;
+  }
+
+  let currentLang = resolveInitialLanguage();
 
   const SKIP_TAGS = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, NOSCRIPT: 1, HEAD: 1, TITLE: 1 };
   const TRANSLATE_ATTRS = ['title', 'placeholder', 'aria-label'];
@@ -723,6 +768,10 @@
 
   window.I18N = {
     getLanguage: () => currentLang,
+    // 依系統地區推得的預設語言（使用者沒選過時才會套用）
+    detectSystemLanguage: detectSystemLanguage,
+    // 記憶的偏好優先；沒有偏好才用 detectSystemLanguage()
+    resolveInitialLanguage: resolveInitialLanguage,
     setLanguage: (lang) => applyLanguage(lang),
     applyLanguage: applyLanguage,
     translate: translateString,

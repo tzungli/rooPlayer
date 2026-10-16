@@ -396,4 +396,5 @@ window.I18N_MESSAGE_TEMPLATES = [
   ['📁 本機已有', '📁 Already in your library'],
   ['IR 無法讀取（‖），播放將自動略過卷積： ‖', 'IR cannot be read (‖); playback will skip convolution automatically: ‖'],
   ['共 ‖ 個音樂風格與流派，以專輯風格探索您的發燒音樂庫', '‖ music styles and genres — explore your audiophile library by album style'],
+  ['共 ‖ 個音樂曲風與流派，以專輯風格探索您的發燒音樂庫', '‖ music styles and genres — explore your audiophile library by album style'],
 ];

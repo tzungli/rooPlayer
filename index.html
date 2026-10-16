@@ -38,11 +38,6 @@
         <button id="btnLanguageToggle" class="icon-btn language-toggle-btn" title="選擇介面語言 Language">
           <span id="languageIcon">🌐</span> <span id="languageLabel">繁體中文</span> <span class="lang-caret">▾</span>
         </button>
-        <div class="language-menu" id="languageMenu">
-          <div class="language-menu-title">介面語言 / Interface language</div>
-          <button class="language-option" data-lang-option="zh-TW">繁體中文</button>
-          <button class="language-option" data-lang-option="en">English</button>
-        </div>
       </div>
       <div class="window-controls">
         <button id="btnMinimize" class="win-btn" title="最小化">─</button>
@@ -1482,7 +1477,7 @@
             </p>
 
             <p class="section-intro-text" data-i18n-html="about.manual.langnote">
-              <strong>介面語言</strong>：右上角「深色/淺色」按鈕右方的 <strong>🌐 語言選擇</strong>，可切換「繁體中文 / English」；選單、按鈕、表格欄頭、滑鼠提示、提示訊息與確認對話框，以及本說明頁全部跟著切換，並記憶個人偏好。曲目名稱、演出者名稱、檔案路徑與自訂濾波器名稱屬資料，一律保持原文。
+              <strong>介面語言</strong>：右上角「深色/淺色」按鈕右方的 <strong>🌐 語言選擇</strong>，可切換「繁體中文 / English」；選單、按鈕、表格欄頭、滑鼠提示、提示訊息與確認對話框，以及本說明頁全部跟著切換。首次使用時預設語言依系統語言與時區判斷：<strong>只有台灣、中國、香港預設繁體中文，其他地區預設 English</strong>；一旦您手動選擇過，之後一律沿用您選過的語言。曲目名稱、演出者名稱、檔案路徑與自訂濾波器名稱屬資料，一律保持原文。
             </p>
 
             <div class="manual-modules-grid">
@@ -2525,6 +2520,13 @@
 
   <!-- Hidden native HTML5 Audio element -->
   <audio id="nativeAudio"></audio>
+
+  <!-- 語言選單放在 body 層級：#titlebar 有 contain: paint，放在標題列內會被裁切擋住 -->
+  <div class="language-menu" id="languageMenu" data-i18n-skip>
+    <div class="language-menu-title">介面語言 / Interface language</div>
+    <button class="language-option" data-lang-option="zh-TW">繁體中文</button>
+    <button class="language-option" data-lang-option="en">English</button>
+  </div>
 
   <script src="genre-utils.js"></script>
   <script src="tidal-service.js"></script>

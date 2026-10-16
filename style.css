@@ -3608,16 +3608,16 @@ body.table-col-resizing * {
   opacity: 0.55;
 }
 
+/* 語言選單是 body 層級的浮層，位置由 app.js 依按鈕位置設定（left / top） */
 .language-menu {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 12px;
+  position: fixed;
+  display: none;
   min-width: 210px;
   background: var(--modal-bg);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 6px;
-  z-index: 4000;
+  z-index: 6000;
   box-shadow: var(--card-shadow);
 }
 

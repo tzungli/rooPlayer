@@ -16,7 +16,7 @@
             `,
 
     'about.manual.langnote': `
-              <strong>Interface language</strong>: the <strong>🌐 language button</strong> to the right of the dark/light button in the top bar switches between 繁體中文 and English. Every menu, button, table header, tooltip, toast message and confirmation dialog — and this manual — follow the selection, and your choice is remembered. Track titles, artist names, file paths and your own custom filter names are never translated.
+              <strong>Interface language</strong>: the <strong>🌐 language button</strong> to the right of the dark/light button in the top bar switches between 繁體中文 and English. Every menu, button, table header, tooltip, toast message and confirmation dialog — and this manual — follow the selection. On first run the default language follows your system language and time zone: <strong>only Taiwan, China and Hong Kong default to Traditional Chinese; everywhere else defaults to English</strong>. Once you choose a language yourself, that choice is always kept. Track titles, artist names, file paths and your own custom filter names are never translated.
             `,
 
     'about.manual.m1': `<div class="manual-item-header">
