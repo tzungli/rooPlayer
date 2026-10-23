@@ -336,6 +336,9 @@ class DlnaManager extends EventEmitter {
       'Access-Control-Allow-Origin': '*'
     };
 
+    const parsedRange = parseHttpRange(range, totalSize);
+    console.log(`[DLNA Stream] ${req.method} "${path.basename(filePath)}" (${contentType}, size=${totalSize}) Range=${range || 'none'}${parsedRange ? ` -> [${parsedRange.start}-${parsedRange.end}]` : ''}`);
+
     if (req.method === 'HEAD') {
       res.writeHead(200, {
         ...commonHeaders,
@@ -357,10 +360,17 @@ class DlnaManager extends EventEmitter {
     const isProgressive = session && !session.isCompleted && ProgressiveFileStream;
 
     if (range) {
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
-      const chunkSize = (end - start) + 1;
+      if (!parsedRange || parsedRange.unsatisfiable) {
+        res.writeHead(416, {
+          'Content-Range': `bytes */${totalSize}`,
+          'Content-Type': contentType,
+          'Accept-Ranges': 'bytes'
+        });
+        res.end();
+        return;
+      }
+
+      const { start, end, chunkSize } = parsedRange;
 
       res.writeHead(206, {
         ...commonHeaders,
@@ -1020,6 +1030,7 @@ class DlnaManager extends EventEmitter {
     this.currentDspOptions = dspOptions;
     this.trackPlayTimestamp = Date.now();
     this.hasStartedPlaying = false;
+    const wasPlaying = (this.playbackState === 'PLAYING');
     this.playbackState = 'PLAYING';
 
     // 從这一刻起回報準備進度（引擎建立 session、記憶體緩衝、裝置開播）
@@ -1031,7 +1042,7 @@ class DlnaManager extends EventEmitter {
     // 2. 智慧平滑切換（消除無謂的 150ms 盲等）：
     // 若設備本來就處於 STOPPED 或 NO_MEDIA_PRESENT，直接略過 Stop 指令；
     // 僅在播放中切歌時發送 Stop，並將緩衝等待從 150ms 最佳化至 40ms，使切歌反應提升數倍！
-    if (this.playbackState === 'PLAYING') {
+    if (wasPlaying) {
       try {
         await this.sendSoapRequest(
           dev.avControlUrl,
@@ -1279,6 +1290,7 @@ class DlnaManager extends EventEmitter {
           `<InstanceID>0</InstanceID><CurrentURI>${escapeXml(streamUrl)}</CurrentURI><CurrentURIMetaData>${metaPayload}</CurrentURIMetaData>`
         );
         uriSuccess = true;
+        console.log(`[DLNA] SetAVTransportURI accepted by "${dev.name || dev.id}" -> ${streamUrl}`);
         break;
       } catch (err) {
         lastUriError = err;
@@ -1339,6 +1351,7 @@ class DlnaManager extends EventEmitter {
           `<InstanceID>0</InstanceID><Speed>1</Speed>`
         );
         playSuccess = true;
+        console.log(`[DLNA] Play action accepted by "${dev.name || dev.id}"`);
         break;
       } catch (err) {
         lastPlayError = err;
@@ -1729,5 +1742,39 @@ const FALLBACK_JPEG = Buffer.from([
   0x09, 0x0a, 0x0b, 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f,
   0x00, 0xbf, 0x80, 0xff, 0xd9
 ]);
+
+function parseHttpRange(rangeHeader, totalSize) {
+  if (!rangeHeader || typeof rangeHeader !== 'string' || !rangeHeader.startsWith('bytes=')) return null;
+  const raw = rangeHeader.slice(6).trim();
+  const part = raw.split(',')[0].trim();
+  const dashIdx = part.indexOf('-');
+  if (dashIdx === -1) return null;
+
+  const startStr = part.slice(0, dashIdx).trim();
+  const endStr = part.slice(dashIdx + 1).trim();
+
+  let start, end;
+  if (startStr === '') {
+    const suffix = parseInt(endStr, 10);
+    if (!Number.isFinite(suffix) || suffix <= 0) return null;
+    start = Math.max(0, totalSize - suffix);
+    end = totalSize - 1;
+  } else if (endStr === '') {
+    start = parseInt(startStr, 10);
+    if (!Number.isFinite(start) || start < 0) return null;
+    end = totalSize - 1;
+  } else {
+    start = parseInt(startStr, 10);
+    end = parseInt(endStr, 10);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) return null;
+    end = Math.min(end, totalSize - 1);
+  }
+
+  if (start >= totalSize) {
+    return { unsatisfiable: true, totalSize };
+  }
+
+  return { start, end, chunkSize: end - start + 1, totalSize };
+}
 
 module.exports = DlnaManager;
