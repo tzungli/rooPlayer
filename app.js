@@ -142,18 +142,26 @@ function localDspActive() {
 // filter-plugins/ 放一個檔案，本檔不需要任何修改。IPC 不可用时退回內建清單。
 let filterPlugins = null;
 const FALLBACK_FILTER_PLUGINS = [
+  { id: 'pure-flat', label: '純真還原 FIR (極致平坦)', sound: '通帶 0~21.5kHz 絕對平坦（漣波 < 0.0001dB），零染色純淨還原，呈現錄音室母帶真實原貌', kind: 'fir' },
   { id: 'linear', label: '線性相位 (零相位失真)', sound: '零相位失真，定位精準', kind: 'interp' },
   { id: 'minimum', label: '最小相位 (零預響鈴)', sound: '零預響鈴，打擊瞬態凌厲爆發', kind: 'interp' },
   { id: 'intermediate', label: '混和 / 緩衰減 (溫潤類比)', sound: '極低預響鈴與自然高頻緩衰，溫潤類比聽感', kind: 'interp' },
   { id: 'gauss-long', label: '高斯長脈衝 FIR (極低鈴振)', sound: '通帶平坦、極低鈴振與鏡像能量', kind: 'fir' },
   { id: 'gauss-min', label: '高斯最小相位 FIR (零預響鈴)', sound: '預響鈴嚴格為零、瞬態凌厲（些微後衝）', kind: 'fir' },
   { id: 'poly-ext2', label: 'EXT2 近似 FIR (超寬過渡帶)', sound: '通帶完全平坦無漣波、高頻延伸自然；22k 以上有些許鏡像泄漏（不可聽）', kind: 'fir' },
-  { id: 'pure-flat', label: '純真還原 FIR (極致平坦)', sound: '通帶 0~21.5kHz 絕對平坦（漣波 < 0.0001dB），零染色純淨還原，呈現錄音室母帶真實原貌', kind: 'fir' },
   { id: 'hqp-ps-ext2', label: 'PS-EXT2 直譯 FIR (陡峭滾降+極深止帶)', sound: '陡峭滾降、極深止帶；鏡像泄漏僅在超聲頻（不可聽）', kind: 'fir' }
 ];
 
 function filterPluginList() {
-  return (filterPlugins && filterPlugins.length) ? filterPlugins : FALLBACK_FILTER_PLUGINS;
+  const list = (filterPlugins && filterPlugins.length) ? filterPlugins : FALLBACK_FILTER_PLUGINS;
+  const idx = list.findIndex(p => p.id === 'pure-flat');
+  if (idx > 0) {
+    const copy = [...list];
+    const [pf] = copy.splice(idx, 1);
+    copy.unshift(pf);
+    return copy;
+  }
+  return list;
 }
 
 function isValidFilterPhaseId(id) {
@@ -9273,6 +9281,26 @@ function initDspControls() {
       if (dspActivePhaseHint) dspActivePhaseHint.textContent = btn.textContent;
       renderUserFilterChips();
       triggerLiveDspUpdate();
+    });
+  }
+
+  // 濾波器相位「📖 搭配指南」連結按鈕：點擊後關閉訊號路徑並平滑捲動至說明頁之評測報告
+  const btnFilterGuide = document.getElementById('btnFilterGuideLink');
+  if (btnFilterGuide) {
+    btnFilterGuide.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const modal = document.getElementById('signalPathModal');
+      if (modal) modal.style.display = 'none';
+      navigateTo('about');
+      setTimeout(() => {
+        const target = document.getElementById('aboutSectionFilterReport');
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          target.classList.add('highlight-flash');
+          setTimeout(() => target.classList.remove('highlight-flash'), 2200);
+        }
+      }, 350);
     });
   }
 

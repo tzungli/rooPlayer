@@ -284,6 +284,8 @@
     'PCM 升頻取樣規格 (PCM Upsampling)': 'PCM upsampling target (PCM Upsampling)',
     '調變器階數 (Modulator Order)': 'Modulator order',
     '濾波器相位 (Filter Phase)': 'Filter phase',
+    '📖 搭配指南': '📖 Guide',
+    '檢視各濾波器相位的實測規格、音質影響與發燒搭配指南': 'View benchmark specs, acoustic impact and matching guide for each filter phase',
     '線性相位': 'Linear phase',
     '線性相位 (零相位失真)': 'Linear phase (zero phase distortion)',
     '最小相位 (零預響鈴)': 'Minimum phase (no pre-ringing)',

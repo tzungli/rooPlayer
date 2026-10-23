@@ -554,7 +554,14 @@ function registerFilterPlugin(desc) {
 
 // 給 UI 的序列化描述（不含函數，可安全經 IPC 傳遞）
 function listFilterPlugins() {
-  return [...FILTER_REGISTRY.values()].map(p => ({ id: p.id, label: p.label, sound: p.sound, kind: p.kind, builtin: p.builtin, dsdSafe: p.dsdSafe }));
+  const list = [...FILTER_REGISTRY.values()].map(p => ({ id: p.id, label: p.label, sound: p.sound, kind: p.kind, builtin: p.builtin, dsdSafe: p.dsdSafe }));
+  // 將「純真還原 FIR (pure-flat)」排在所有濾波器的最前面
+  const idx = list.findIndex(p => p.id === 'pure-flat');
+  if (idx > 0) {
+    const [pureFlat] = list.splice(idx, 1);
+    list.unshift(pureFlat);
+  }
+  return list;
 }
 
 function getFilterPlugin(id) { return FILTER_REGISTRY.get(id) || null; }

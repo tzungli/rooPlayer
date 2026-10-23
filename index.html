@@ -2242,7 +2242,10 @@
               <!-- Filter Phase Selection (按鈕由濾波器插件註冊表動態生成，見 app.js renderFilterPhaseSelector) -->
               <div class="dsp-option-group" id="dspPhaseGroup">
                 <div class="dsp-option-label">
-                  <span>濾波器相位 (Filter Phase)</span>
+                  <div style="display: inline-flex; align-items: center; gap: 6px;">
+                    <span>濾波器相位 (Filter Phase)</span>
+                    <button type="button" class="dsp-guide-link" id="btnFilterGuideLink" title="檢視各濾波器相位的實測規格、音質影響與發燒搭配指南">📖 搭配指南</button>
+                  </div>
                   <span class="dsp-hint-badge" id="dspActivePhaseHint">線性相位 (零相位失真)</span>
                 </div>
                 <div class="dsp-pill-selector" id="dspPhaseSelector"></div>
