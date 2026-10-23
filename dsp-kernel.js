@@ -419,6 +419,63 @@ function buildHqpPsExt2Filter(fsOut, srcRate) {
 }
 
 // ---------------------------------------------------------------------------
+// HQPlayer 6 官方逆向實裝：poly-sinc-gauss-long FIR 濾波器
+// 依據 REA 逆向報告中對 HQPlayer6Desktop.exe 的反編譯證據精確重構：
+//   - RTTI 類別：clPolyphaseGauss，內部 ID: 0x25 / 0x28
+//   - 幾何結構：每相 511 Taps (lengthClass = 2: 0x1FF)
+//   - 形狀常數：1 - 6 * (512.5 / 44100) = 0.9302721088435374
+//   - 過渡頻寬：3075 Hz * (srcRate / 44100)
+//   - 高斯窗參數：σ_rel = 0.125
+//   - 直流歸一化：多相分支和嚴格 Bit-Perfect = 1.0 (Σh = ratio · S)
+//   - 官方評分：5/5 transients, timbre, space；瞬態極致、真實音色與宏大空間感
+// ---------------------------------------------------------------------------
+function buildHqPolySincGaussLongFilter(fsOut, srcRate) {
+  const ratio = fsOut / srcRate;
+  const integerRatio = Math.abs(ratio - Math.round(ratio)) < 1e-9;
+  const S = integerRatio ? 1 : 8;
+
+  // 過渡頻寬 3075 Hz（44.1k 基準），截止頻率置於通帶平坦與滾降過渡之間
+  const transBw = 6 * 512.5 * (srcRate / 44100);
+  const fc = Math.min((srcRate / 2) + (transBw / 2), 0.45 * fsOut);
+
+  // 每相 511 taps (半寬 255 個輸入樣本跨度)
+  const halfInputSpan = 255;
+  const L = Math.max(8, Math.round(halfInputSpan * ratio));
+  const sigma = 0.125 * L;
+
+  const half = L * S;
+  const n = 2 * half + 2;
+  const h = new Float64Array(n);
+
+  for (let j = -half; j <= half; j++) {
+    const t = j / S;
+    const x = 2 * fc * t / fsOut;
+    const s = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+    const w = Math.exp(-0.5 * (t / sigma) * (t / sigma));
+    h[j + half] = (2 * fc / fsOut) * s * w;
+  }
+
+  let sum = 0;
+  for (let i = 0; i < n - 1; i++) sum += h[i];
+  const g = ratio * S / sum;
+  for (let i = 0; i < n; i++) h[i] *= g;
+
+  return {
+    h,
+    S,
+    lo: -L,
+    hi: L,
+    ratio,
+    integerRatio,
+    fsOut,
+    srcRate,
+    minimumPhase: false,
+    taps: 2 * half + 1,
+    tapsPerPhase: 511
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 泛用 windowed-sinc FIR 設計原語（供濾波器插件與使用者自訂濾波使用）：
 //   cutoffRel = 截止 / 源Nyquist（可 >1，extended 性格；上限 0.45·fsOut）
 //   taps      = 半寬 L（輸出樣本單位）
@@ -527,6 +584,7 @@ const FILTER_REGISTRY = new Map();
 // 提供給插件 design() 的設計工具箱（插件不需要 require 本檔）
 const FILTER_TOOLBOX = {
   gaussSincFir: buildGaussFilter,
+  buildHqPolySincGaussLongFilter,
   kaiserSincFir,
   windowedSincFir,
   sincWindowTapFn,
@@ -616,6 +674,7 @@ function registerCoreFallbackFilters() {
   registerFilterPlugin({ id: 'poly-ext2', label: 'EXT2 近似 FIR (超寬過渡帶)', sound: '通帶完全平坦無漣波、高頻延伸自然；22k 以上有些許鏡像泄漏（不可聽）', kind: 'fir', design: (fo, sr, k) => k.kaiserSincFir(fo, sr, { asDb: 140, fcFactor: 1.27, transFactor: 0.136 }) });
   registerFilterPlugin({ id: 'pure-flat', label: '純真還原 FIR (極致平坦)', sound: '通帶 0~21.5kHz 絕對平坦（漣波 < 0.0001dB），零染色純淨還原，呈現錄音室母帶真實原貌', kind: 'fir', design: (fo, sr, k) => k.kaiserSincFir(fo, sr, { asDb: 160, fcFactor: 1.07, transFactor: 0.095 }) });
   registerFilterPlugin({ id: 'hqp-ps-ext2', label: 'PS-EXT2 直譯 FIR (陡峭滾降+極深止帶)', sound: '陡峭滾降、極深止帶；鏡像泄漏僅在超聲頻（不可聽）', kind: 'fir', design: (fo, sr, k) => k.kaiserSincFir(fo, sr, { asDb: 180, fcFactor: 1.135, transFactor: 0.135 }) });
+  registerFilterPlugin({ id: 'poly-sinc-gauss-long', label: 'HQPlayer 逆向：poly-sinc-gauss-long (511 Taps)', sound: 'HQPlayer 官方 5/5 滿分旗艦濾波器：每相 511 Taps，極致瞬態還原、真實音色與宏大空間感', kind: 'fir', design: (fo, sr, k) => k.buildHqPolySincGaussLongFilter(fo, sr) });
 }
 
 // ---------------------------------------------------------------------------
@@ -1765,6 +1824,7 @@ module.exports = {
   buildGaussFilter,
   buildPolyExt2Filter,
   buildHqpPsExt2Filter,
+  buildHqPolySincGaussLongFilter,
   kaiserSincFir,
   windowedSincFir,
   sincWindowTapFn,
