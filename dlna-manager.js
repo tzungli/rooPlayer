@@ -1515,6 +1515,8 @@ class DlnaManager extends EventEmitter {
     this.stopPositionPolling();
     const sessionId = ++this._pollSessionCounter;
     let nearEndCount = 0;
+    let maxReportedSec = 0;
+    let trackEndedFired = false;
 
     this.positionTimer = setInterval(async () => {
       if (sessionId !== this._pollSessionCounter) {
@@ -1523,13 +1525,16 @@ class DlnaManager extends EventEmitter {
       }
       try {
         const info = await this.getPositionInfo(dev);
-        if (sessionId !== this._pollSessionCounter) return;
+        if (sessionId !== this._pollSessionCounter || trackEndedFired) return;
 
         const reportedSec = info.currentSec;
         const actualSec = (this.streamStartSec > 0) ? (this.streamStartSec + reportedSec) : reportedSec;
         const totalDurationSec = (this.currentTrack && this.currentTrack.duration > 0)
           ? this.currentTrack.duration
           : (info.durationSec > 0 ? (info.durationSec + (this.streamStartSec || 0)) : 0);
+
+        if (actualSec > maxReportedSec) maxReportedSec = actualSec;
+        const effectivePosSec = Math.max(actualSec, maxReportedSec);
 
         this.currentPositionSec = actualSec;
         if (totalDurationSec > 0) this.currentDurationSec = totalDurationSec;
@@ -1538,6 +1543,7 @@ class DlnaManager extends EventEmitter {
 
         this.emit('playback-progress', {
           currentSec: actualSec,
+          maxSec: maxReportedSec,
           durationSec: this.currentDurationSec,
           state: info.state
         });
@@ -1554,29 +1560,32 @@ class DlnaManager extends EventEmitter {
           this.hasStartedPlaying = true;
         }
 
-        // Robust Track Ended Guard:
-        // A track has genuinely finished only when it was playing AND:
+        // Robust Track Ended Guard across diverse DLNA/UPnP renderers (Eversolo, WiIM, Sony, LG, Marantz, Denon, Moode, etc.):
+        // A track has genuinely finished when it was playing AND:
         // 1. Explicitly reported COMPLETED, OR
-        // 2. Reported STOPPED and progress is within 2.5 seconds of total track duration, OR
-        // 3. Progress reached duration limit for 2 consecutive ticks
+        // 2. Reported STOPPED or NO_MEDIA_PRESENT, and playback had progressed close to end (effectivePosSec within 4.5s of total or >= 94% duration), OR
+        //    (covers renderers that reset RelTime to 00:00:00 upon STOPPED at EOF)
+        // 3. Progress reached duration limit for 2 consecutive ticks (nearEndCount >= 2)
         const isCompleted = (stateUpper === 'COMPLETED');
-        const reachedDuration = (totalDurationSec > 8 && (actualSec >= totalDurationSec - 2.5));
-        const isStoppedAtEnd = (stateUpper === 'STOPPED' && reachedDuration);
+        const reachedDuration = (totalDurationSec > 5 && (effectivePosSec >= totalDurationSec - 4.5 || (totalDurationSec > 15 && effectivePosSec >= totalDurationSec * 0.94)));
+        const isStoppedAtEnd = ((stateUpper === 'STOPPED' || stateUpper === 'NO_MEDIA_PRESENT') && reachedDuration);
 
-        if (this.hasStartedPlaying && (isCompleted || isStoppedAtEnd) && this.playbackState === 'PLAYING') {
-          console.log(`[DLNA] Track finished on renderer (state=${stateUpper}, progress=${actualSec}/${totalDurationSec}s), triggering next track`);
+        if (this.hasStartedPlaying && (isCompleted || isStoppedAtEnd)) {
+          console.log(`[DLNA] Track finished on renderer (state=${stateUpper}, progress=${actualSec}s, maxReached=${maxReportedSec}/${totalDurationSec}s), triggering next track`);
+          trackEndedFired = true;
           this.playbackState = 'STOPPED';
           this.stopPositionPolling();
           this.emit('track-ended');
           return;
         }
 
-        // Time-based threshold guard
-        if (this.hasStartedPlaying && this.playbackState === 'PLAYING' && totalDurationSec > 10) {
-          if (actualSec >= totalDurationSec || (totalDurationSec - actualSec <= 1.5 && actualSec > 0)) {
+        // Time-based threshold guard: renderer remains in PLAYING or hung near end
+        if (this.hasStartedPlaying && totalDurationSec > 8) {
+          if (effectivePosSec >= totalDurationSec || (totalDurationSec - effectivePosSec <= 2.0 && effectivePosSec > 0)) {
             nearEndCount++;
             if (nearEndCount >= 2) {
-              console.log(`[DLNA] Track reached duration limit (${actualSec}/${totalDurationSec}s), triggering next track`);
+              console.log(`[DLNA] Track reached duration limit for 2 ticks (${effectivePosSec}/${totalDurationSec}s, state=${stateUpper}), triggering next track`);
+              trackEndedFired = true;
               this.playbackState = 'STOPPED';
               this.stopPositionPolling();
               this.emit('track-ended');

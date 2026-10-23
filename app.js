@@ -6686,6 +6686,7 @@ async function playCurrentTrack() {
     currentSoxOffset = 0;
     dlnaResetPosClock(0);
     state.dlnaTotalSec = track.duration || 0;
+    state.dlnaMaxProgressSec = 0;
     stopVirtualProgress();
     stopDemoSynth();
     nativeAudio.pause();
@@ -14908,6 +14909,9 @@ function handleDlnaProgress(prog) {
   if (state.activeAudioZone === 'local' || !prog) return;
 
   const currentSec = prog.currentSec || 0;
+  const maxSec = Math.max(currentSec, prog.maxSec || 0, state.dlnaMaxProgressSec || 0);
+  state.dlnaMaxProgressSec = maxSec;
+
   const track = state.queue[state.currentTrackIndex];
   const totalSec = prog.durationSec > 0 ? prog.durationSec : (track ? track.duration : 0);
 
@@ -14921,9 +14925,13 @@ function handleDlnaProgress(prog) {
     currentTimeLabel.textContent = formatDuration(shownSec);
     totalTimeLabel.textContent = formatDuration(totalSec);
 
-    // Front-end safety guard: only trigger when playback is active, past mid-track, and truly reached end
-    if (state.isPlaying && totalSec > 8 && currentSec > 5 && currentSec >= totalSec && !isTrackEndingHandled) {
-      console.log('[DLNA Frontend] Current track reached duration, triggering onTrackEnded');
+    // Front-end safety guard: trigger next track when playback reaches end or when device stops near end
+    const stateUpper = String(prog.state || '').toUpperCase();
+    const reachedEnd = (totalSec > 5 && maxSec >= totalSec - 1.2);
+    const stoppedNearEnd = (totalSec > 5 && (stateUpper === 'STOPPED' || stateUpper === 'NO_MEDIA_PRESENT') && (maxSec >= totalSec - 4.5 || maxSec >= totalSec * 0.94));
+
+    if (state.isPlaying && (reachedEnd || stoppedNearEnd) && !isTrackEndingHandled) {
+      console.log(`[DLNA Frontend Guard] Current track reached duration (curr=${currentSec}s, max=${maxSec}/${totalSec}s, state=${stateUpper}), triggering onTrackEnded`);
       onTrackEnded();
     }
   }
