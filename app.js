@@ -12033,6 +12033,172 @@ try {
   }
 } catch (err) {}
 
+// ----------------- 播放列按鈕淺色對比自我測試（main.js --test-playerbar-contrast） -----------------
+// LINE OUT／WASAPI 獨佔等 .icon-btn 的通用 hover 是固定白字＋白色半透明底：在淺色模式下變成
+// 「白底白字」完全看不見。這裡直接量「hover 狀態文字 vs 實際底色」的對比度（含已啟動態），
+// 並確認淺色規則存在且改用深色半透明底——與佇列對比測試同一手法，防的是同一類 bug。
+async function runPlayerBarContrastSelfTest() {
+  const lines = [];
+  const ok = (name, detail) => lines.push(`PASS ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const bad = (name, detail) => lines.push(`FAIL ${name}${detail ? ' [' + detail + ']' : ''}`);
+  const finish = () => {
+    const failed = lines.filter(l => l.startsWith('FAIL'));
+    const report = (failed.length ? 'FAIL ' : 'PASS ') + lines.join(' | ');
+    try { window.electronAPI.captureStep(25, report); } catch (err) {}
+  };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const parseRgb = (s) => {
+    const m = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?/.exec(String(s || ''));
+    return m ? { r: +m[1], g: +m[2], b: +m[3], a: m[4] === undefined ? 1 : +m[4] } : null;
+  };
+  const over = (fg, bg) => {
+    const a = fg.a;
+    return { r: Math.round(fg.r * a + bg.r * (1 - a)), g: Math.round(fg.g * a + bg.g * (1 - a)), b: Math.round(fg.b * a + bg.b * (1 - a)), a: 1 };
+  };
+  const lum = (c) => {
+    const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+  };
+  const contrast = (fg, bg) => {
+    const L1 = lum(fg), L2 = lum(bg);
+    return (Math.max(L1, L2) + 0.05) / (Math.min(L1, L2) + 0.05);
+  };
+  // specificity 由選擇器長度近似（越長越後套）。hitsEl：只取實際命中該按鈕的規則——:hover 偽類在
+  // cssRules.selectorText 裡是原樣保留的，直接 matches 會永遠 false；剝掉 :hover 後再 matches，
+  // 否則其他元件的同名 class hover 會被誤套進來算錯對比。
+  const findHoverRules = (selFragments, hitsEl) => {
+    const out = [];
+    for (const ss of document.styleSheets) {
+      let rules = null;
+      try { rules = ss.cssRules; } catch (e) { continue; }
+      if (!rules) continue;
+      for (const r of rules) {
+        if (!r.selectorText || !r.style || !(r.style.color || r.style.backgroundColor)) continue;
+        let rank = -1;
+        for (let i = 0; i < selFragments.length; i++) {
+          if (r.selectorText.includes(selFragments[i])) { rank = i; break; }
+        }
+        if (rank >= 0 && hitsEl(r.selectorText)) out.push({ rule: r, len: r.selectorText.length, rank });
+      }
+    }
+    return out.sort((a, b) => (a.rank - b.rank) || (a.len - b.len)).map(x => x.rule);
+  };
+  const checkHoverOf = (label, el, baseBgStr, minRatio, activeClasses = []) => {
+    if (!el) { bad(`${label}：元素存在`); return; }
+    const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+    // 只取「實際命中元素」的規則：:hover 偽類在 cssRules.selectorText 裡是原樣保留的，直接 matches 會永遠 false；
+    // 剝掉 :hover 後再 matches，否則其他元件的同名 class hover 會被誤套進來算錯對比。
+    // activeClasses（啟動態）也要能命中：真實情境就是按下去之後再滑過，全程都必須可見——先加 class 再 matches。
+    const hitsEl = (selectorText) => {
+      for (const c of activeClasses) el.classList.add(c);
+      let hit = false;
+      try { hit = el.matches(selectorText.replace(/:hover\b/g, '')); } catch (e) { hit = false; }
+      for (const c of activeClasses) el.classList.remove(c);
+      return hit;
+    };
+    const ownCls = (el.className || '').split(/\s+/).filter(c => c && c !== 'icon-btn')[0] || 'x';
+    // 通用規則 rank 最低 → 排最前；專屬與淺式覆寫依 specificity 長度依序覆蓋
+    const frags = theme === 'light'
+      ? ['.icon-btn:hover', '[data-theme="light"] .icon-btn:hover']
+      : ['.icon-btn:hover'];
+    frags.push(`.${ownCls}:hover`);
+    if (theme === 'light') {
+      for (const c of (el.className || '').split(/\s+/)) {
+        if (c && c !== 'icon-btn') frags.push(`[data-theme="light"] .${c}:hover`, `.${c}.line-out-active:hover`, `.${c}.exclusive-out-active:hover`);
+      }
+    } else {
+      for (const c of (el.className || '').split(/\s+/)) {
+        if (c && c !== 'icon-btn') frags.push(`.${c}.line-out-active:hover`, `.${c}.exclusive-out-active:hover`);
+      }
+    }
+    let colorRgb = parseRgb(getComputedStyle(el).color);
+    let bgAccum = parseRgb(baseBgStr) || { r: 255, g: 255, b: 255, a: 1 };
+    const rules = findHoverRules(frags, hitsEl);
+    if (!rules.length) { bad(`${label}：找到 hover 樣式規則`, '無任何 :hover color/background 宣告'); return; }
+    // 規則裡的 var(--token) 不會被 rule.style 解析成實際色值：用隱藏元素的 computed style 取得真實顏色，
+    // 否則測試會把 'var(--accent-green)' 當成無法解析而漏算（錯算對比）。
+    const resolveDecl = (prop, value) => {
+      if (!value) return null;
+      if (!/var\(/.test(value)) return parseRgb(value);
+      const probe = document.createElement('span');
+      probe.style.position = 'absolute'; probe.style.opacity = '0'; probe.style.pointerEvents = 'none';
+      probe.style[prop] = value;
+      document.body.appendChild(probe);
+      const rgb = getComputedStyle(probe)[prop === 'backgroundColor' ? 'backgroundColor' : 'color'];
+      probe.remove();
+      return parseRgb(rgb);
+    };
+    for (const rule of rules) {
+      const c = resolveDecl('color', rule.style.color);
+      if (c) colorRgb = c;
+      const b = resolveDecl('backgroundColor', rule.style.backgroundColor);
+      if (b) bgAccum = over(b, bgAccum);
+    }
+    const fg = colorRgb;
+    if (!fg) { bad(`${label}：可解析文字色`); return; }
+    const ratio = contrast(fg.a < 1 ? over(fg, bgAccum) : fg, bgAccum);
+    const text = `${theme}：${label} hover 對比 ${ratio.toFixed(2)}:1`;
+    if (ratio >= minRatio) ok(text);
+    else bad(text, `需要 ≥${minRatio}:1（白字白底？）`);
+  };
+
+  const savedTheme = state.theme;
+  try {
+    if (!window.electronAPI || !window.electronAPI.captureStep) { bad('capture IPC available'); finish(); return; }
+    const lineOut = document.getElementById('btnLineOut');
+    const exclusive = document.getElementById('btnExclusive');
+    if (!lineOut || !exclusive) { bad('LINE OUT／獨佔按鈕存在'); finish(); return; }
+
+    for (const theme of ['light', 'dark']) {
+      setTheme(theme);
+      await sleep(250);
+      const bar = document.getElementById('playerBar') || document.querySelector('.player-bar');
+      const barBg = bar ? getComputedStyle(bar).backgroundColor : 'rgb(255, 255, 255)';
+
+      // 一般態（未啟動）：hover 文字必須能壓在播放列底色＋hover 底之上
+      checkHoverOf('LINE OUT 按鈕', lineOut, barBg, 4.5);
+      checkHoverOf('WASAPI 獨佔按鈕', exclusive, barBg, 4.5);
+
+      // 已啟動態（綠／琥珀強調色）：hover 不得把文字蓋成白色。activeClasses 讓「未啟動」的檢查也能
+      // 命中 .line-out-active:hover 這類規則——真實情境就是按下去之後再滑過，必須全程可見。
+      lineOut.classList.add('line-out-active');
+      exclusive.classList.add('exclusive-out-active');
+      checkHoverOf('LINE OUT 按鈕（啟動中）', lineOut, barBg, 3.0, ['line-out-active']);
+      checkHoverOf('WASAPI 獨佔按鈕（啟動中）', exclusive, barBg, 3.0, ['exclusive-out-active']);
+      lineOut.classList.remove('line-out-active');
+      exclusive.classList.remove('exclusive-out-active');
+
+      // 淺色下通用 hover 規則本身不能還是白色半透明底＋白字
+      if (theme === 'light') {
+        const lightRule = findHoverRules(['[data-theme="light"] .icon-btn:hover'], () => true)[0];
+        if (!lightRule) bad('light：存在 .icon-btn 淺色 hover 覆寫規則', '找不到 [data-theme="light"] .icon-btn:hover');
+        else {
+          const bgDecl = String(lightRule.style.backgroundColor || '');
+          if (/rgba?\(\s*0[,\s]/.test(bgDecl)) ok('light：icon-btn hover 改用深色半透明底');
+          else bad('light：icon-btn hover 改用深色半透明底', `backgroundColor=${bgDecl}`);
+        }
+      }
+
+      if (theme === 'light') {
+        try { window.electronAPI.captureStep(24, 'player bar LINE OUT / exclusive hover light theme'); } catch (err) {}
+        await sleep(2500);
+      }
+    }
+  } catch (err) {
+    bad('self-test threw', String((err && err.message) || err));
+  } finally {
+    try { setTheme(savedTheme); } catch (e) {}
+  }
+  finish();
+}
+
+try {
+  const rpPbParams = new URLSearchParams(window.location.search || '');
+  if (rpPbParams.get('testPlayerBarContrast') === '1' && window.electronAPI && window.electronAPI.captureStep) {
+    setTimeout(() => { runPlayerBarContrastSelfTest(); }, 2600);
+  }
+} catch (err) {}
+
 // ----------------- Navigation & Filters -----------------
 function setupNavigation() {
   const navItems = document.querySelectorAll('.nav-item');

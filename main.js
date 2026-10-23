@@ -32,8 +32,9 @@ const TEST_DLNA_HINT = process.argv.includes('--test-dlna-hint'); // 執行期�
 const TEST_PLAYLISTS = process.argv.includes('--test-playlists'); // 執行期測試播放清單：儲存、匯入、編輯（上移/下移/移除單曲）、刪除
 const TEST_GENRE_SIZE = process.argv.includes('--test-genre-size'); // 執行期測試曲風流派頁的封面尺寸切換（小/中/大）
 const TEST_LANGUAGE = process.argv.includes('--test-language'); // 執行期測試介面語言切換（繁體中文 / English）
+const TEST_PB_CONTRAST = process.argv.includes('--test-playerbar-contrast'); // 執行期測試播放列 LINE OUT／獨佔按鈕在淺色的 hover 對比
 const FAKE_DLNA_PORT = 49152; // 測試用假 UPnP MediaRenderer _listen port（probeIp 的候選位址之一）
-if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS || TEST_GENRE_SIZE || TEST_LANGUAGE) {
+if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS || TEST_GENRE_SIZE || TEST_LANGUAGE || TEST_PB_CONTRAST) {
   // 關鍵：關閉 Chromium 原生遮擋偵測。否則背景視窗被判定 occluded 而暫停合成，
   // capturePage 會一直回傳同一張舊框架（三張截圖 hash 相同的根因）。
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -359,6 +360,28 @@ function runCaptureSequence() {
         app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
         return;
       }
+      if (TEST_PB_CONTRAST) {
+        console.log('[test-playerbar-contrast] waiting for renderer player-bar hover contrast self-test result');
+        // 渲染端先發 24（淺色播放列已渲染，截取畫面），最後發 25（測試報告）。
+        // 截圖點用 waitShotSignal：逾時會繼續等報告，不會像手寫 Promise 那樣永久卡死。
+        const reportPromise = waitRendererInfo(25, 120000);
+        const shotInfo = await waitShotSignal(24, 60000);
+        if (shotInfo === null) {
+          console.warn('[test-playerbar-contrast] 沒有截圖訊號 24：自我測試在截圖點之前就結束了');
+        } else {
+          try {
+            const img = await mainWindow.webContents.capturePage();
+            const shotPath = path.join(require('os').tmpdir(), 'rooplayer-capture-userdata', 'playerbar-contrast-light.png');
+            fs.writeFileSync(shotPath, img.toPNG());
+            console.log('[test-playerbar-contrast] screenshot saved: ' + shotPath + ' (' + shotInfo + ')');
+          } catch (e) { console.warn('[test-playerbar-contrast] screenshot failed:', e); }
+        }
+        const report = await reportPromise;
+        console.log('[test-playerbar-contrast] renderer report: ' + report);
+        console.log('[test] done');
+        app.exit(report.indexOf('PASS') === 0 ? 0 : 1);
+        return;
+      }
       if (TEST_SPECTRUM_SMOOTH) {
         console.log('[test-spectrum-smooth] waiting for renderer spectrum smoothness self-test result');
         // 渲染端先發 23（正在取頻譜窗，截取畫面），最後發 24（測試報告）
@@ -567,6 +590,8 @@ function createWindow() {
 
   if (TEST_QUEUE_CONTRAST) {
     mainWindow.loadFile('index.html', { query: { testQueueContrast: '1' } });
+  } else if (TEST_PB_CONTRAST) {
+    mainWindow.loadFile('index.html', { query: { testPlayerBarContrast: '1' } });
   } else if (TEST_UF_LAYOUT) {
     mainWindow.loadFile('index.html', { query: { testUfLayout: '1' } });
   } else if (TEST_RECOMMEND) {
@@ -618,10 +643,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS || TEST_GENRE_SIZE || TEST_LANGUAGE) runCaptureSequence();
+    if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS || TEST_GENRE_SIZE || TEST_LANGUAGE || TEST_PB_CONTRAST) runCaptureSequence();
   });
 
-  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS || TEST_GENRE_SIZE || TEST_LANGUAGE) {
+  if (CAPTURE_MODE || TEST_VERSIONS || TEST_EXCLUSIVE || TEST_LABELS || TEST_KKBOX_MATCH || TEST_RECOMMEND || TEST_UF_LAYOUT || TEST_QUEUE_CONTRAST || TEST_SPECTRUM_SMOOTH || TEST_DLNA_HINT || TEST_PLAYLISTS || TEST_GENRE_SIZE || TEST_LANGUAGE || TEST_PB_CONTRAST) {
     // 備援觸發：ready-to-show 未觸發時，載入完成 6 秒後強制開始截圖
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {

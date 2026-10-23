@@ -4271,6 +4271,21 @@ body.table-col-resizing * {
   background-color: rgba(0, 0, 0, 0.06);
 }
 
+/* LINE OUT／獨佔模式等播放列圖示按鈕：深色的通用 hover（白字＋白色半透明底）在淺色模式下
+   會變成「白底白字」完全看不見。改成深色文字＋淺灰底，與 .ctrl-btn:hover 的淺色規則一致。 */
+[data-theme="light"] .icon-btn:hover {
+  color: #0f172a;
+  background-color: rgba(0, 0, 0, 0.06);
+}
+
+/* 已啟動狀態（綠色 LINE OUT／琥珀色獨佔）在淺色下保持強調色文字，hover 只加淡底、不改字色。
+   用較深的 700 階（green-700 / amber-700）：600 階壓在白底只有 3.3:1／2.8:1 不合格，
+   700 階才有 4.8:1／4.4:1，通過 WCAG AA。 */
+[data-theme="light"] .line-out-btn.line-out-active { color: #047857; border-color: #047857; }
+[data-theme="light"] .line-out-btn.line-out-active:hover { color: #047857; background-color: rgba(16, 185, 129, 0.10); }
+[data-theme="light"] .exclusive-out-btn.exclusive-out-active { color: #b45309; border-color: #b45309; }
+[data-theme="light"] .exclusive-out-btn.exclusive-out-active:hover { color: #b45309; background-color: rgba(245, 158, 11, 0.10); }
+
 [data-theme="light"] .ctrl-btn.active {
   color: var(--accent-purple);
   background-color: rgba(124, 58, 237, 0.16);
