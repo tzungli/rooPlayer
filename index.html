@@ -961,16 +961,16 @@
           </div>
 
           <!-- Discovered Servers Panel (動態呈現自動搜尋結果) -->
-          <div id="discoveredServersBox" style="display: none; background: rgba(37, 99, 235, 0.05); border: 1px solid rgba(37, 99, 235, 0.25); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+          <div id="discoveredServersBox" style="display: none; background: rgba(30, 41, 59, 0.6); border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.25);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
               <div style="display: flex; align-items: center; gap: 8px;">
                 <span style="font-size: 16px;">🔍</span>
-                <h4 style="margin: 0; font-size: 14px; color: var(--text-main);">發現的區域網路 SAMBA / NAS 伺服器</h4>
-                <span class="badge" id="discoveredServersCountBadge" style="background: rgba(37, 99, 235, 0.2); color: #60a5fa; border: 1px solid rgba(37, 99, 235, 0.4); font-size: 11px;">0 台伺服器</span>
+                <h4 style="margin: 0; font-size: 14px; font-weight: 600; color: #f8fafc;">發現的區域網路 SAMBA / NAS 伺服器</h4>
+                <span class="badge" id="discoveredServersCountBadge" style="background: rgba(37, 99, 235, 0.25); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.4); font-size: 11px;">0 台伺服器</span>
               </div>
               <button class="btn btn-secondary btn-sm" id="btnCloseDiscoveredServers">關閉 ✕</button>
             </div>
-            <div id="discoveredServersList" style="display: flex; flex-direction: column; gap: 10px;">
+            <div id="discoveredServersList" style="display: flex; flex-direction: column; gap: 12px;">
               <!-- Injected via JS -->
             </div>
           </div>

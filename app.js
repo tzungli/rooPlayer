@@ -14454,21 +14454,27 @@ function setupScannerEvents() {
           res.servers.forEach(srv => {
             const card = document.createElement('div');
             card.className = 'folder-list-item';
-            card.style.background = 'rgba(0,0,0,0.3)';
-            card.style.borderColor = 'rgba(37,99,235,0.3)';
+            card.style.background = 'rgba(15, 23, 42, 0.85)';
+            card.style.borderColor = 'rgba(59, 130, 246, 0.4)';
+            card.style.borderRadius = '8px';
+            card.style.padding = '14px 16px';
             card.style.flexDirection = 'column';
             card.style.alignItems = 'stretch';
-            card.style.gap = '10px';
+            card.style.gap = '12px';
 
             let sharesHtml = '';
             if (srv.shares && srv.shares.length > 0) {
               sharesHtml = `
-                <div style="margin-top: 6px; padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px dashed rgba(255,255,255,0.1);">
-                  <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">📁 發現的共用資料夾 (點擊直接匯入)：</div>
-                  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <div style="margin-top: 4px; padding: 12px 14px; background: rgba(30, 41, 59, 0.9); border-radius: 8px; border: 1px solid rgba(96, 165, 250, 0.35);">
+                  <div style="font-size: 12px; font-weight: 600; color: #ffffff; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 14px;">📁</span> 發現的共用資料夾（點擊直接連線並匯入專輯）：
+                  </div>
+                  <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                     ${srv.shares.map(sh => `
-                      <button class="btn btn-secondary btn-sm btn-quick-connect-share" data-unc="\\\\${srv.ip}\\${sh.name}" style="background: rgba(37,99,235,0.15); color: #93c5fd; border: 1px solid rgba(37,99,235,0.35); padding: 4px 10px; font-size: 12px; cursor: pointer;">
-                        📂 ${escapeXml(sh.name)} ${sh.comment ? `<span style="opacity: 0.7; font-size: 10px;">(${escapeXml(sh.comment)})</span>` : ''} ➔
+                      <button class="btn btn-sm btn-quick-connect-share" data-unc="\\\\${srv.ip}\\${sh.name}" style="background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #ffffff; border: 1px solid #93c5fd; padding: 7px 16px; font-size: 13px; font-weight: 700; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.35); text-shadow: 0 1px 2px rgba(0,0,0,0.4);" title="點擊直接連線 \\\\${srv.ip}\\${sh.name} 並匯入音樂庫">
+                        <span>📂 ${escapeXml(sh.name)}</span>
+                        ${sh.comment ? `<span style="color: #e0f2fe; font-size: 12px; font-weight: 500;">(${escapeXml(sh.comment)})</span>` : ''}
+                        <span style="color: #fef08a; font-weight: 700; font-size: 12px;">➔ 立即匯入</span>
                       </button>
                     `).join('')}
                   </div>
@@ -14476,8 +14482,8 @@ function setupScannerEvents() {
               `;
             } else {
               sharesHtml = `
-                <div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">
-                  🔒 需帳號密碼存取或未開放公開列舉，請點擊「填入連線表單」輸入共用名稱與密碼。
+                <div style="margin-top: 4px; padding: 8px 12px; background: rgba(30, 41, 59, 0.6); border-radius: 6px; font-size: 12px; color: #cbd5e1; border: 1px dashed rgba(255,255,255,0.15);">
+                  🔒 需帳號密碼存取或未開放公開列舉，請點擊右上方「填入連線表單」輸入共用名稱與密碼。
                 </div>
               `;
             }
@@ -14485,15 +14491,15 @@ function setupScannerEvents() {
             const displayName = (srv.hostName && srv.hostName !== srv.ip) ? `${srv.hostName} (${srv.ip})` : (srv.hostName || srv.ip);
             card.innerHTML = `
               <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                  <span style="font-size: 20px;">🖥️</span>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <span style="font-size: 24px;">🖥️</span>
                   <div>
-                    <div style="font-weight: 700; font-size: 14px; color: #60a5fa;">${escapeXml(displayName)}</div>
-                    <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">IP: <span style="font-family: monospace;">${escapeXml(srv.ip)}</span> • ${escapeXml(srv.serverDesc || 'SAMBA 伺服器')}</div>
+                    <div style="font-weight: 700; font-size: 15px; color: #60a5fa; letter-spacing: 0.3px;">${escapeXml(displayName)}</div>
+                    <div style="font-size: 12px; color: #cbd5e1; margin-top: 3px;">IP 位址: <span style="font-family: monospace; color: #93c5fd; font-weight: 600;">${escapeXml(srv.ip)}</span> • <span style="color: #e2e8f0;">${escapeXml(srv.serverDesc || 'SAMBA 伺服器')}</span></div>
                   </div>
                 </div>
                 <div style="display: flex; gap: 8px;">
-                  <button class="btn btn-secondary btn-sm btn-fill-samba" data-ip="${escapeXml(srv.ip)}" data-host="${escapeXml(srv.hostName || srv.ip)}" style="font-size: 12px;">填入連線表單</button>
+                  <button class="btn btn-secondary btn-sm btn-fill-samba" data-ip="${escapeXml(srv.ip)}" data-host="${escapeXml(srv.hostName || srv.ip)}" style="font-size: 12px; background: rgba(255,255,255,0.08); color: #f8fafc; border: 1px solid rgba(255,255,255,0.2);">填入連線表單</button>
                 </div>
               </div>
               ${sharesHtml}
