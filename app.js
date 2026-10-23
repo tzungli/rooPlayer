@@ -8429,9 +8429,9 @@ function drawUfPreview(cv, data, ctx) {
   const cs = getComputedStyle(document.documentElement);
   const textCol = (cs.getPropertyValue('--text-muted') || '#888').trim() || '#888';
   const padL = 42, padR = 8, padT = 16, padB = 24;
-  // 方案 A 最佳化：將 Y 軸動態範圍改為 +3dB 到 -72dB（原 -120dB 壓縮了 3/4 空間在不可聽噪聲上）
-  // 讓通帶平坦度、轉折點與滾降斜率的垂直空間擴大將近一倍，調整窗函數與 Taps 的差異清晰可見！
-  const dbTop = 3, dbBot = -72;
+  // 最佳化分貝軸（Y 軸）：動態範圍設為 +3dB 到 -60dB（跨度 63dB）
+  // 過去 -120dB 讓通帶與過渡帶擠在頂部 1/5；現在改為 0~-60dB，滾降曲線與不同窗函數的陡峭度擴大超過 2 倍！
+  const dbTop = 3, dbBot = -60;
   const yOf = db => padT + (dbTop - db) / (dbTop - dbBot) * (H - padT - padB);
   if (!data || !data.xs || !data.xs.length) {
     g.fillStyle = textCol; g.font = '12px sans-serif';
@@ -8441,8 +8441,9 @@ function drawUfPreview(cv, data, ctx) {
   }
   const srcNyq = data.srcNyq || 22050;
   const fsOut = data.fsOut || ((ufPreviewCtx && ufPreviewCtx.targetRate) || 176400);
-  // 線性軸：0 ~ min(輸出奈奎斯特, 1.3×源取樣率)，音頻帶與鏡像帶同時可見
-  const fMax = Math.min(fsOut / 2, 1.3 * srcNyq * 2);
+  // 線性頻率軸（X 軸）：以 1.1×源取樣率（例如 44.1k 時為 48.5kHz）為顯示上限。
+  // 截止頻率（~24.9kHz）恰好落在畫面正中央，過渡帶寬度橫向展開拉長，微調滑桿與窗函數的差別立即可見！
+  const fMax = Math.min(fsOut / 2, 1.1 * srcNyq * 2);
   const xOf = f => padL + f / fMax * (W - padL - padR);
   const plotW = W - padL - padR;
   // 邊界：源 Nyquist（可聽音頻上緣）、截止 fc（可拖曳）、鏡像抑制零點（止帶起點）
@@ -8473,9 +8474,9 @@ function drawUfPreview(cv, data, ctx) {
     fillBand(srcNyq, fMax, 'rgba(248,113,113,0.06)');
   }
 
-  // ---- dB 網格（+3dB ~ -72dB，每 12dB 或 24dB，凸顯轉折與過渡帶深度）----
+  // ---- dB 網格（+3dB ~ -60dB，標示 0, -12, -24, -36, -48, -60 dB，過渡帶深度清清楚楚）----
   g.strokeStyle = 'rgba(128,128,128,0.18)'; g.fillStyle = textCol; g.font = '10px sans-serif'; g.lineWidth = 1;
-  for (const db of [0, -12, -24, -48, -72]) {
+  for (const db of [0, -12, -24, -36, -48, -60]) {
     const y = yOf(db);
     g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke();
     g.fillText(db === 0 ? '0dB' : db + 'dB', 4, y + 3);
@@ -8501,6 +8502,11 @@ function drawUfPreview(cv, data, ctx) {
     g.fillStyle = textCol;
     g.fillText(f === 0 ? '0' : Math.round(f / 1000) + 'k', x, H - 8);
   }
+
+  // 清楚標示 X 軸單位「(kHz)」於右下角座標刻度末端
+  g.textAlign = 'right';
+  g.fillStyle = textCol;
+  g.fillText('(kHz)', W - padR, H - 8);
 
   // ---- 邊界虛線與圖內標字。標字一律放在繪圖區上方（曲線都在下方，不會壓到）。
   // 源 Nyquist 與截止線常貼得很近（cutoffRel≈1.05 時只差幾個像素），窄欄下文字比線距還寬：
