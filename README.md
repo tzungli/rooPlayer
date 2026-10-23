@@ -1,6 +1,6 @@
 自己用GEMINI+本地AI 做的 roon-like 音樂播放器,單純為了好玩：
 
-特點：
+一、特點：
 
 1.全自行開發的播放引擎與升頻引擎
 
@@ -22,4 +22,10 @@
   
 7.自動比對 KKBOX <-> 本機檔案 <-> TIDAL
 
-(註)串流測試：部分在AURENDER ACS10=完全正常。Eversolo T8 =在DSD512七階調變下偶有卡頓。HQPlayer撥放正常但暫停或停止偶有出錯。
+二、串流測試：
+
+AURENDER ACS10=完全正常。
+
+Eversolo T8 =在DSD512七階調變下偶有卡頓。
+
+HQPlayer撥放正常但暫停或停止偶有出錯。
