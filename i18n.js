@@ -49,6 +49,7 @@
     '線上串流 STREAMING': 'STREAMING',
     '管理與設定 SETTINGS': 'SETTINGS & STORAGE',
     '本機資料夾管理': 'Local Folders',
+    '網路資料夾設定': 'Network Storage (SAMBA)',
     '說明': 'About',
     '未登入': 'Not signed in', '在線': 'Online', '離線': 'Offline',
 

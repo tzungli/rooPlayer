@@ -139,6 +139,11 @@
           <span class="nav-icon">📁</span>
           <span class="nav-label">本機資料夾管理</span>
         </button>
+        <button class="nav-item" data-view="networkStorage">
+          <span class="nav-icon">🌐</span>
+          <span class="nav-label">網路資料夾設定</span>
+          <span class="badge" id="netFolderCountBadge">0</span>
+        </button>
         <button class="nav-item" data-view="about">
           <span class="nav-icon">📖</span>
           <span class="nav-label">說明</span>
@@ -923,6 +928,92 @@
           <div class="folder-list-header">已加入的資料夾：</div>
           <div class="folder-list" id="scannedFoldersList">
             <div class="empty-folder-hint">尚未加入任何音樂資料夾，請點擊上方按鈕選取包含音樂的檔案夾。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6.5. NETWORK STORAGE VIEW (SAMBA / NAS) -->
+      <section id="viewNetworkStorage" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1 class="page-title">網路資料夾設定 Network Storage</h1>
+            <p class="page-subtitle">連線區域網路 SAMBA / NAS 伺服器，將遠端無損音樂庫無縫匯入 rooPlayer，支援多相升頻與發燒串流。</p>
+          </div>
+        </div>
+
+        <!-- Add Samba Connection Card -->
+        <div class="storage-card" style="margin-bottom: 24px;">
+          <div class="storage-card-header">
+            <h3>新增 SAMBA / NAS 網路共用連線</h3>
+            <p>支援標準 SMB / CIFS 協定，相容 Synology 群暉、QNAP 威聯通、Asustor 華芸、TrueNAS、Windows 共用資料夾與 Linux Samba。</p>
+          </div>
+          
+          <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
+            <button class="btn btn-primary" id="btnBrowseNetworkFolder">
+              <span>📂 瀏覽區域網路共用資料夾 (UNC)</span>
+            </button>
+            <button class="btn btn-secondary" id="btnToggleManualSamba">
+              <span>⚙️ 手動輸入 SAMBA 連線參數</span>
+            </button>
+          </div>
+
+          <!-- Manual Samba Input Form -->
+          <div id="manualSambaForm" style="display: none; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 16px;">
+              <div>
+                <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;" for="sambaInputHost">伺服器 IP 或主機名稱 (必填)</label>
+                <input type="text" id="sambaInputHost" placeholder="例如: 192.168.1.100 或 NAS-SERVER" class="form-control" style="width: 100%; box-sizing: border-box; padding: 8px 12px; background: rgba(0,0,0,0.25); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-main); font-size: 13px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;" for="sambaInputShare">共用名稱 Share Name (必填)</label>
+                <input type="text" id="sambaInputShare" placeholder="例如: music 或 Audio" class="form-control" style="width: 100%; box-sizing: border-box; padding: 8px 12px; background: rgba(0,0,0,0.25); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-main); font-size: 13px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;" for="sambaInputSubPath">子目錄路徑 (選填)</label>
+                <input type="text" id="sambaInputSubPath" placeholder="例如: FLAC 或 Hi-Res (選填)" class="form-control" style="width: 100%; box-sizing: border-box; padding: 8px 12px; background: rgba(0,0,0,0.25); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-main); font-size: 13px;">
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 16px;">
+              <div>
+                <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;" for="sambaInputUsername">帳號 (選填，訪客留空)</label>
+                <input type="text" id="sambaInputUsername" placeholder="使用者名稱 (選填)" autocomplete="username" class="form-control" style="width: 100%; box-sizing: border-box; padding: 8px 12px; background: rgba(0,0,0,0.25); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-main); font-size: 13px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;" for="sambaInputPassword">密碼 (選填)</label>
+                <input type="password" id="sambaInputPassword" placeholder="密碼 (選填)" autocomplete="current-password" class="form-control" style="width: 100%; box-sizing: border-box; padding: 8px 12px; background: rgba(0,0,0,0.25); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-main); font-size: 13px;">
+              </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+              <button class="btn btn-secondary" id="btnCancelManualSamba">取消</button>
+              <button class="btn btn-primary" id="btnConnectManualSamba">
+                <span>🔗 連線並掃描 SAMBA 音樂庫</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Network Scan Progress Indicator -->
+          <div id="netScanProgressBox" class="scan-progress-box" style="display: none; margin-top: 16px;">
+            <div class="progress-info">
+              <span id="netScanStatusLabel">正在分析 SAMBA 遠端音訊...</span>
+              <span id="netScanPercentLabel">0%</span>
+            </div>
+            <div class="progress-track">
+              <div id="netScanProgressBar" class="progress-fill" style="width: 0%;"></div>
+            </div>
+            <div class="current-file-text" id="netScanCurrentFile">準備中...</div>
+          </div>
+        </div>
+
+        <!-- Connected Network Shares Card -->
+        <div class="storage-card">
+          <div class="storage-card-header">
+            <h3>已連線的 SAMBA 網路資料夾</h3>
+            <p>已成功掛載的區域網路音樂庫，曲目已全量匯總至總覽、專輯與曲目頁面。</p>
+          </div>
+          <div class="folder-list" id="networkFoldersList">
+            <div class="empty-folder-hint">尚未加入任何 SAMBA 網路資料夾，請點擊上方按鈕瀏覽或手動輸入 NAS 共用設定。</div>
           </div>
         </div>
       </section>

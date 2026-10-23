@@ -2302,6 +2302,103 @@ ipcMain.handle('dialog:selectFolder', async () => {
   return result.filePaths[0];
 });
 
+ipcMain.handle('dialog:selectNetworkFolder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: '選取區域網路 SAMBA / NAS 共用資料夾 (UNC 或網路磁碟)'
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
+// 建立或驗證 Windows SMB / SAMBA 網路共用連線
+function connectWindowsSmbShare(uncPath, username, password) {
+  return new Promise((resolve) => {
+    let normPath = uncPath.replace(/\//g, '\\');
+    if (!normPath.startsWith('\\\\')) {
+      if (normPath.startsWith('\\')) normPath = '\\' + normPath;
+      else normPath = '\\\\' + normPath;
+    }
+
+    if (!username) {
+      fs.access(normPath, fs.constants.R_OK, (err) => {
+        if (!err) return resolve({ success: true, uncPath: normPath, message: '存取正常 (已連線或訪客權限)' });
+        exec(`net use "${normPath}" "" /user:"" /persistent:yes`, { windowsHide: true }, (netErr) => {
+          if (!netErr) resolve({ success: true, uncPath: normPath, message: '匿名訪客連線成功' });
+          else resolve({ success: false, uncPath: normPath, error: '無法存取該網路路徑，請確認伺服器在線或輸入帳號密碼。' });
+        });
+      });
+      return;
+    }
+
+    const cleanUser = username.replace(/"/g, '');
+    const cleanPwd = password ? `"${password.replace(/"/g, '')}"` : '""';
+    const cmd = `net use "${normPath}" ${cleanPwd} /user:"${cleanUser}" /persistent:yes`;
+
+    exec(cmd, { windowsHide: true }, (err, stdout, stderr) => {
+      if (!err || (stderr && (stderr.includes('85') || stderr.includes('1219'))) || (stdout && stdout.includes('成功'))) {
+        resolve({ success: true, uncPath: normPath, message: 'SAMBA 伺服器驗證成功' });
+      } else {
+        exec(`net use "${normPath}" /delete /y`, { windowsHide: true }, () => {
+          exec(cmd, { windowsHide: true }, (retryErr, retryStdout, retryStderr) => {
+            if (!retryErr || (retryStderr && retryStderr.includes('85'))) {
+              resolve({ success: true, uncPath: normPath, message: 'SAMBA 伺服器驗證成功' });
+            } else {
+              resolve({ success: false, uncPath: normPath, error: retryStderr || retryErr.message || '連線驗證失敗' });
+            }
+          });
+        });
+      }
+    });
+  });
+}
+
+ipcMain.handle('samba:connectAndScan', async (event, params) => {
+  try {
+    let uncPath = '';
+    if (params.uncPath) {
+      uncPath = params.uncPath.trim();
+    } else if (params.host && params.share) {
+      const cleanHost = params.host.trim().replace(/^[\\\/]+/, '').replace(/[\\\/]+$/, '');
+      const cleanShare = params.share.trim().replace(/^[\\\/]+/, '').replace(/[\\\/]+$/, '');
+      const cleanSub = params.subPath ? params.subPath.trim().replace(/^[\\\/]+/, '').replace(/[\\\/]+$/, '') : '';
+      uncPath = `\\\\${cleanHost}\\${cleanShare}${cleanSub ? '\\' + cleanSub : ''}`;
+    } else {
+      return { success: false, error: '請輸入有效的伺服器主機與共用資料夾名稱' };
+    }
+
+    const connResult = await connectWindowsSmbShare(uncPath, params.username, params.password);
+    if (!connResult.success) {
+      return connResult;
+    }
+
+    const resolvedUnc = connResult.uncPath || uncPath;
+    if (!fs.existsSync(resolvedUnc)) {
+      return { success: false, error: `無法找到網路共用路徑：${resolvedUnc}，請檢查路徑與權限。` };
+    }
+
+    return {
+      success: true,
+      uncPath: resolvedUnc,
+      message: connResult.message
+    };
+  } catch (err) {
+    console.error('SAMBA connect error:', err);
+    return { success: false, error: err.message || 'SAMBA 連線發生未預期錯誤' };
+  }
+});
+
+ipcMain.handle('samba:testShare', async (event, uncPath) => {
+  try {
+    if (!uncPath) return { online: false };
+    const norm = uncPath.replace(/\//g, '\\');
+    const online = fs.existsSync(norm);
+    return { online };
+  } catch (e) {
+    return { online: false };
+  }
+});
+
 // Library scan & persistence
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.aiff', '.dsf', '.dff', '.wma']);
 

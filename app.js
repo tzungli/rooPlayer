@@ -2037,6 +2037,7 @@ const viewDirtyState = {
   tracks: true,
   genres: true,
   storage: true,
+  networkStorage: true,
   favAlbums: true,
   favTracks: true,
   favArtists: true,
@@ -2079,6 +2080,9 @@ function renderViewIfNeeded(viewId) {
       break;
     case 'storage':
       renderFolders();
+      break;
+    case 'networkStorage':
+      renderNetworkFolders();
       break;
     case 'favAlbums':
       renderFavAlbums();
@@ -2167,6 +2171,12 @@ function updateBadgesAndStats() {
   document.getElementById('heroTrackCount').textContent = totalTracks;
   document.getElementById('heroHiresCount').textContent = hiresCount;
   updateHistoryCountBadges();
+
+  const netFolderBadge = document.getElementById('netFolderCountBadge');
+  if (netFolderBadge) {
+    const netCount = (state.folders || []).filter(f => isNetworkFolderPath(f)).length;
+    netFolderBadge.textContent = netCount;
+  }
 
   document.getElementById('albumsHeaderCount').textContent = `共 ${totalAlbums} 張專輯`;
   document.getElementById('artistsHeaderCount').textContent = `共 ${totalArtists} 位演出者`;
@@ -4202,14 +4212,26 @@ function renderGenres() {
   genresGrid.appendChild(frag);
 }
 
-// Render Scanned Folders
+// 判斷是否為區域網路 SAMBA / NAS / UNC 路徑
+function isNetworkFolderPath(f) {
+  if (!f || typeof f !== 'string') return false;
+  const s = f.trim();
+  return s.startsWith('\\\\') || s.startsWith('//') || s.startsWith('smb://');
+}
+
+// Render Scanned Local Folders
 function renderFolders() {
   scannedFoldersList.innerHTML = '';
   if (!state.folders || state.folders.length === 0) {
     scannedFoldersList.innerHTML = '<div class="empty-folder-hint">尚未加入任何音樂資料夾，請點擊上方按鈕選取包含音樂的檔案夾。</div>';
     return;
   }
-  state.folders.forEach(f => {
+  const localFolders = state.folders.filter(f => !isNetworkFolderPath(f));
+  if (localFolders.length === 0) {
+    scannedFoldersList.innerHTML = '<div class="empty-folder-hint">尚未加入任何本機音樂資料夾，請點擊上方按鈕選取。</div>';
+    return;
+  }
+  localFolders.forEach(f => {
     const item = document.createElement('div');
     item.className = 'folder-list-item';
     const normF = (f || '').toLowerCase().replace(/\\/g, '/');
@@ -4246,6 +4268,68 @@ function renderFolders() {
     }
 
     scannedFoldersList.appendChild(item);
+  });
+}
+
+// Render Network Folders (SAMBA / NAS)
+function renderNetworkFolders() {
+  const container = document.getElementById('networkFoldersList');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const netFolders = (state.folders || []).filter(f => isNetworkFolderPath(f));
+
+  // 更新左側導覽列徽章
+  const netFolderBadge = document.getElementById('netFolderCountBadge');
+  if (netFolderBadge) netFolderBadge.textContent = netFolders.length;
+
+  if (netFolders.length === 0) {
+    container.innerHTML = '<div class="empty-folder-hint">尚未加入任何 SAMBA 網路資料夾，請點擊上方按鈕瀏覽或手動輸入 NAS 共用設定。</div>';
+    return;
+  }
+
+  netFolders.forEach(f => {
+    const item = document.createElement('div');
+    item.className = 'folder-list-item';
+    const normF = (f || '').toLowerCase().replace(/\\/g, '/');
+    const folderTracks = state.tracks.filter(t => {
+      if (!t.filePath) return false;
+      const normTrackPath = t.filePath.toLowerCase().replace(/\\/g, '/');
+      return normTrackPath.startsWith(normF);
+    });
+
+    item.innerHTML = `
+      <div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 16px;">🌐</span>
+          <div style="font-weight: 600; font-size: 13px; color: var(--text-main); font-family: monospace;">${escapeXml(f)}</div>
+          <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 10px; padding: 2px 6px;">● 在線 (Online)</span>
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px; margin-left: 24px;">SAMBA 網路音樂庫 • 已收錄 ${folderTracks.length} 首高解析曲目</div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-secondary btn-sm btn-rescan">重新掃描</button>
+        <button class="btn btn-secondary btn-sm btn-remove" style="color: #ef4444;">移除</button>
+      </div>
+    `;
+
+    const rescanBtn = item.querySelector('.btn-rescan');
+    if (rescanBtn) {
+      rescanBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        rescanSpecificFolder(f);
+      });
+    }
+
+    const removeBtn = item.querySelector('.btn-remove');
+    if (removeBtn) {
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        removeSpecificFolder(f);
+      });
+    }
+
+    container.appendChild(item);
   });
 }
 
@@ -14318,6 +14402,134 @@ function setupScannerEvents() {
     }
   });
 
+  // ----------------- 網路資料夾設定 (SAMBA / NAS) 控制項 -----------------
+  const btnBrowseNetworkFolder = document.getElementById('btnBrowseNetworkFolder');
+  const btnToggleManualSamba = document.getElementById('btnToggleManualSamba');
+  const manualSambaForm = document.getElementById('manualSambaForm');
+  const btnCancelManualSamba = document.getElementById('btnCancelManualSamba');
+  const btnConnectManualSamba = document.getElementById('btnConnectManualSamba');
+  const netScanProgressBox = document.getElementById('netScanProgressBox');
+  const netScanProgressBar = document.getElementById('netScanProgressBar');
+  const netScanStatusLabel = document.getElementById('netScanStatusLabel');
+  const netScanPercentLabel = document.getElementById('netScanPercentLabel');
+  const netScanCurrentFile = document.getElementById('netScanCurrentFile');
+
+  if (btnToggleManualSamba && manualSambaForm) {
+    btnToggleManualSamba.addEventListener('click', () => {
+      const isHidden = manualSambaForm.style.display === 'none';
+      manualSambaForm.style.display = isHidden ? 'block' : 'none';
+      if (isHidden) {
+        const hostInput = document.getElementById('sambaInputHost');
+        if (hostInput) hostInput.focus();
+      }
+    });
+  }
+
+  if (btnCancelManualSamba && manualSambaForm) {
+    btnCancelManualSamba.addEventListener('click', () => {
+      manualSambaForm.style.display = 'none';
+    });
+  }
+
+  // 掃描網路資料夾通用流程
+  async function runNetworkFolderScan(targetUncPath) {
+    if (!targetUncPath) return;
+    if (netScanProgressBox) {
+      netScanProgressBox.style.display = 'block';
+      if (netScanProgressBar) netScanProgressBar.style.width = '0%';
+      if (netScanStatusLabel) netScanStatusLabel.textContent = `正在掃描 SAMBA 網路資料夾: ${targetUncPath}`;
+      if (netScanPercentLabel) netScanPercentLabel.textContent = '0%';
+      if (netScanCurrentFile) netScanCurrentFile.textContent = '連線準備中...';
+    }
+
+    try {
+      const result = await window.electronAPI.scanFolder(targetUncPath);
+      if (result && result.tracks) {
+        state.tracks = result.tracks;
+        state.folders = result.folders || state.folders;
+        if (result.folderPath && !state.folders.includes(result.folderPath)) {
+          state.folders.push(result.folderPath);
+        }
+        rebuildLibraryCollections();
+        renderAll();
+
+        if (netScanStatusLabel) netScanStatusLabel.textContent = `SAMBA 掃描完成！本資料夾新增/更新 ${result.newCount || 0} 首，音樂庫總計 ${state.tracks.length} 首音訊。`;
+        if (netScanPercentLabel) netScanPercentLabel.textContent = '100%';
+        if (netScanProgressBar) netScanProgressBar.style.width = '100%';
+
+        if (manualSambaForm) manualSambaForm.style.display = 'none';
+
+        setTimeout(() => {
+          if (netScanProgressBox) netScanProgressBox.style.display = 'none';
+          const albNav = document.querySelector('[data-view="albums"]');
+          if (albNav) albNav.click();
+        }, 1500);
+      } else if (result && result.error) {
+        if (netScanStatusLabel) netScanStatusLabel.textContent = `掃描遭遇錯誤：${result.error}`;
+      }
+    } catch (err) {
+      console.error('Scan network folder failed:', err);
+      if (netScanStatusLabel) netScanStatusLabel.textContent = `掃描中斷：${err.message || err}`;
+    }
+  }
+
+  // 瀏覽選取網路共用資料夾
+  if (btnBrowseNetworkFolder) {
+    btnBrowseNetworkFolder.addEventListener('click', async () => {
+      if (!window.electronAPI || !window.electronAPI.selectNetworkFolder) {
+        alert('請在 Electron 桌面環境中執行此功能');
+        return;
+      }
+      const folderPath = await window.electronAPI.selectNetworkFolder();
+      if (!folderPath) return;
+      await runNetworkFolderScan(folderPath);
+    });
+  }
+
+  // 手動輸入 SAMBA 參數並連線
+  if (btnConnectManualSamba) {
+    btnConnectManualSamba.addEventListener('click', async () => {
+      if (!window.electronAPI || !window.electronAPI.connectSambaShare) {
+        alert('請在 Electron 桌面環境中執行此功能');
+        return;
+      }
+      const host = (document.getElementById('sambaInputHost')?.value || '').trim();
+      const share = (document.getElementById('sambaInputShare')?.value || '').trim();
+      const subPath = (document.getElementById('sambaInputSubPath')?.value || '').trim();
+      const username = (document.getElementById('sambaInputUsername')?.value || '').trim();
+      const password = (document.getElementById('sambaInputPassword')?.value || '').trim();
+
+      if (!host || !share) {
+        alert('請輸入 SAMBA 伺服器 IP 或主機名稱，以及共用名稱 (Share Name)！');
+        return;
+      }
+
+      if (netScanProgressBox) {
+        netScanProgressBox.style.display = 'block';
+        if (netScanStatusLabel) netScanStatusLabel.textContent = `正在驗證並連線 SAMBA 伺服器: \\\\${host}\\${share}...`;
+        if (netScanProgressBar) netScanProgressBar.style.width = '10%';
+        if (netScanPercentLabel) netScanPercentLabel.textContent = '10%';
+      }
+
+      const connRes = await window.electronAPI.connectSambaShare({
+        host,
+        share,
+        subPath,
+        username,
+        password
+      });
+
+      if (!connRes || !connRes.success) {
+        if (netScanProgressBox) netScanProgressBox.style.display = 'none';
+        alert(`❌ SAMBA 連線失敗：\n${(connRes && connRes.error) || '無法連線至伺服器，請檢查 IP、共用名稱或帳密是否正確。'}`);
+        return;
+      }
+
+      // 連線成功，開始掃描音樂
+      await runNetworkFolderScan(connRes.uncPath);
+    });
+  }
+
   // Export Library Database (includes folders, tracks, favorites, playStats, and playback history)
   if (btnExportLibrary) {
     btnExportLibrary.addEventListener('click', async () => {
@@ -14556,9 +14768,13 @@ function setupScannerEvents() {
   if (window.electronAPI) {
     window.electronAPI.onScanProgress((data) => {
       const pct = Math.round((data.current / data.total) * 100);
-      scanProgressBar.style.width = `${pct}%`;
-      scanPercentLabel.textContent = `${pct}% (${data.current}/${data.total})`;
-      scanCurrentFile.textContent = `檔案: ${data.currentFile}`;
+      if (scanProgressBar) scanProgressBar.style.width = `${pct}%`;
+      if (scanPercentLabel) scanPercentLabel.textContent = `${pct}% (${data.current}/${data.total})`;
+      if (scanCurrentFile) scanCurrentFile.textContent = `檔案: ${data.currentFile}`;
+
+      if (netScanProgressBar) netScanProgressBar.style.width = `${pct}%`;
+      if (netScanPercentLabel) netScanPercentLabel.textContent = `${pct}% (${data.current}/${data.total})`;
+      if (netScanCurrentFile) netScanCurrentFile.textContent = `檔案: ${data.currentFile}`;
     });
   }
 }
