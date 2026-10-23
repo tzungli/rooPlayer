@@ -427,6 +427,7 @@
     '軟體說明與操作手冊': 'About rooPlayer & User Manual',
     '版本資訊、功能架構、授權條款、免責聲明與詳細選單使用指引。': 'Version information, feature architecture, license terms, disclaimer and a detailed guide to every menu.',
     '📖 各選單操作手冊': '📖 Menu manual',
+    '🔬 濾波器音質評測報告': '🔬 Filter acoustic report',
     '📜 使用授權範圍': '📜 License',
     '⚖️ 免責聲明': '⚖️ Disclaimer',
     '⚙️ 核心音訊規格': '⚙️ Audio specifications',

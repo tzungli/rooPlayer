@@ -247,6 +247,90 @@
 
     'about.tech.s7': `<span class="spec-label">Local database</span>
                 <span class="spec-value">High-speed JSON cache, multi-level automatic de-duplication by path and metadata, complete synchronization of favorites and play counts</span>`,
+
+    'about.filter_report': `<div class="about-card-title">
+              <span class="title-icon">🔬</span>
+              <h3>Filter Phase Acoustic Benchmark Report & DSD Modulation Matching Guide</h3>
+            </div>
+            <div class="manual-item-body" style="font-size: 13px; line-height: 1.7; color: var(--text-sub);">
+              <p>
+                In digital audio upsampling and 1-bit DSD modulation architecture, <strong>the upsampling filter is the first line of defense</strong> (responsible for rejecting ultrasonic spectral images generated during oversampling), while <strong>the Delta-Sigma modulator is the second line of defense</strong> (shaping 1-bit quantization noise into ultra-high frequencies). When the pre-filter thoroughly attenuates ultrasonic images, the single-bit comparator operates without intermodulation distortion (IMD), resulting in a pure, pitch-black background and silky high-frequency air.
+              </p>
+
+              <h4 style="color: var(--text-main); margin-top: 18px; margin-bottom: 8px;">📊 Benchmarked Specifications and Acoustic Impact of All Filter Phases</h4>
+              <div style="overflow-x: auto; margin-bottom: 16px;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+                  <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-main);">
+                      <th style="padding: 8px 10px;">Filter Phase</th>
+                      <th style="padding: 8px 10px;">Type & Structure</th>
+                      <th style="padding: 8px 10px;">20kHz Flatness</th>
+                      <th style="padding: 8px 10px;">Image Rejection</th>
+                      <th style="padding: 8px 10px;">Time-Domain Ringing</th>
+                      <th style="padding: 8px 10px;">Acoustic Signature</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 8px 10px; font-weight: 600; color: #a78bfa;">PS-EXT2 Interpreted FIR</td>
+                      <td style="padding: 8px 10px;">Kaiser-window sinc (3401 taps)</td>
+                      <td style="padding: 8px 10px; color: #34d399;">0.00 dB (Flat)</td>
+                      <td style="padding: 8px 10px; color: #34d399;">-189.5 dB (Extreme)</td>
+                      <td style="padding: 8px 10px;">Linear phase (mild symmetric)</td>
+                      <td style="padding: 8px 10px;"><strong>Flagship Studio Monitor</strong>: ultra-low distortion (IMD &lt; -158dB), pitch-black background, razor-sharp imaging contours.</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 8px 10px; font-weight: 600; color: #38bdf8;">Gaussian Long FIR</td>
+                      <td style="padding: 8px 10px;">Gauss-window sinc (1621 taps)</td>
+                      <td style="padding: 8px 10px; color: #34d399;">-0.10 dB (Excellent)</td>
+                      <td style="padding: 8px 10px;">-112.0 dB (Harmonic)</td>
+                      <td style="padding: 8px 10px; color: #34d399;"><strong>Zero Ringing (Strict)</strong></td>
+                      <td style="padding: 8px 10px;"><strong>Analog Vinyl Character</strong>: completely free of Gibbs oscillations, relaxed and open soundstage, lush fatigue-free vocals.</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 8px 10px; font-weight: 600; color: #38bdf8;">Gaussian Min-Phase FIR</td>
+                      <td style="padding: 8px 10px;">Complex cepstral folding</td>
+                      <td style="padding: 8px 10px; color: #34d399;">-0.10 dB (Excellent)</td>
+                      <td style="padding: 8px 10px;">-112.0 dB (Harmonic)</td>
+                      <td style="padding: 8px 10px; color: #34d399;"><strong>Zero Pre-Ringing</strong></td>
+                      <td style="padding: 8px 10px;"><strong>Powerful Transient Impact</strong>: zero pre-ringing, rapid post-pulse decay, tight explosive drum kicks and bass attacks.</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 8px 10px; font-weight: 600; color: #fbbf24;">EXT2 Approx FIR</td>
+                      <td style="padding: 8px 10px;">Ultra-wide transition (3401 taps)</td>
+                      <td style="padding: 8px 10px; color: #34d399;">0.00 dB (Flat to 25k)</td>
+                      <td style="padding: 8px 10px;">-155.1 dB (Harmonic)</td>
+                      <td style="padding: 8px 10px;">Minimal symmetric ringing</td>
+                      <td style="padding: 8px 10px;"><strong>Expansive Air & Holography</strong>: relaxed transition band for minimal time dispersion, rich airiness and holographic soundstage.</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 8px 10px; font-weight: 600; color: #34d399;">User Custom Filter Slots</td>
+                      <td style="padding: 8px 10px;">Custom windows (16~512 taps)</td>
+                      <td style="padding: 8px 10px;">Per user configuration</td>
+                      <td style="padding: 8px 10px;">Per window function</td>
+                      <td style="padding: 8px 10px;">Linear / Minimum selectable</td>
+                      <td style="padding: 8px 10px;"><strong>Personalized Tuning</strong>: customizable rolloff curve to perfectly match specific headphone and loudspeaker treble characteristics.</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 10px; font-weight: 600; color: var(--text-muted);">Lightweight Interpolators</td>
+                      <td style="padding: 8px 10px;">Cubic Hermite polynomials</td>
+                      <td style="padding: 8px 10px; color: #fb923c;">-4.46 dB (Gentle rolloff)</td>
+                      <td style="padding: 8px 10px; color: #fb923c;">-15.0 dB (Light)</td>
+                      <td style="padding: 8px 10px;">Minimal 4-point span</td>
+                      <td style="padding: 8px 10px;"><strong>Casual Low-Load</strong>: minimal CPU load; natural ~4.5dB treble softening for non-fatiguing relaxed background listening.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h4 style="color: var(--text-main); margin-top: 18px; margin-bottom: 8px;">🎯 Audiophile Matching Matrix</h4>
+              <ul>
+                <li><strong>Ultimate Studio Precision</strong>: <code>PS-EXT2 Interpreted FIR</code> ➔ <code>7th Order (Micro-Detail)</code> ➔ <code>DSD256 / DSD512</code>. Delivers -140dB ultrasonic noise suppression and nuanced micro-dynamics, ideal for orchestral works and electrostatic/planar transducers.</li>
+                <li><strong>Lush Audiophile Vocal</strong>: <code>Gaussian Long FIR</code> ➔ <code>5th Order (CRFB Recommended)</code> ➔ <code>DSD128 / DSD256</code>. Combines zero-ringing analog warmth with dual Chebyshev resonant zeros for black backgrounds and smooth vocals.</li>
+                <li><strong>Rock, Pop & Dynamic Attack</strong>: <code>Gaussian Min-Phase FIR</code> ➔ <code>5th Order (CRFB Recommended)</code> ➔ <code>DSD64 / DSD128</code>. Zero pre-ringing transient slam provides explosive punch and driving rhythmic energy.</li>
+                <li><strong>Vintage Analog Vinyl</strong>: <code>Linear Phase / Intermediate</code> ➔ <code>2nd Order (Boser-Wooley)</code> ➔ <code>DSD64</code>. Captures the rich, full-bodied mid-range and organic vintage charm of early SACD masters.</li>
+              </ul>
+            </div>`,
   };
 
   window.I18N_DOC_EN = DOC_EN;

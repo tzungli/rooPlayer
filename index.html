@@ -1462,6 +1462,7 @@
           <!-- Quick Navigation Tabs / Index -->
           <div class="about-quick-nav">
             <a href="#aboutSectionManual" class="about-nav-link">📖 各選單操作手冊</a>
+            <a href="#aboutSectionFilterReport" class="about-nav-link">🔬 濾波器音質評測報告</a>
             <a href="#aboutSectionLicense" class="about-nav-link">📜 使用授權範圍</a>
             <a href="#aboutSectionDisclaimer" class="about-nav-link">⚖️ 免責聲明</a>
             <a href="#aboutSectionTech" class="about-nav-link">⚙️ 核心音訊規格</a>
@@ -1774,6 +1775,93 @@
                 <span class="spec-label">本地資料庫</span>
                 <span class="spec-value">高速 JSON 快取、路徑/元資料多重自動去重、完整我的最愛與播放計數同步機制</span>
               </div>
+            </div>
+          </div>
+
+          <!-- 6. Filter Phase Measurement Report & Modulator Acoustic Matching Guide -->
+          <div id="aboutSectionFilterReport" class="about-card" data-i18n-html="about.filter_report">
+            <div class="about-card-title">
+              <span class="title-icon">🔬</span>
+              <h3>濾波器相位音質評測報告與 DSD 調變器搭配指南</h3>
+            </div>
+            <div class="manual-item-body" style="font-size: 13px; line-height: 1.7; color: var(--text-sub);">
+              <p>
+                在數位音訊升頻與 1-bit DSD 調變架構中，<strong>升頻濾波器是第一道防線</strong>（負責濾除超取樣後產生的鏡像反射 Images），而 <strong>Delta-Sigma 調變器是第二道防線</strong>（透過高階噪聲整形將量化噪聲搬移至超高頻）。若前級濾波器能乾淨濾除超聲鏡像，調變器的單 bit 比較器便不會產生互調失真（IMD），能獲得最深邃安靜的背景與細膩的高頻空氣感。
+              </p>
+
+              <h4 style="color: var(--text-main); margin-top: 18px; margin-bottom: 8px;">📊 所有濾波器相位的實測規格與音質影響分析</h4>
+              <div style="overflow-x: auto; margin-bottom: 16px;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+                  <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-main);">
+                      <th style="padding: 8px 10px;">濾波器相位</th>
+                      <th style="padding: 8px 10px;">類型與結構</th>
+                      <th style="padding: 8px 10px;">20kHz 平坦度</th>
+                      <th style="padding: 8px 10px;">鏡像抑制能力</th>
+                      <th style="padding: 8px 10px;">時域鈴振特性</th>
+                      <th style="padding: 8px 10px;">音質與聽感特徵</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 8px 10px; font-weight: 600; color: #a78bfa;">PS-EXT2 直譯 FIR</td>
+                      <td style="padding: 8px 10px;">Kaiser 窗 sinc (3401 taps)</td>
+                      <td style="padding: 8px 10px; color: #34d399;">0.00 dB (平直)</td>
+                      <td style="padding: 8px 10px; color: #34d399;">-189.5 dB (極深)</td>
+                      <td style="padding: 8px 10px;">線性相位（對稱輕微）</td>
+                      <td style="padding: 8px 10px;"><strong>旗艦監聽級</strong>：超低失真（IMD &lt; -158dB），背景漆黑純淨，結像輪廓如刀刻般銳利清晰。</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 8px 10px; font-weight: 600; color: #38bdf8;">高斯長脈衝 FIR</td>
+                      <td style="padding: 8px 10px;">高斯窗 sinc (1621 taps)</td>
+                      <td style="padding: 8px 10px; color: #34d399;">-0.10 dB (極佳)</td>
+                      <td style="padding: 8px 10px;">-112.0 dB (倍頻)</td>
+                      <td style="padding: 8px 10px; color: #34d399;"><strong>嚴格無鈴振 (Zero)</strong></td>
+                      <td style="padding: 8px 10px;"><strong>類比黑膠韻味</strong>：階躍完全無震盪波形，音場寬鬆自然大氣，人聲溫潤厚實耐聽，久聽不累。</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 8px 10px; font-weight: 600; color: #38bdf8;">高斯最小相位 FIR</td>
+                      <td style="padding: 8px 10px;">複倒數譜因果折疊</td>
+                      <td style="padding: 8px 10px; color: #34d399;">-0.10 dB (極佳)</td>
+                      <td style="padding: 8px 10px;">-112.0 dB (倍頻)</td>
+                      <td style="padding: 8px 10px; color: #34d399;"><strong>零預響鈴 (Zero Pre)</strong></td>
+                      <td style="padding: 8px 10px;"><strong>強大瞬態打擊力</strong>：預響鈴嚴格為零，主脈衝後衝迅速收斂，爵士鼓與低音打擊結實凌厲。</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 8px 10px; font-weight: 600; color: #fbbf24;">EXT2 近似 FIR</td>
+                      <td style="padding: 8px 10px;">超寬過渡帶 (3401 taps)</td>
+                      <td style="padding: 8px 10px; color: #34d399;">0.00 dB (平直至25k)</td>
+                      <td style="padding: 8px 10px;">-155.1 dB (倍頻)</td>
+                      <td style="padding: 8px 10px;">極短對稱鈴振</td>
+                      <td style="padding: 8px 10px;"><strong>極致通透空氣感</strong>：放寬過渡帶換取最短時域衝激，超高頻泛音豐富，音場立體感極度開闊。</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 8px 10px; font-weight: 600; color: #34d399;">使用者自訂濾波槽</td>
+                      <td style="padding: 8px 10px;">自訂窗函數 (16~512 taps)</td>
+                      <td style="padding: 8px 10px;">依設定參數而定</td>
+                      <td style="padding: 8px 10px;">依窗函數而定</td>
+                      <td style="padding: 8px 10px;">線性 / 最小相位可選</td>
+                      <td style="padding: 8px 10px;"><strong>專屬個性微調</strong>：自由調整滾降曲線，完美匹配個人耳機與喇叭系統的高音延伸特性。</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 10px; font-weight: 600; color: var(--text-muted);">輕量內插 (線性/最小/緩衰減)</td>
+                      <td style="padding: 8px 10px;">Cubic Hermite 多項式內插</td>
+                      <td style="padding: 8px 10px; color: #fb923c;">-4.46 dB (自然緩降)</td>
+                      <td style="padding: 8px 10px; color: #fb923c;">-15.0 dB (輕量)</td>
+                      <td style="padding: 8px 10px;">時域跨度極短 (4點)</td>
+                      <td style="padding: 8px 10px;"><strong>休閒低負載</strong>：CPU 消耗最低；高頻帶有約 4.5dB 自然緩滾降，音色柔和暗調、毫無刺激感。</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h4 style="color: var(--text-main); margin-top: 18px; margin-bottom: 8px;">🎯 發燒最佳搭配矩陣 (Acoustic Matching Guide)</h4>
+              <ul>
+                <li><strong>監聽級極致解析組合</strong>：<code>PS-EXT2 直譯 FIR</code> ➔ <code>7 階 (極致微動態)</code> ➔ <code>DSD256 / DSD512</code>。提供高達 -140dB 的超聲噪聲抑制與極致弱音微動態，適合交響樂、大編制原聲錄音與高階靜電/動鐵耳機。</li>
+                <li><strong>溫潤發燒人聲推薦組合</strong>：<code>高斯長脈衝 FIR</code> ➔ <code>5 階 (CRFB 發燒推薦)</code> ➔ <code>DSD128 / DSD256</code>。兼具零鈴振的寬鬆類比感與雙重 Chebyshev 共振零點的純黑背景，爵士樂與流行人聲溫暖滑順。</li>
+                <li><strong>搖滾流行與節奏衝擊組合</strong>：<code>高斯最小相位 FIR</code> ➔ <code>5 階 (CRFB 發燒推薦)</code> ➔ <code>DSD64 / DSD128</code>。零預響鈴的瞬態響應讓打擊樂鼓點紮實凝聚，速度感與動態張力十足。</li>
+                <li><strong>復古類比黑膠感組合</strong>：<code>線性相位 / 混和緩衰減</code> ➔ <code>2 階 (Boser-Wooley)</code> ➔ <code>DSD64</code>。重現 90 年代早期經典 SACD 溫潤厚重、中頻飽滿的迷人老類比聽感。</li>
+              </ul>
             </div>
           </div>
 
