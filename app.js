@@ -148,6 +148,7 @@ const FALLBACK_FILTER_PLUGINS = [
   { id: 'gauss-long', label: '高斯長脈衝 FIR (極低鈴振)', sound: '通帶平坦、極低鈴振與鏡像能量', kind: 'fir' },
   { id: 'gauss-min', label: '高斯最小相位 FIR (零預響鈴)', sound: '預響鈴嚴格為零、瞬態凌厲（些微後衝）', kind: 'fir' },
   { id: 'poly-ext2', label: 'EXT2 近似 FIR (超寬過渡帶)', sound: '通帶完全平坦無漣波、高頻延伸自然；22k 以上有些許鏡像泄漏（不可聽）', kind: 'fir' },
+  { id: 'pure-flat', label: '純真還原 FIR (極致平坦)', sound: '通帶 0~21.5kHz 絕對平坦（漣波 < 0.0001dB），零染色純淨還原，呈現錄音室母帶真實原貌', kind: 'fir' },
   { id: 'hqp-ps-ext2', label: 'PS-EXT2 直譯 FIR (陡峭滾降+極深止帶)', sound: '陡峭滾降、極深止帶；鏡像泄漏僅在超聲頻（不可聽）', kind: 'fir' }
 ];
 

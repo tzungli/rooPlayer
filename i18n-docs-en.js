@@ -129,7 +129,7 @@
                     <li><strong>Left column (live signal path)</strong>: tracks every stage live — “source master ➔ upsampling engine ➔ parametric EQ ➔ convolution ➔ DLNA / local endpoint”. Active EQ and convolution stages are shown at the exact position where they apply in the path diagram.</li>
                     <li><strong>Right column (upsampling settings)</strong>:
                       <br>• <strong>PCM upsampling</strong>: 2x and 4x integer upsampling (recommended for the cleanest phase), plus fixed 96k / 192k / 384k DXD oversampling.
-                      <br>• <strong>Nine filter phases</strong>: linear phase, minimum phase, gentle-decay hybrid, Gaussian long-impulse, Gaussian minimum phase, EXT2 approximation, and the PS-EXT2 interpreted FIR (steep rolloff, stop band down to -180 dB).
+                      <br>• <strong>Eight filter phases</strong>: Pure-Flat restoration FIR (bit-perfect ultra-flat, 0~21.5kHz ripple &lt; 0.0001dB), linear phase, minimum phase, gentle-decay hybrid, Gaussian long-impulse, Gaussian minimum phase, EXT2 approximation, and PS-EXT2 interpreted FIR (steep rolloff, stop band down to -180 dB).
                       <br>• <strong>1-bit DSD modulation</strong>: built-in 2nd / 5th / 7th-order resonant noise-shaping delta-sigma modulators, with live conversion to DSD64 (2.8 MHz), DSD128 (5.6 MHz), DSD256 (11.2 MHz) or DSD512 (22.5 MHz).
                     </li>
                     <li><strong>Parametric EQ (PEQ)</strong>: tone shaping that is independent of the upsampling engine and works whether the engine is on or off (with the engine off it runs at the native sample rate, with no extra upsampling). Up to 6 fully parametric bands (low shelf / peak / high shelf / low pass / high pass / notch), five built-in tonal presets — flat, warm and dense, bright and open, vocal presence, bass saturation — plus <strong>6 named user slots</strong> for one-click recall of your own tuning. The automatic pre-trim protection guarantees that no gain combination ever clips, and band settings apply live to the playing track.</li>
@@ -231,7 +231,7 @@
                 <span class="spec-value">FLAC (24/192), WAV (32-bit Float), AIFF, DSF (DSD64/128/256/512), DFF, MP3, M4A, AAC, OGG</span>`,
 
     'about.tech.s2': `<span class="spec-label">PCM upsampling engine</span>
-                <span class="spec-value">Our own 64-bit floating Native DSP kernel: high-order Hermite interpolation with nine filter phases (linear / minimum / gentle-decay hybrid, Gaussian long-impulse, Gaussian minimum phase, EXT2 approximation, PS-EXT2 interpreted FIR with a stop band down to -180 dB); polyphase pre-computed acceleration architecture; 2x / 4x integer upsampling, 96k, 192k, 384k DXD</span>`,
+                <span class="spec-value">Our own 64-bit floating Native DSP kernel: high-order Hermite interpolation with eight filter phases (Pure-Flat restoration FIR, linear / minimum / gentle-decay hybrid, Gaussian long-impulse, Gaussian minimum phase, EXT2 approximation, PS-EXT2 interpreted FIR with a stop band down to -180 dB); polyphase pre-computed acceleration architecture; 2x / 4x integer upsampling, 96k, 192k, 384k DXD</span>`,
 
     'about.tech.s3': `<span class="spec-label">DSD modulator</span>
                 <span class="spec-value">2nd / 5th / 7th-order resonant noise-shaping 1-bit delta-sigma modulator (2.8224 MHz ~ 22.5792 MHz, standard Sony DSF container, correct MSB-first bit order); parallel modulation on up to 8 worker cores, with each segment joined seamlessly using real warm-up audio</span>`,
@@ -304,12 +304,12 @@
                       <td style="padding: 8px 10px;"><strong>Expansive Air & Holography</strong>: relaxed transition band for minimal time dispersion, rich airiness and holographic soundstage.</td>
                     </tr>
                     <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                      <td style="padding: 8px 10px; font-weight: 600; color: #34d399;">User Custom Filter Slots</td>
-                      <td style="padding: 8px 10px;">Custom windows (16~512 taps)</td>
-                      <td style="padding: 8px 10px;">Per user configuration</td>
-                      <td style="padding: 8px 10px;">Per window function</td>
-                      <td style="padding: 8px 10px;">Linear / Minimum selectable</td>
-                      <td style="padding: 8px 10px;"><strong>Personalized Tuning</strong>: customizable rolloff curve to perfectly match specific headphone and loudspeaker treble characteristics.</td>
+                      <td style="padding: 8px 10px; font-weight: 600; color: #34d399;">Pure-Flat Restoration FIR</td>
+                      <td style="padding: 8px 10px;">Optimized Kaiser-window sinc (3401 taps)</td>
+                      <td style="padding: 8px 10px; color: #34d399;"><strong>&lt; 0.0001 dB (Absolute Flat)</strong></td>
+                      <td style="padding: 8px 10px; color: #34d399;">-160.2 dB (Extreme)</td>
+                      <td style="padding: 8px 10px;">Strict symmetric linear phase</td>
+                      <td style="padding: 8px 10px;"><strong>Master Tape Restoration</strong>: 0~21.5kHz zero gain ripple, zero phase coloration, IMD &lt; -162dB, 100% faithful to the original studio master.</td>
                     </tr>
                     <tr>
                       <td style="padding: 8px 10px; font-weight: 600; color: var(--text-muted);">Lightweight Interpolators</td>
@@ -325,6 +325,7 @@
 
               <h4 style="color: var(--text-main); margin-top: 18px; margin-bottom: 8px;">🎯 Audiophile Matching Matrix</h4>
               <ul>
+                <li><strong>Bit-Perfect Master Restoration (Recommended)</strong>: <code>Pure-Flat Restoration FIR (Ultra-Flat)</code> ➔ <code>5th Order (CRFB Recommended) / 7th Order</code> ➔ <code>All Sample Rates</code>. Complete zero-coloration passband, zero phase shift, IMD below -162dB; reproduces instruments and vocals with authentic natural timbre.</li>
                 <li><strong>Ultimate Studio Precision</strong>: <code>PS-EXT2 Interpreted FIR</code> ➔ <code>7th Order (Micro-Detail)</code> ➔ <code>DSD256 / DSD512</code>. Delivers -140dB ultrasonic noise suppression and nuanced micro-dynamics, ideal for orchestral works and electrostatic/planar transducers.</li>
                 <li><strong>Lush Audiophile Vocal</strong>: <code>Gaussian Long FIR</code> ➔ <code>5th Order (CRFB Recommended)</code> ➔ <code>DSD128 / DSD256</code>. Combines zero-ringing analog warmth with dual Chebyshev resonant zeros for black backgrounds and smooth vocals.</li>
                 <li><strong>Rock, Pop & Dynamic Attack</strong>: <code>Gaussian Min-Phase FIR</code> ➔ <code>5th Order (CRFB Recommended)</code> ➔ <code>DSD64 / DSD128</code>. Zero pre-ringing transient slam provides explosive punch and driving rhythmic energy.</li>

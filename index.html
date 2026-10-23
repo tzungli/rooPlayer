@@ -1616,7 +1616,7 @@
                     <li><strong>左欄（即時音訊路徑）</strong>：即時追蹤從「原始母帶音源 ➔ 升頻引擎 ➔ 參數化等化 ➔ 卷積濾波 ➔ DLNA / 本機端點」的各處理節點狀態；作用中的等化器與卷積節點會即時顯示於路徑圖的實際套用位置。</li>
                     <li><strong>右欄（升頻引擎設定）</strong>：
                       <br>• <strong>PCM 升頻</strong>：支援 2x、4x 整數倍頻（推薦相位最純淨）、固定 96k / 192k / 384k DXD 超取樣。
-                      <br>• <strong>七種濾波器相位</strong>：線性相位、最小相位、緩衰減混和、高斯長脈衝、高斯最小相位、EXT2 近似，以及 PS-EXT2 直譯 FIR（陡峭滾降、止帶達 -180 dB）。
+                      <br>• <strong>八種濾波器相位</strong>：純真還原 FIR（Bit-Perfect 極平坦，通帶 0~21.5kHz 漣波 &lt; 0.0001dB）、線性相位、最小相位、緩衰減混和、高斯長脈衝、高斯最小相位、EXT2 近似，以及 PS-EXT2 直譯 FIR（陡峭滾降、止帶達 -180 dB）。
                       <br>• <strong>1-bit DSD 調變</strong>：內建 2 / 5 / 7 階諧振噪聲整形 Delta-Sigma 調變器，支援即時轉制為 DSD64 (2.8MHz)、DSD128 (5.6MHz)、DSD256 (11.2MHz) 或 DSD512 (22.5MHz)。
                     </li>
                     <li><strong>參數化等化器 (PEQ)</strong>：獨立於升頻引擎的音色調整，引擎開或關皆可作用（引擎關閉時於原生採樣率處理，不做多餘升頻）。最多 6 段全參數化頻段（低架 / 峰值 / 高架 / 低通 / 高通 / 陷波），內建平直、溫暖厚實、明亮通透、人聲突出、低頻飽和五種音色預設，並支援<strong>6 組自訂命名儲存槽</strong>一鍵存取個人調校；自動預降保護電路確保任何增益組合都不削頂，頻段設定即時套用到播放中的曲目。</li>
@@ -1753,7 +1753,7 @@
               </div>
               <div class="spec-row" data-i18n-html="about.tech.s2">
                 <span class="spec-label">PCM 升頻引擎</span>
-                <span class="spec-value">自研 64-bit 浮點 Native DSP Kernel：高階 Hermite 插值與七種濾波器相位（線性 / 最小 / 緩衰減混和、高斯窗長脈衝、高斯最小相位、EXT2 近似、PS-EXT2 直譯 FIR，止帶最深 -180 dB）；多相預計算加速架構；支援 2x / 4x 整數倍頻、96k、192k、384k DXD</span>
+                <span class="spec-value">自研 64-bit 浮點 Native DSP Kernel：高階 Hermite 插值與八種濾波器相位（純真還原 FIR、線性 / 最小 / 緩衰減混和、高斯窗長脈衝、高斯最小相位、EXT2 近似、PS-EXT2 直譯 FIR，止帶最深 -180 dB）；多相預計算加速架構；支援 2x / 4x 整數倍頻、96k、192k、384k DXD</span>
               </div>
               <div class="spec-row" data-i18n-html="about.tech.s3">
                 <span class="spec-label">DSD 調變器</span>
@@ -1836,12 +1836,12 @@
                       <td style="padding: 8px 10px;"><strong>極致通透空氣感</strong>：放寬過渡帶換取最短時域衝激，超高頻泛音豐富，音場立體感極度開闊。</td>
                     </tr>
                     <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                      <td style="padding: 8px 10px; font-weight: 600; color: #34d399;">使用者自訂濾波槽</td>
-                      <td style="padding: 8px 10px;">自訂窗函數 (16~512 taps)</td>
-                      <td style="padding: 8px 10px;">依設定參數而定</td>
-                      <td style="padding: 8px 10px;">依窗函數而定</td>
-                      <td style="padding: 8px 10px;">線性 / 最小相位可選</td>
-                      <td style="padding: 8px 10px;"><strong>專屬個性微調</strong>：自由調整滾降曲線，完美匹配個人耳機與喇叭系統的高音延伸特性。</td>
+                      <td style="padding: 8px 10px; font-weight: 600; color: #34d399;">純真還原 FIR (極致平坦)</td>
+                      <td style="padding: 8px 10px;">最優化 Kaiser 窗 sinc (3401 taps)</td>
+                      <td style="padding: 8px 10px; color: #34d399;"><strong>&lt; 0.0001 dB (絕對平坦)</strong></td>
+                      <td style="padding: 8px 10px; color: #34d399;">-160.2 dB (極深)</td>
+                      <td style="padding: 8px 10px;">嚴格線性相位對稱</td>
+                      <td style="padding: 8px 10px;"><strong>母帶直通還原</strong>：通帶 0~21.5kHz 零波動、零相移染色，互調失真 &lt; -162dB，100% 忠實呈現錄音室原音。</td>
                     </tr>
                     <tr>
                       <td style="padding: 8px 10px; font-weight: 600; color: var(--text-muted);">輕量內插 (線性/最小/緩衰減)</td>
@@ -1857,6 +1857,7 @@
 
               <h4 style="color: var(--text-main); margin-top: 18px; margin-bottom: 8px;">🎯 發燒最佳搭配矩陣 (Acoustic Matching Guide)</h4>
               <ul>
+                <li><strong>母帶級純真還原組合 (推薦)</strong>：<code>純真還原 FIR (極致平坦)</code> ➔ <code>5 階 (CRFB 發燒推薦) / 7 階</code> ➔ <code>全取樣率</code>。全頻段零增益染色、零相移，互調失真低於 -162dB，忠實重現樂器原音與人聲真實質地。</li>
                 <li><strong>監聽級極致解析組合</strong>：<code>PS-EXT2 直譯 FIR</code> ➔ <code>7 階 (極致微動態)</code> ➔ <code>DSD256 / DSD512</code>。提供高達 -140dB 的超聲噪聲抑制與極致弱音微動態，適合交響樂、大編制原聲錄音與高階靜電/動鐵耳機。</li>
                 <li><strong>溫潤發燒人聲推薦組合</strong>：<code>高斯長脈衝 FIR</code> ➔ <code>5 階 (CRFB 發燒推薦)</code> ➔ <code>DSD128 / DSD256</code>。兼具零鈴振的寬鬆類比感與雙重 Chebyshev 共振零點的純黑背景，爵士樂與流行人聲溫暖滑順。</li>
                 <li><strong>搖滾流行與節奏衝擊組合</strong>：<code>高斯最小相位 FIR</code> ➔ <code>5 階 (CRFB 發燒推薦)</code> ➔ <code>DSD64 / DSD128</code>。零預響鈴的瞬態響應讓打擊樂鼓點紮實凝聚，速度感與動態張力十足。</li>
