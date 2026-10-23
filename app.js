@@ -8447,12 +8447,14 @@ function drawUfPreview(cv, data, ctx) {
   // 現在把 X 軸視窗直接縮放並平移至截止點附近：xMin = max(0, fc - 1.3×源Nyq), xMax = min(fsOut/2, fc + 0.6×源Nyq)。
   // 這樣滾降的完整弧度、不同 taps 的陡峭差異都會橫向展開到畫布寬度的 40% 以上，一眼可辨！
   const fcRaw = Number.isFinite(data.fcHz) && data.fcHz > 0 ? Math.min(data.fcHz, fsOut / 2) : 0;
+  // 引擎回傳的 xs 已涵蓋「完整滾降轉折」（含超大輸出取樣率脈絡）；軸右緣直接採用資料實際覆蓋的頻率，
+  // 再向外補到整數 kHz——保證轉折一定在圖內，且刻度數字全是整數 kHz。
+  const dataMaxHz = Array.isArray(data.xs) && data.xs.length ? Number(data.xs[data.xs.length - 1]) : 0;
   // 左緣固定從音頻帶低端（源Nyq/10 ≈ 2.2kHz）開始：低頻端才能放得下 5k/10k/15k… 的數字刻度；
   // 若仍用 fc−1.3×源Nyq，左緣會貼著 0Hz，第一個可用刻度（20k）剛好被源 Nyquist 虛線吃掉，整段左半邊都沒有數字。
   const fMin = fcRaw > 0 ? Math.max(0, srcNyq / 10) : 0;
-  // 右緣至少涵蓋鏡像帶＋抑制零點（fc + 0.6×源Nyq），再向外補到「整數 kHz」邊界（例如 38.1k → 40k）：
-  // 軸寬變成整数 kHz，所有可選步進都是整数 kHz，刻度數字永遠乾淨好讀。
-  const fMax = fcRaw > 0 ? Math.min(fsOut / 2, Math.ceil((fcRaw + 0.6 * srcNyq) / 1000) * 1000) : Math.min(fsOut / 2, 1.1 * srcNyq * 2);
+  const rightNeed = Math.max(fcRaw + 0.6 * srcNyq, Number.isFinite(dataMaxHz) ? dataMaxHz : 0);
+  const fMax = fcRaw > 0 ? Math.min(fsOut / 2, Math.ceil(rightNeed / 1000) * 1000) : Math.min(fsOut / 2, 1.1 * srcNyq * 2);
   const xOf = f => padL + (f - fMin) / (fMax - fMin) * (W - padL - padR);
   const plotW = W - padL - padR;
   // 邊界：源 Nyquist（可聽音頻上緣）、截止 fc（可拖曳）、鏡像抑制零點（止帶起點）

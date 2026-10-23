@@ -653,7 +653,7 @@ function reloadUserFilters() {
 }
 
 // 頻率響應預覽：回傳 { xs(Hz), ysDb, srcNyq, fsOut, fcHz, imageZeroHz, transLoHz, stopBandHz }。
-// xs 範圍 0..min(fsOut/2, 1.3×源取樣率)（完整顯示音頻帶＋鏡像帶），-120dB 底。
+// xs 範圍 0..min(fsOut/2, max(1.3×源取樣率, 截止＋完整過渡帶))（完整顯示音頻帶＋鏡像帶與滾降轉折），-120dB 底。
 // fcHz = 實際生效的截止點（含 0.45·fsOut 上限，渲染端畫可拖曳的「截止線」）；
 // imageZeroHz / transLoHz / stopBandHz = 升頻鏡像與 h 週期化的抑制零點（標「止帶」用）。
 function previewUserFilterSpec(spec, srcRate, fsOut) {
@@ -663,12 +663,18 @@ function previewUserFilterSpec(spec, srcRate, fsOut) {
   try { gf = d.design(fsOut, srcRate, FILTER_TOOLBOX); } catch (e) { return null; }
   if (!gf) return null;
   const N = 512;
-  const fMax = Math.min(fsOut / 2, 1.3 * srcRate); // 完整顯示鏡像帶（源取樣率 ± 截止）
-  const h = gf.h, S = gf.S, norm = gf.ratio * S;
+  // 取樣上限必須涵蓋「完整滾降轉折」，否則在超大輸出取樣率脈絡（例如 PCM→DSD 升頻、fsOut=源取樣率×256）
+  // 下，濾波器半寬 L 以輸出樣本計，過渡帶寬 ≈ 4·fsOut/(2L+1) 可達上百 kHz；只掃到 1.3×源取樣率的話
+  // 整條曲線全在通帶內 → 使用者看到的就是一條水平死線（轉折根本沒進圖）。
+  const hLen = gf.h.length, S = gf.S;
+  const transHz = (hLen > 0) ? (4 * fsOut / Math.max(1, hLen)) : 0; // 主瓣寬（窗函數近似）：轉折全寬
+  const fcForSpan = gf.fcHz || (1.135 * srcRate / 2);
+  const fMax = Math.min(fsOut / 2, Math.max(1.3 * srcRate, fcForSpan + transHz));
+  const h = gf.h, Sg = gf.S, norm = gf.ratio * Sg;
   const xs = new Array(N), ysDb = new Array(N);
   for (let i = 0; i < N; i++) {
     const f = fMax * i / (N - 1);
-    const w = 2 * Math.PI * f / (fsOut * S);
+    const w = 2 * Math.PI * f / (fsOut * Sg);
     let re = 0, im = 0;
     for (let j = 0; j < h.length; j++) {
       const a = h[j];
