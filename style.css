@@ -1798,8 +1798,8 @@ body.table-col-resizing * {
 /* Two-column layout: Left (Signal Path) & Right (Upsampling Engine) */
 .signal-path-columns {
   display: grid;
-  /* 左欄（即時訊號串流路徑）縮短，右欄（升頻引擎設定）加寬以容納更多濾波器選項 */
-  grid-template-columns: 2fr 3fr;
+  /* 左欄（即時訊號串流路徑）窄化，右欄（DSP / 升頻引擎設定）加寬 */
+  grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr);
   gap: 28px;
   align-items: start;
 }
@@ -2336,7 +2336,8 @@ body.table-col-resizing * {
 @container ufstrip (min-width: 560px) {
   #ufEditorPanel {
     display: grid;
-    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+    /* 左側操作區與右側頻率響應預覽：加寬預覽欄位，讓頻譜細節與拖曳標記更寬闊易讀 */
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.1fr);
     grid-template-areas:
       "head head"
       "form preview";
