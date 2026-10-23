@@ -1849,6 +1849,10 @@ function rebuildLibraryCollections() {
   state.artists = Array.from(artistMap.values());
   state.genres = Array.from(genreSet);
 
+  if (state.currentView === 'kkbox') {
+    try { refreshKkboxMatches(); } catch (e) {}
+  }
+
   // Trigger background online resolution for any remaining unknown album artists
   setTimeout(() => autoResolveUnknownAlbumArtists(), 1000);
 }
@@ -15570,11 +15574,31 @@ class KKBoxService {
 
 const kkboxService = new KKBoxService();
 
+let kkboxStreamingEventsBound = false;
+let loadKkboxChartsFn = null;
+let refreshKkboxMatchesFn = null;
+
+function refreshKkboxMatches() {
+  if (typeof refreshKkboxMatchesFn === 'function') {
+    refreshKkboxMatchesFn();
+  }
+}
+
 function onOpenKkboxView() {
-  // If KKBOX charts are not yet loaded, initialize
+  initKkboxStreaming();
   const catContainer = document.getElementById('kkboxChartCategories');
-  if (catContainer && catContainer.children.length === 0) {
-    initKkboxStreaming();
+  const tracksContainer = document.getElementById('kkboxChartTracksList');
+  const hasLoaded = catContainer && catContainer.children.length > 0 &&
+                    tracksContainer && tracksContainer.children.length > 0 &&
+                    !tracksContainer.querySelector('.empty-hint') &&
+                    !tracksContainer.querySelector('.kkbox-loading-indicator');
+  if (!hasLoaded) {
+    if (typeof loadKkboxChartsFn === 'function') {
+      loadKkboxChartsFn();
+    }
+  } else {
+    // 進入 KKBOX 視圖時，若已有曲目，自動對齊並刷新本機曲庫與 TIDAL 比對
+    refreshKkboxMatches();
   }
 }
 
@@ -15620,6 +15644,10 @@ function initKkboxStreaming() {
       btnOpenLogin.classList.add('logged-in');
     }
   }
+
+  // 僅綁定一次 DOM 事件
+  if (!kkboxStreamingEventsBound) {
+    kkboxStreamingEventsBound = true;
 
   // Banner close
   if (btnCloseBanner && infoBanner) {
@@ -15756,6 +15784,7 @@ function initKkboxStreaming() {
       showToast(`已成功綁定 KKBOX 帳號 ${account}，享有完整即時串流授權！`);
     });
   }
+  } // end if (!kkboxStreamingEventsBound)
 
   // --- Sub-renderers ---
 
@@ -15766,7 +15795,10 @@ function initKkboxStreaming() {
     const tracksContainer = document.getElementById('kkboxChartTracksList');
     if (!catContainer || !tracksContainer) return;
 
-    if (!force && catContainer.children.length > 0) return;
+    if (!force && catContainer.children.length > 0 && tracksContainer.children.length > 0 && !tracksContainer.querySelector('.empty-hint') && !tracksContainer.querySelector('.kkbox-loading-indicator')) {
+      refreshKkboxMatchesLocal();
+      return;
+    }
 
     try {
       tracksContainer.innerHTML = '<div class="kkbox-loading-indicator">⏳ 正在連線 KKBOX Open API 獲取官方即時排行榜...</div>';
@@ -16036,10 +16068,12 @@ function initKkboxStreaming() {
   // Helper: Render track rows with Play, Add to Queue, and Favorite actions
   function renderKkboxTrackList(container, trackList) {
     container.innerHTML = '';
+    container._kkboxTracks = trackList;
     const renderedRows = [];
     trackList.forEach((track, idx) => {
       const row = document.createElement('div');
       row.className = 'kkbox-track-row';
+      row._kkboxTrack = track;
       const isFav = isTrackFavorite(track);
 
       row.innerHTML = `
@@ -16114,8 +16148,47 @@ function initKkboxStreaming() {
     annotateKkboxRowsWithTidal(trackList, renderedRows);
   }
 
-  // Load first tab (Charts) immediately on initialization
-  loadKkboxCharts();
+  // 刷新目前頁面上所有 KKBOX 歌曲的比對狀態（曲庫載入、TIDAL 登入或再次切入頁面時自動觸發）
+  function refreshKkboxMatchesLocal() {
+    const rows = document.querySelectorAll('.kkbox-track-row');
+    if (!rows.length) return;
+    const pendingTidalTracks = [];
+    const pendingTidalRows = [];
+    rows.forEach(row => {
+      const track = row._kkboxTrack;
+      if (!track) return;
+      const rowLeft = row.querySelector('.kkbox-track-row-left');
+      if (!rowLeft) return;
+      let matchCell = rowLeft.querySelector('.kkbox-track-match-cell');
+      if (!matchCell) {
+        matchCell = buildSongMatchCell(track);
+        rowLeft.appendChild(matchCell);
+      } else {
+        const hits = findLibraryMatchesForSong(track.title, track.artist);
+        const cached = kkboxTidalMatchCache.get(songMatchKeyOf(track.title, track.artist));
+        if (cached && !hits.some(h => h.kind === 'tidal')) hits.push({ kind: 'tidal', tidal: cached });
+        matchCell.innerHTML = '';
+        hits.forEach(h => matchCell.appendChild(createSongMatchBadge(h.kind, h)));
+      }
+      const key = songMatchKeyOf(track.title, track.artist);
+      if (!kkboxTidalMatchCache.has(key) && !findLibraryMatchesForSong(track.title, track.artist).some(h => h.kind === 'tidal')) {
+        pendingTidalTracks.push(track);
+        pendingTidalRows.push(row);
+      }
+    });
+
+    if (pendingTidalTracks.length > 0 && window.tidalService && window.tidalService.isLoggedIn) {
+      annotateKkboxRowsWithTidal(pendingTidalTracks, pendingTidalRows);
+    }
+  }
+
+  loadKkboxChartsFn = loadKkboxCharts;
+  refreshKkboxMatchesFn = refreshKkboxMatchesLocal;
+
+  // 僅當啟動時當前視圖就是 KKBOX 時才立即載入；一般情況由 onOpenKkboxView 於切入時載入
+  if (state.currentView === 'kkbox') {
+    loadKkboxCharts();
+  }
 }
 
 // ==========================================================
