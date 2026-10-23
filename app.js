@@ -8368,7 +8368,7 @@ function ufCutFromPointer(clientX) {
   const rect = cv.getBoundingClientRect();
   const g = ufPreviewGeom;
   const x = Math.min(Math.max(rect.left + g.padL, clientX), rect.right - g.padR);
-  const fc = ((x - (rect.left + g.padL)) / (g.plotW || 1)) * g.fMax;
+  const fc = g.fMin + ((x - (rect.left + g.padL)) / (g.plotW || 1)) * (g.fMax - g.fMin);
   const srcRate = (ufPreviewCtx && ufPreviewCtx.srcRate) || 44100;
   // 上限用 ufCutRelMax（引擎截斷後真正可達的延伸），不是滑桿的理論最大值
   const rel = Math.min(ufCutRelMax, Math.max(0.8, Math.round((fc / (srcRate / 2)) * 100) / 100));
@@ -8441,10 +8441,14 @@ function drawUfPreview(cv, data, ctx) {
   }
   const srcNyq = data.srcNyq || 22050;
   const fsOut = data.fsOut || ((ufPreviewCtx && ufPreviewCtx.targetRate) || 176400);
-  // 線性頻率軸（X 軸）：以 1.1×源取樣率（例如 44.1k 時為 48.5kHz）為顯示上限。
-  // 截止頻率（~24.9kHz）恰好落在畫面正中央，過渡帶寬度橫向展開拉長，微調滑桿與窗函數的差別立即可見！
-  const fMax = Math.min(fsOut / 2, 1.1 * srcNyq * 2);
-  const xOf = f => padL + f / fMax * (W - padL - padR);
+  // ---- X 軸視窗自動對準「滾降轉折區」（解決整條死線的問題）----
+  // 全帶線性軸下，曲線在通帶內是完全平坦的 0dB，轉折只佔幾十個像素——看起來就是一條水平死線。
+  // 現在把 X 軸視窗直接縮放並平移至截止點附近：xMin = max(0, fc - 1.3×源Nyq), xMax = min(fsOut/2, fc + 0.6×源Nyq)。
+  // 這樣滾降的完整弧度、不同 taps 的陡峭差異都會橫向展開到畫布寬度的 40% 以上，一眼可辨！
+  const fcRaw = Number.isFinite(data.fcHz) && data.fcHz > 0 ? Math.min(data.fcHz, fsOut / 2) : 0;
+  const fMin = fcRaw > 0 ? Math.max(0, fcRaw - 1.3 * srcNyq) : 0;
+  const fMax = fcRaw > 0 ? Math.min(fsOut / 2, fcRaw + 0.6 * srcNyq) : Math.min(fsOut / 2, 1.1 * srcNyq * 2);
+  const xOf = f => padL + (f - fMin) / (fMax - fMin) * (W - padL - padR);
   const plotW = W - padL - padR;
   // 邊界：源 Nyquist（可聽音頻上緣）、截止 fc（可拖曳）、鏡像抑制零點（止帶起點）
   const hasMarks = Number.isFinite(data.fcHz) && data.fcHz > 0;
@@ -8461,8 +8465,11 @@ function drawUfPreview(cv, data, ctx) {
   const bandY0 = padT, bandY1 = H - padB;
   const fillBand = (f0, f1, col) => {
     if (!(f1 > f0)) return;
+    // 視窗縮放後要裁切到可見範圍，超出左緣的區段只畫到繪圖區邊界
+    const a = Math.max(f0, fMin), b = Math.min(f1, fMax);
+    if (!(b > a)) return;
     g.fillStyle = col;
-    g.fillRect(xOf(f0), bandY0, xOf(f1) - xOf(f0), bandY1 - bandY0);
+    g.fillRect(xOf(a), bandY0, xOf(b) - xOf(a), bandY1 - bandY0);
   };
   fillBand(0, srcNyq, 'rgba(52,211,153,0.07)');
   if (hasMarks) {
@@ -8476,31 +8483,31 @@ function drawUfPreview(cv, data, ctx) {
 
   // ---- dB 網格（+3dB ~ -60dB，標示 0, -12, -24, -36, -48, -60 dB，過渡帶深度清清楚楚）----
   g.strokeStyle = 'rgba(128,128,128,0.18)'; g.fillStyle = textCol; g.font = '10px sans-serif'; g.lineWidth = 1;
-  for (const db of [0, -12, -24, -36, -48, -60]) {
+  for (const db of [0, -6, -12, -24, -36, -48]) {
     const y = yOf(db);
     g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke();
     g.fillText(db === 0 ? '0dB' : db + 'dB', 4, y + 3);
   }
 
-  // ---- 頻率網格：依軸寬自動選步進（2k/5k/10k），讓轉折位置能直接讀 kHz。
+  // ---- 頻率網格：依「可見視窗寬度」自動選步進，讓轉折位置能直接讀 kHz。
   // 源 Nyquist／截止／止帶的虛線本身就算刻度，所以它們附近不再放數字，避免疊字。----
-  let stepK = 2;
-  if (plotW / (fMax / 2000) < 34) stepK = 5;
-  if (plotW / (fMax / 5000) < 34) stepK = 10;
-  const stepHz = stepK * 1000;
+  const spanHz = fMax - fMin;
+  let stepHz = 500;
+  for (const s of [500, 1000, 2000, 5000, 10000]) { if (Math.floor(spanHz / s) <= 8) { stepHz = s; break; } }
   const nearMark = (f) => {
     const xs = [xOf(f)];
     if (hasMarks) xs.push(fcxX, xOf(stopMark), xOf(srcNyq));
     return xs.some(x => Math.abs(x - xOf(f)) < 20);
   };
   g.textAlign = 'center';
-  for (let f = 0; f <= fMax + 1; f += stepHz) {
+  const fmtTick = (f) => stepHz >= 1000 ? (Math.round(f / 1000) + 'k') : ((f / 1000).toFixed(1) + 'k');
+  for (let f = Math.ceil(fMin / stepHz) * stepHz; f <= fMax + 1; f += stepHz) {
     const x = xOf(Math.min(f, fMax));
     if (nearMark(f)) continue; // 讓位給源 Nyquist／截止／止帶標記，避免數字與虛線文字重疊
     g.strokeStyle = 'rgba(128,128,128,0.14)';
     g.beginPath(); g.moveTo(x, padT); g.lineTo(x, H - padB); g.stroke();
     g.fillStyle = textCol;
-    g.fillText(f === 0 ? '0' : Math.round(f / 1000) + 'k', x, H - 8);
+    g.fillText(fmtTick(f), x, H - 8);
   }
 
   // 清楚標示 X 軸單位「(kHz)」於右下角座標刻度末端
@@ -8637,14 +8644,14 @@ function drawUfPreview(cv, data, ctx) {
   g.stroke();
 
   // ---- 記錄座標映射與游標回饋（截止線附近 → ew-resize）----
-  ufPreviewGeom = { cssW, cssH, padL, padR, plotW, fMax, srcNyq, fsOut };
+  ufPreviewGeom = { cssW, cssH, padL, padR, plotW, fMin, fMax, srcNyq, fsOut };
   if (hasMarks) {
     cv.style.cursor = 'crosshair';
     cv.onmousemove = (e) => {
       if (ufCutDragging || !ufPreviewGeom) return;
       const r = cv.getBoundingClientRect();
       const x = e.clientX - r.left;
-      const fcx = ufPreviewGeom.padL + (Math.min(data.fcHz, ufPreviewGeom.fMax) / ufPreviewGeom.fMax) * ufPreviewGeom.plotW;
+      const fcx = ufPreviewGeom.padL + ((Math.min(data.fcHz, ufPreviewGeom.fMax) - ufPreviewGeom.fMin) / (ufPreviewGeom.fMax - ufPreviewGeom.fMin)) * ufPreviewGeom.plotW;
       cv.style.cursor = Math.abs(x - fcx) <= 12 ? 'ew-resize' : 'crosshair';
     };
   } else {
