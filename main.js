@@ -1513,6 +1513,32 @@ if (!fs.existsSync(TIDAL_CACHE_DIR)) {
   try { fs.mkdirSync(TIDAL_CACHE_DIR, { recursive: true }); } catch (_) {}
 }
 
+// 背景自動將 TIDAL 快取目錄中歷史遺留的 CMAF/ISO-BMFF 容器檔案解包為標準 raw FLAC
+// 徹底相容 HQPlayer、WiIM、Eversolo 等所有以 libFLAC 為底層的發燒串流解碼器
+setTimeout(() => {
+  try {
+    if (!fs.existsSync(TIDAL_CACHE_DIR)) return;
+    const files = fs.readdirSync(TIDAL_CACHE_DIR).filter(f => f.endsWith('.flac'));
+    for (const f of files) {
+      const full = path.join(TIDAL_CACHE_DIR, f);
+      try {
+        const fd = fs.openSync(full, 'r');
+        const b = Buffer.alloc(16);
+        fs.readSync(fd, b, 0, 16, 0);
+        fs.closeSync(fd);
+        if (b.length >= 8 && b.toString('ascii', 4, 8) === 'ftyp') {
+          const fileBuf = fs.readFileSync(full);
+          const extracted = nativeAudioEngine.extractFlacFromIsoBmff(fileBuf);
+          if (extracted && extracted.length > 34) {
+            fs.writeFileSync(full, extracted);
+            console.log(`[TIDAL Background] Converted legacy CMAF to pure raw FLAC: ${f}`);
+          }
+        }
+      } catch (err) {}
+    }
+  } catch (err) {}
+}, 2000);
+
 const tidalManifestMap = new Map();
 
 // ==========================================================
@@ -1754,6 +1780,18 @@ ipcMain.handle('tidal:cacheTrack', async (event, trackId, streamUrlOrInfo, optio
             }, { concurrency: 8 });
             const stat = fs.statSync(tempFlac);
             if (stat.size > 64 * 1024) {
+              try {
+                const fileBuf = fs.readFileSync(tempFlac);
+                if (nativeAudioEngine.isIsoBmff(fileBuf)) {
+                  const extracted = nativeAudioEngine.extractFlacFromIsoBmff(fileBuf);
+                  if (extracted && extracted.length > 34) {
+                    fs.writeFileSync(tempFlac, extracted);
+                    console.log(`[TIDAL] Demuxed CMAF to pure raw FLAC (${extracted.length} bytes) for track ${safeId}`);
+                  }
+                }
+              } catch (e) {
+                console.warn('[TIDAL] Pre-cache demux check error:', e);
+              }
               if (fs.existsSync(targetFile)) fs.unlinkSync(targetFile);
               fs.renameSync(tempFlac, targetFile);
               console.log(`[TIDAL] Cache finished for track ${safeId}`);

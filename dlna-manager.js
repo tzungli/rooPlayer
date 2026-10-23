@@ -10,6 +10,34 @@ const path = require('path');
 const os = require('os');
 const EventEmitter = require('events');
 const { fileURLToPath } = require('url');
+const nativeAudioEngine = require('./native-audio-engine');
+
+// 確保即將串流的 FLAC 檔案是符合標準 libFLAC 規範的 raw FLAC（以 'fLaC' 魔術字開頭），
+// 而非 TIDAL CMAF / ISO-BMFF 封裝（以 'ftyp' 開頭）。
+// 徹底消除 HQPlayer (Signalyst) 等嚴格使用 libFLAC 的發燒播放器出現「ReadFLACErrorCB(): lost sync」無法播放的重大問題！
+function ensureValidRawFlac(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return filePath;
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext !== '.flac') return filePath;
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const headerBuf = Buffer.alloc(16);
+    fs.readSync(fd, headerBuf, 0, 16, 0);
+    fs.closeSync(fd);
+    if (headerBuf.length >= 8 && headerBuf.toString('ascii', 4, 8) === 'ftyp') {
+      console.log(`[DLNA] Demuxing TIDAL CMAF container to pure raw FLAC for "${path.basename(filePath)}"...`);
+      const fileBuf = fs.readFileSync(filePath);
+      const extracted = nativeAudioEngine.extractFlacFromIsoBmff(fileBuf);
+      if (extracted && extracted.length > 34) {
+        fs.writeFileSync(filePath, extracted);
+        console.log(`[DLNA] Pure raw FLAC demuxed successfully (${extracted.length} bytes), magic: ${extracted.toString('ascii', 0, 4)}`);
+      }
+    }
+  } catch (err) {
+    console.warn('[DLNA] ensureValidRawFlac failed:', err.message);
+  }
+  return filePath;
+}
 
 // Robust helper to resolve file://, media://, and plain local paths on Windows & POSIX
 function resolveLocalCoverPath(src) {
@@ -311,6 +339,7 @@ class DlnaManager extends EventEmitter {
 
   // Handle audio file stream with HTTP 206 Partial Content Range and Progressive Flow Control
   handleLocalAudioStream(req, res, filePath, token = null) {
+    filePath = ensureValidRawFlac(filePath);
     const session = token ? this.nativeDspStreamer.getSession(token) : Array.from(this.nativeDspStreamer.activeSessions.values()).find(s => s.filePath === filePath);
     const totalSize = (session && session.totalFileBytes) ? session.totalFileBytes : fs.statSync(filePath).size;
     const range = req.headers.range;
@@ -1151,8 +1180,8 @@ class DlnaManager extends EventEmitter {
       protocolInfo = 'http-get:*:audio/wav:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000';
     } else {
       // Direct pass-through: zero latency, zero CPU!
-      const fileExt = path.extname(track.filePath).toLowerCase() || '.flac';
-      activeFilePath = track.filePath;
+      activeFilePath = ensureValidRawFlac(track.filePath);
+      const fileExt = path.extname(activeFilePath).toLowerCase() || '.flac';
       streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/track${fileExt}`;
       if (fileExt === '.mp3') {
         mimeType = 'audio/mpeg';
