@@ -3071,6 +3071,8 @@ ipcMain.handle('library:export', async (event, defaultFilename, extraData) => {
       favorites: (extraData && extraData.favorites) ? extraData.favorites : { albums: [], tracks: [], artists: [] },
       favoriteSnapshots: (extraData && extraData.favoriteSnapshots) ? extraData.favoriteSnapshots : { tracks: {}, albums: {} },
       playlists: (extraData && Array.isArray(extraData.playlists)) ? extraData.playlists : [],
+      networkFolders: (extraData && Array.isArray(extraData.networkFolders)) ? extraData.networkFolders : [],
+      networkShares: (extraData && Array.isArray(extraData.networkShares)) ? extraData.networkShares : [],
       playStats: (extraData && extraData.playStats) ? extraData.playStats : { albums: {}, tracks: {} },
       playbackHistory: (extraData && Array.isArray(extraData.playbackHistory)) ? extraData.playbackHistory : [],
       recentlyPlayedAlbums: (extraData && Array.isArray(extraData.recentlyPlayedAlbums)) ? extraData.recentlyPlayedAlbums : []
@@ -3089,6 +3091,7 @@ ipcMain.handle('library:export', async (event, defaultFilename, extraData) => {
         artists: (exportPayload.favorites.artists || []).length
       },
       playlistCount: (exportPayload.playlists || []).length,
+      networkFolderCount: (exportPayload.networkFolders || []).length,
       historyCount: (exportPayload.playbackHistory || []).length,
       recentAlbumCount: (exportPayload.recentlyPlayedAlbums || []).length
     };
@@ -3283,6 +3286,8 @@ ipcMain.handle('library:import', async () => {
       importedFavorites: importedData.favorites || null,
       importedFavoriteSnapshots: importedData.favoriteSnapshots || null,
       importedPlaylists: Array.isArray(importedData.playlists) ? importedData.playlists : null,
+      importedNetworkFolders: Array.isArray(importedData.networkFolders) ? importedData.networkFolders : null,
+      importedNetworkShares: Array.isArray(importedData.networkShares) ? importedData.networkShares : null,
       importedPlayStats: importedData.playStats || null,
       importedPlaybackHistory: Array.isArray(importedData.playbackHistory) ? importedData.playbackHistory : null,
       importedRecentlyPlayedAlbums: Array.isArray(importedData.recentlyPlayedAlbums) ? importedData.recentlyPlayedAlbums : null,

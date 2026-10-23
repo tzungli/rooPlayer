@@ -14667,13 +14667,19 @@ function setupScannerEvents() {
         return;
       }
 
-      // 收集完整資料庫的所有面向：資料夾、曲目、我的最愛（含詳細快照）、播放紀錄、最近聆聽、播放清單、播放統計
+      // 收集完整資料庫的所有面向：資料夾、曲目、我的最愛（含詳細快照）、播放紀錄、最近聆聽、播放清單、網路資料夾設定、播放統計
       const currentFavorites = state.favorites || { albums: [], tracks: [], artists: [] };
       const currentFavoriteSnapshots = {
         tracks: Object.fromEntries(favoriteTrackSnapshots),
         albums: Object.fromEntries(favoriteAlbumSnapshots)
       };
       const currentPlaylists = getPlaylists();
+      const currentNetworkFolders = (state.folders || []).filter(f => isNetworkFolderPath(f));
+      const currentNetworkShares = (() => {
+        try {
+          return JSON.parse(localStorage.getItem('rooplayer_network_shares') || '[]');
+        } catch (_) { return []; }
+      })();
       const currentPlayStats = getPlayStats();
       const currentPlaybackHistory = getPlaybackHistory();
       const currentRecentAlbums = state.recentlyPlayedAlbums || [];
@@ -14682,6 +14688,8 @@ function setupScannerEvents() {
         favorites: currentFavorites,
         favoriteSnapshots: currentFavoriteSnapshots,
         playlists: currentPlaylists,
+        networkFolders: currentNetworkFolders,
+        networkShares: currentNetworkShares,
         playStats: currentPlayStats,
         playbackHistory: currentPlaybackHistory,
         recentlyPlayedAlbums: currentRecentAlbums
@@ -14693,8 +14701,9 @@ function setupScannerEvents() {
         const favTrks = (res.favoriteCounts && res.favoriteCounts.tracks) || 0;
         const favArts = (res.favoriteCounts && res.favoriteCounts.artists) || 0;
         const plCount = res.playlistCount || 0;
+        const netFCount = res.networkFolderCount || 0;
         const histCount = res.historyCount || 0;
-        alert(`🎉 資料庫匯出成功！\n\n已儲存至：${res.filePath}\n• 收錄資料夾：${res.folderCount} 個\n• 音訊曲目：${res.trackCount} 首\n• 我的最愛：${favAlbs} 張專輯 / ${favTrks} 首歌曲 / ${favArts} 位演出者\n• 播放清單：${plCount} 個\n• 包含 ${histCount} 筆播放歷史紀錄與完整統計次數`);
+        alert(`🎉 資料庫匯出成功！\n\n已儲存至：${res.filePath}\n• 收錄資料夾：${res.folderCount} 個 (含 ${netFCount} 個 SAMBA 網路資料夾)\n• 音訊曲目：${res.trackCount} 首\n• 我的最愛：${favAlbs} 張專輯 / ${favTrks} 首歌曲 / ${favArts} 位演出者\n• 播放清單：${plCount} 個\n• 包含 ${histCount} 筆播放歷史紀錄與完整統計次數`);
       } else {
         alert(`❌ 資料庫匯出失敗：${(res && res.error) || '未知錯誤'}`);
       }
@@ -14856,6 +14865,32 @@ function setupScannerEvents() {
           });
           persistPlaylists(curPlaylists);
         }
+
+        // 3.7. Merge Network Folders & Shares
+        let netFoldersMergedCount = 0;
+        if (res.importedNetworkShares && Array.isArray(res.importedNetworkShares)) {
+          let curShares = [];
+          try { curShares = JSON.parse(localStorage.getItem('rooplayer_network_shares') || '[]'); } catch (_) {}
+          res.importedNetworkShares.forEach(sh => {
+            if (sh && (sh.uncPath || (sh.host && sh.share))) {
+              const unc = sh.uncPath || `\\\\${sh.host}\\${sh.share}`;
+              if (!curShares.some(existing => (existing.uncPath || `\\\\${existing.host}\\${existing.share}`) === unc)) {
+                curShares.push(sh);
+                netFoldersMergedCount++;
+              }
+            }
+          });
+          try { localStorage.setItem('rooplayer_network_shares', JSON.stringify(curShares)); } catch (_) {}
+        }
+        if (res.importedNetworkFolders && Array.isArray(res.importedNetworkFolders)) {
+          res.importedNetworkFolders.forEach(nf => {
+            if (nf && !state.folders.includes(nf)) {
+              state.folders.push(nf);
+              netFoldersMergedCount++;
+            }
+          });
+        }
+        renderNetworkFolders();
 
         rebuildLibraryCollections();
         renderAll();
