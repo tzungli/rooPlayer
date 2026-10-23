@@ -16002,15 +16002,38 @@ function initKkboxStreaming() {
   const btnRefreshFeatured = document.getElementById('btnRefreshFeatured');
   const btnRefreshNewHits = document.getElementById('btnRefreshNewHits');
 
-  // Check saved account
-  const savedAccount = localStorage.getItem('rooplayer_kkbox_account');
-  if (savedAccount) {
-    if (inputAccount) inputAccount.value = savedAccount;
-    if (btnOpenLogin) {
-      btnOpenLogin.innerHTML = `👤 已連線 (${escapeXml(savedAccount)})`;
-      btnOpenLogin.classList.add('logged-in');
+  const btnKkboxLogout = document.getElementById('btnKkboxLogout');
+  const btnModalKkboxLogout = document.getElementById('btnModalKkboxLogout');
+
+  function updateKkboxAccountUI() {
+    const savedAccount = localStorage.getItem('rooplayer_kkbox_account');
+    if (savedAccount) {
+      if (inputAccount) inputAccount.value = savedAccount;
+      if (btnOpenLogin) {
+        btnOpenLogin.innerHTML = `👤 已連線 (${escapeXml(savedAccount)})`;
+        btnOpenLogin.classList.add('logged-in');
+      }
+      if (btnKkboxLogout) btnKkboxLogout.style.display = 'inline-flex';
+      if (btnModalKkboxLogout) btnModalKkboxLogout.style.display = 'inline-flex';
+    } else {
+      if (inputAccount) inputAccount.value = '';
+      if (btnOpenLogin) {
+        btnOpenLogin.innerHTML = '🔑 KKBOX 帳號';
+        btnOpenLogin.classList.remove('logged-in');
+      }
+      if (btnKkboxLogout) btnKkboxLogout.style.display = 'none';
+      if (btnModalKkboxLogout) btnModalKkboxLogout.style.display = 'none';
     }
   }
+
+  function doKkboxLogout() {
+    localStorage.removeItem('rooplayer_kkbox_account');
+    updateKkboxAccountUI();
+    if (loginModal) loginModal.style.display = 'none';
+    showToast('👋 已成功登出並清除 KKBOX 帳號');
+  }
+
+  updateKkboxAccountUI();
 
   // 僅綁定一次 DOM 事件
   if (!kkboxStreamingEventsBound) {
@@ -16143,14 +16166,15 @@ function initKkboxStreaming() {
         return;
       }
       localStorage.setItem('rooplayer_kkbox_account', account);
-      if (btnOpenLogin) {
-        btnOpenLogin.innerHTML = `👤 已連線 (${escapeXml(account)})`;
-        btnOpenLogin.classList.add('logged-in');
-      }
+      updateKkboxAccountUI();
       closeLoginModal();
       showToast(`已成功綁定 KKBOX 帳號 ${account}，享有完整即時串流授權！`);
     });
   }
+
+  // 登出按鈕事件綁定
+  if (btnKkboxLogout) btnKkboxLogout.addEventListener('click', doKkboxLogout);
+  if (btnModalKkboxLogout) btnModalKkboxLogout.addEventListener('click', doKkboxLogout);
   } // end if (!kkboxStreamingEventsBound)
 
   // --- Sub-renderers ---

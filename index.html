@@ -1031,6 +1031,9 @@
               <button class="btn btn-sm btn-kkbox-login" id="btnOpenKkboxLoginModal" title="KKBOX 帳號連線資訊">
                 🔑 KKBOX 帳號
               </button>
+              <button class="btn btn-sm btn-kkbox-logout" id="btnKkboxLogout" style="display: none; background: rgba(244, 63, 94, 0.15); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.4); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; align-items: center; gap: 4px;" title="登出並清除已記住的 KKBOX 帳號">
+                🚪 登出
+              </button>
             </div>
           </div>
 
@@ -1907,7 +1910,8 @@
           • 系統已為您實作原生控制器完全相容（播放/暫停、進度條拖曳、清單循環、DLNA 串流），隨選隨播！
         </div>
       </div>
-      <div class="modal-footer" style="padding: 16px 24px; display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid rgba(255,255,255,0.08);">
+      <div class="modal-footer" style="padding: 16px 24px; display: flex; justify-content: flex-end; align-items: center; gap: 12px; border-top: 1px solid rgba(255,255,255,0.08);">
+        <button class="btn btn-secondary" id="btnModalKkboxLogout" style="display: none; background: rgba(244, 63, 94, 0.15); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.4); margin-right: auto; padding: 8px 16px; border-radius: 6px; cursor: pointer;">🚪 登出此帳號</button>
         <button class="btn btn-secondary" id="btnCancelKkboxLogin">取消</button>
         <button class="btn btn-primary" id="btnSubmitKkboxLogin" style="background: #25d5ff; color: #000; font-weight: 600; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer;">儲存會員帳號</button>
       </div>
