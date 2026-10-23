@@ -1080,11 +1080,14 @@ function recordTrackPlaybackHistory(track, foundAlbum) {
 
   updateHistoryCountBadges();
 
+  viewDirtyState.overview = true;
+  viewDirtyState.history = true;
+
+  // 即時更新總覽的「最近聆聽」DOM，無論目前在何頁面播放，總覽頁面即刻維持最新狀態
+  renderRecentPlayedAlbums();
+
   if (state.currentView === 'history') {
     renderPlaybackHistory();
-  }
-  if (state.currentView === 'overview') {
-    renderRecentPlayedAlbums();
   }
 }
 
@@ -2046,6 +2049,10 @@ function markAllViewsDirty() {
 
 function renderViewIfNeeded(viewId) {
   if (!viewId) viewId = 'overview';
+  // 切換至總覽時，必定自動更新「最近聆聽」，確保任何頁面播放後的最新紀錄即時呈現
+  if (viewId === 'overview') {
+    renderRecentPlayedAlbums();
+  }
   // If not dirty and not kkbox or tidal, preserve already-built DOM and avoid reflow
   if (!viewDirtyState[viewId] && viewId !== 'kkbox' && viewId !== 'tidal') return;
 
@@ -2579,19 +2586,22 @@ function getRecentlyPlayedAlbums(maxCount = 5) {
     if (!album && trk.album) {
       album = state.albums.find(a => (a.title || '').trim().toLowerCase() === (trk.album || '').trim().toLowerCase());
     }
-    if (!album && trk.album) {
-      album = {
-        title: trk.album,
-        artist: trk.artist || '未知演出者',
-        cover: trk.cover || '',
-        year: trk.year || '',
-        genre: trk.genre || 'Various',
-        formatName: trk.formatName || 'PCM',
-        sampleRate: trk.sampleRate || 44100,
-        bitsPerSample: trk.bitsPerSample || 16,
-        isLossless: trk.isLossless || false,
-        tracks: [trk]
-      };
+    if (!album) {
+      const albTitle = (trk.album || trk.title || '').trim();
+      if (albTitle) {
+        album = {
+          title: albTitle,
+          artist: trk.artist || '未知演出者',
+          cover: trk.cover || '',
+          year: trk.year || '',
+          genre: trk.genre || 'Various',
+          formatName: trk.formatName || 'PCM',
+          sampleRate: trk.sampleRate || 44100,
+          bitsPerSample: trk.bitsPerSample || 16,
+          isLossless: trk.isLossless || false,
+          tracks: [trk]
+        };
+      }
     }
     if (album) {
       const key = `${(album.title || '').toLowerCase().trim()}|${(album.artist || '').toLowerCase().trim()}`;
@@ -2600,6 +2610,22 @@ function getRecentlyPlayedAlbums(maxCount = 5) {
         recentAlbums.push(album);
       }
     }
+  }
+
+  // 雙重保障：若 history 解析出的專輯少於 maxCount，從 roon_recent_albums 補足
+  if (recentAlbums.length < maxCount) {
+    try {
+      const savedRecent = JSON.parse(localStorage.getItem('roon_recent_albums') || '[]');
+      for (const alb of savedRecent) {
+        if (recentAlbums.length >= maxCount) break;
+        const key = `${(alb.title || '').toLowerCase().trim()}|${(alb.artist || '').toLowerCase().trim()}`;
+        if (!seenAlbumKeys.has(key)) {
+          seenAlbumKeys.add(key);
+          const inLibrary = state.albums.find(a => (a.title || '').trim().toLowerCase() === (alb.title || '').trim().toLowerCase());
+          recentAlbums.push(inLibrary || alb);
+        }
+      }
+    } catch (e) {}
   }
 
   return recentAlbums;
@@ -6799,6 +6825,18 @@ async function playCurrentTrack() {
   const foundAlbum = findAlbumForTrack(track);
   if (foundAlbum) {
     recordRecentlyPlayed(foundAlbum);
+  } else {
+    recordRecentlyPlayed({
+      title: track.album || track.title || '單曲',
+      artist: track.artist || '未知演出者',
+      cover: track.cover || '',
+      year: track.year || '',
+      formatName: track.formatName || 'PCM',
+      sampleRate: track.sampleRate || 44100,
+      bitsPerSample: track.bitsPerSample || 16,
+      isLossless: track.isLossless || false,
+      tracks: [track]
+    });
   }
 
   // Record play count statistics
