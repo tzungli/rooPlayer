@@ -1086,7 +1086,7 @@ class DlnaManager extends EventEmitter {
         // Smart TV (cannot decode DSD) or PEQ/Convolution-only mode: decimate DSF to 24-bit 88.2kHz WAV
         // (PEQ / IR applied when set). Engine DSD-modulation mode (isDsdUpsample) keeps the native DSF
         // modulation path below instead - bit-perfect passthrough wins there.
-        const session = await this.nativeDspStreamer.createDsdDecimateSession(streamToken, track.filePath, startSec, track, dspOptions ? dspOptions.peq : null, dspOptions ? dspOptions.conv : null);
+        const session = await this.nativeDspStreamer.createDsdDecimateSession(streamToken, track.filePath, startSec, track, dspOptions ? dspOptions.peq : null, dspOptions ? dspOptions.conv : null, true);
         this.currentStreamSession = session;
         activeFilePath = session.filePath;
         streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
@@ -1102,7 +1102,7 @@ class DlnaManager extends EventEmitter {
     } else if (isDsdUpsample) {
       if (isTv) {
         // Smart TV compatibility: TV cannot decode DSD bitstreams; provide High-Res 24-bit 96kHz WAV
-        const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, 96000, track, dspOptions ? (dspOptions.filterPhase || 'linear') : 'linear', dspOptions ? dspOptions.peq : null, dspOptions ? dspOptions.conv : null);
+        const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, 96000, track, dspOptions ? (dspOptions.filterPhase || 'linear') : 'linear', dspOptions ? dspOptions.peq : null, dspOptions ? dspOptions.conv : null, true);
         this.currentStreamSession = session;
         activeFilePath = session.filePath;
         streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
@@ -1112,7 +1112,7 @@ class DlnaManager extends EventEmitter {
         // Audiophile streamer / DAC: Progressive on-the-fly DSD modulation in DSF container (Worker + Flow Control)
         const dsdOrder = dspOptions ? (dspOptions.dsdOrder || 5) : 5;
         const filterPhase = dspOptions ? (dspOptions.filterPhase || 'linear') : 'linear';
-        const session = await this.nativeDspStreamer.createDsdSession(streamToken, track.filePath, startSec, dspOptions.dsdMode, track, dsdOrder, filterPhase, dspOptions.peq, dspOptions.conv);
+        const session = await this.nativeDspStreamer.createDsdSession(streamToken, track.filePath, startSec, dspOptions.dsdMode, track, dsdOrder, filterPhase, dspOptions.peq, dspOptions.conv, true);
         this.currentStreamSession = session;
         activeFilePath = session.filePath;
         streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.dsf`;
@@ -1121,7 +1121,7 @@ class DlnaManager extends EventEmitter {
       }
     } else if (isNativeDsd) {
       // Native DFF needing PCM decimation to 24-bit 88.2kHz WAV (PEQ / IR applied when set)
-      const session = await this.nativeDspStreamer.createDsdDecimateSession(streamToken, track.filePath, startSec, track, dspOptions ? dspOptions.peq : null, dspOptions ? dspOptions.conv : null);
+      const session = await this.nativeDspStreamer.createDsdDecimateSession(streamToken, track.filePath, startSec, track, dspOptions ? dspOptions.peq : null, dspOptions ? dspOptions.conv : null, true);
       this.currentStreamSession = session;
       activeFilePath = session.filePath;
       streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
@@ -1132,7 +1132,7 @@ class DlnaManager extends EventEmitter {
       // at the native sample rate
       const targetRate = dspOptions.enabled ? (dspOptions.sampleRate || 192000) : (dspOptions.sampleRate || track.sampleRate || 44100);
       const filterPhase = dspOptions.filterPhase || 'linear';
-      const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, targetRate, track, filterPhase, dspOptions ? dspOptions.peq : null, dspOptions ? dspOptions.conv : null);
+      const session = await this.nativeDspStreamer.createPcmSession(streamToken, track.filePath, startSec, targetRate, track, filterPhase, dspOptions ? dspOptions.peq : null, dspOptions ? dspOptions.conv : null, true);
       this.currentStreamSession = session;
       activeFilePath = session.filePath;
       streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.wav`;
@@ -1305,6 +1305,10 @@ class DlnaManager extends EventEmitter {
     if (opId !== this._playOpCounter) {
       return { success: false, cancelled: true };
     }
+
+    // 協定層防跳幀保護：發送 Play 之前給予設備 200ms 握手安定時間，讓設備有充足時間探測 URL、
+    // 建立 TCP 連線與內部預載緩衝區，徹底避免設備因倉促開播而丟棄開頭封包
+    await new Promise(r => setTimeout(r, 200));
 
     // 4. Play with retry loop
     this._prepareStage = 'play';

@@ -148,7 +148,7 @@ class NativeDspStreamer {
   // short (~5 s), starts at sample 0 with no warm-up, and is bit-identical to a single-pass
   // whole-file encoding. Chunk/view boundaries keep the input<->output sample mapping exact
   // (required for non-integer ratios such as 48k -> DSD).
-  async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear', peqOptions = null, convOptions = null) {
+  async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear', peqOptions = null, convOptions = null, isDlna = false) {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.dsf`);
@@ -156,7 +156,26 @@ class NativeDspStreamer {
     if (!pcm) throw new Error('Native PCM read failed for DSD modulation');
 
     const srcRate = pcm.sampleRate;
-    const inLen = pcm.left.length;
+    const rawLeft = pcm.left;
+    const rawRight = pcm.right;
+
+    // DLNA 串流發燒前導防護（Resync Lead-in Silence Padding）：
+    // 當 DLNA 串流從開頭播放（isDlna && startSec === 0）時，前置注入 0.6 秒純靜音（零信號）。
+    // 徹底解決各廠牌 DLNA / UPnP 渲染器在開播時因硬體 DAC 時脈 PLL 鎖定及防爆音軟淡入
+    // 而導致「開頭第一秒前奏被硬生生吃掉」的發燒痛點！
+    const LEAD_IN_SEC = (isDlna && startSec === 0) ? 0.6 : 0;
+    const leadInFrames = Math.round(LEAD_IN_SEC * srcRate);
+    let pcmL = rawLeft;
+    let pcmR = rawRight;
+    if (leadInFrames > 0) {
+      const paddedL = new Float32Array(rawLeft.length + leadInFrames);
+      const paddedR = new Float32Array(rawRight.length + leadInFrames);
+      paddedL.set(rawLeft, leadInFrames);
+      paddedR.set(rawRight, leadInFrames);
+      pcmL = paddedL;
+      pcmR = paddedR;
+    }
+    const inLen = pcmL.length;
 
     // Convolution (IR) applied in the main process on the source-rate PCM before modulation
     // (DSD-rate convolution is impractical; the workers keep modulating plain PCM).
@@ -166,7 +185,7 @@ class NativeDspStreamer {
       if (irData) {
         const cst = createConvolutionState(srcRate, irData.irL, irData.irR);
         if (cst) {
-          applyConvolutionArrays(cst, pcm.left, pcm.right, pcm.left, pcm.right, inLen);
+          applyConvolutionArrays(cst, pcmL, pcmR, pcmL, pcmR, inLen);
           convIrRaw = irData.raw;
         }
       }
@@ -241,10 +260,10 @@ class NativeDspStreamer {
     };
 
     // Shared PCM: SharedArrayBuffer views are shared with every worker without per-worker copies.
-    const leftSAB = new SharedArrayBuffer(pcm.left.byteLength);
-    new Float32Array(leftSAB).set(pcm.left);
-    const rightSAB = new SharedArrayBuffer(pcm.right.byteLength);
-    new Float32Array(rightSAB).set(pcm.right);
+    const leftSAB = new SharedArrayBuffer(pcmL.byteLength);
+    new Float32Array(leftSAB).set(pcmL);
+    const rightSAB = new SharedArrayBuffer(pcmR.byteLength);
+    new Float32Array(rightSAB).set(pcmR);
 
     const session = new EventEmitter();
     session.token = token;
@@ -254,12 +273,12 @@ class NativeDspStreamer {
     session.isCompleted = false;
     session.isCancelled = false;
     session.totalFileBytes = totalFileBytes;
-    session.durationSec = inLen / srcRate;
+    session.leadInSec = LEAD_IN_SEC;
+    session.durationSec = rawLeft.length / srcRate; // 歌曲原始真實長度
     session.chunk0Blocks = chunk0Blocks; // exposed for bit-identical regression tests
-    // Source PCM exposed for the NOW PLAYING real-time spectrum (zero-copy views on the
-    // SharedArrayBuffers the modulation workers already read).
+    // Source PCM exposed for the NOW PLAYING real-time spectrum (對準音樂原始樣本，毫秒級精準對齊)
     session.startSec = startSec;
-    session.spectrum = { rate: srcRate, left: new Float32Array(leftSAB), right: new Float32Array(rightSAB) };
+    session.spectrum = { rate: srcRate, left: rawLeft, right: rawRight };
     // PEQ (applied by every worker on its own view at srcRate before modulation; the raw
     // source PCM above stays untouched - the spectrum window applies PEQ separately).
     session.peqOptions = peqOptions && peqOptions.enabled ? peqOptions : null;
@@ -466,17 +485,34 @@ class NativeDspStreamer {
   }
 
   // Create progressive streaming session for High-Res PCM Upsampling (WAV format)
-  async createPcmSession(token, filePath, startSec = 0, targetSampleRate = 192000, track = null, filterPhase = 'linear', peqOptions = null, convOptions = null) {
+  async createPcmSession(token, filePath, startSec = 0, targetSampleRate = 192000, track = null, filterPhase = 'linear', peqOptions = null, convOptions = null, isDlna = false) {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.wav`);
     const pcm = await nativeAudioEngine.readPcmSamples(filePath, startSec);
     if (!pcm) throw new Error('Native PCM read failed for PCM upsampling');
 
-    const inL = pcm.left;
-    const inR = pcm.right;
-    const inLen = inL.length;
     const srcRate = pcm.sampleRate;
+    const rawLeft = pcm.left;
+    const rawRight = pcm.right;
+
+    // DLNA 串流發燒前導防護（Resync Lead-in Silence Padding）：
+    // 當 DLNA 串流從開頭播放（isDlna && startSec === 0）時，前置注入 0.6 秒純靜音（零信號）。
+    // 徹底解決各廠牌 DLNA / UPnP 渲染器在開播時因硬體 DAC 時脈 PLL 鎖定及防爆音軟淡入
+    // 而導致「開頭第一秒前奏被硬生生吃掉」的發燒痛點！
+    const LEAD_IN_SEC = (isDlna && startSec === 0) ? 0.6 : 0;
+    const leadInFrames = Math.round(LEAD_IN_SEC * srcRate);
+    let inL = rawLeft;
+    let inR = rawRight;
+    if (leadInFrames > 0) {
+      const paddedL = new Float32Array(rawLeft.length + leadInFrames);
+      const paddedR = new Float32Array(rawRight.length + leadInFrames);
+      paddedL.set(rawLeft, leadInFrames);
+      paddedR.set(rawRight, leadInFrames);
+      inL = paddedL;
+      inR = paddedR;
+    }
+    const inLen = inL.length;
     const ratio = targetSampleRate / srcRate;
     const outFrames = Math.floor(inLen * ratio);
 
@@ -541,10 +577,11 @@ class NativeDspStreamer {
     session.bytesWritten = 44;
     session.isCompleted = false;
     session.isCancelled = false;
-    session.durationSec = inLen / srcRate;
-    // Source PCM for the NOW PLAYING real-time spectrum (same arrays the upsampler reads).
+    session.leadInSec = LEAD_IN_SEC;
+    session.durationSec = rawLeft.length / srcRate; // 歌曲原始真實長度
+    // Source PCM for the NOW PLAYING real-time spectrum (對準音樂原始樣本，毫秒級精準對齊)
     session.startSec = startSec;
-    session.spectrum = { rate: srcRate, left: inL, right: inR };
+    session.spectrum = { rate: srcRate, left: rawLeft, right: rawRight };
     session.peqOptions = peqChain ? peqOptions : null;
     session.convOptions = convState ? convOptions : null;
     session.convIrRaw = convState ? convIrRaw : null;
@@ -652,11 +689,11 @@ class NativeDspStreamer {
   }
 
   // Create streaming session for Native DSF/DFF Decimation to 24-bit / 88.2 kHz WAV
-  async createDsdDecimateSession(token, filePath, startSec = 0, track = null, peqOptions = null, convOptions = null) {
+  async createDsdDecimateSession(token, filePath, startSec = 0, track = null, peqOptions = null, convOptions = null, isDlna = false) {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.wav`);
-    const wavBuf = nativeAudioEngine.decimateDsfToWav(filePath, startSec);
+    let wavBuf = nativeAudioEngine.decimateDsfToWav(filePath, startSec);
     if (!wavBuf) throw new Error('Native DSD decimation failed');
 
     // PEQ + Convolution (IR) on the decimated 24-bit PCM (88.2 kHz), applied in place
@@ -699,6 +736,20 @@ class NativeDspStreamer {
       }
     }
 
+    const LEAD_IN_SEC = (isDlna && startSec === 0) ? 0.6 : 0;
+    const leadInFrames = Math.round(LEAD_IN_SEC * decRate);
+    if (leadInFrames > 0) {
+      const leadInBytes = leadInFrames * 6;
+      const newTotalDataBytes = (wavBuf.length - 44) + leadInBytes;
+      const newTotalFileBytes = 44 + newTotalDataBytes;
+      const paddedBuf = Buffer.alloc(newTotalFileBytes);
+      wavBuf.copy(paddedBuf, 0, 0, 44);
+      paddedBuf.writeUInt32LE(newTotalFileBytes - 8, 4);
+      paddedBuf.writeUInt32LE(newTotalDataBytes, 40);
+      wavBuf.copy(paddedBuf, 44 + leadInBytes, 44);
+      wavBuf = paddedBuf;
+    }
+
     fs.writeFileSync(tmpFile, wavBuf);
 
     const session = new EventEmitter();
@@ -708,10 +759,11 @@ class NativeDspStreamer {
     session.totalFileBytes = wavBuf.length;
     session.bytesWritten = wavBuf.length;
     session.isCompleted = true;
-    session.durationSec = (track && track.duration > 0) ? track.duration : (wavBuf.length / (88200 * 6));
+    session.leadInSec = LEAD_IN_SEC;
+    session.durationSec = (track && track.duration > 0) ? track.duration : ((wavBuf.length - 44 - (leadInFrames * 6)) / (decRate * 6));
     // Decimated 24-bit PCM WAV is fully in memory: windows are read straight from it.
     session.startSec = startSec;
-    session.spectrum = { rate: wavBuf.readUInt32LE(24), wav24: wavBuf.subarray(44), peqApplied: !!peqApplied, convApplied: !!convState };
+    session.spectrum = { rate: decRate, wav24: wavBuf.subarray(44 + (leadInFrames * 6)), peqApplied: !!peqApplied, convApplied: !!convState };
     session.peqOptions = peqApplied ? peqOptions : null;
     session.convOptions = convState ? convOptions : null;
     session.cancel = () => {
