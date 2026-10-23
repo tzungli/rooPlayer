@@ -14414,6 +14414,128 @@ function setupScannerEvents() {
   const netScanPercentLabel = document.getElementById('netScanPercentLabel');
   const netScanCurrentFile = document.getElementById('netScanCurrentFile');
 
+  const btnAutoDiscoverSamba = document.getElementById('btnAutoDiscoverSamba');
+  const discoveredServersBox = document.getElementById('discoveredServersBox');
+  const discoveredServersList = document.getElementById('discoveredServersList');
+  const discoveredServersCountBadge = document.getElementById('discoveredServersCountBadge');
+  const btnCloseDiscoveredServers = document.getElementById('btnCloseDiscoveredServers');
+
+  if (btnCloseDiscoveredServers && discoveredServersBox) {
+    btnCloseDiscoveredServers.addEventListener('click', () => {
+      discoveredServersBox.style.display = 'none';
+    });
+  }
+
+  if (btnAutoDiscoverSamba) {
+    btnAutoDiscoverSamba.addEventListener('click', async () => {
+      if (!window.electronAPI || !window.electronAPI.discoverSambaServers) {
+        alert('請在 Electron 桌面環境中執行此功能');
+        return;
+      }
+
+      btnAutoDiscoverSamba.disabled = true;
+      btnAutoDiscoverSamba.innerHTML = '<span>🔄 正在搜尋區域網路中...</span>';
+
+      try {
+        const res = await window.electronAPI.discoverSambaServers();
+        btnAutoDiscoverSamba.disabled = false;
+        btnAutoDiscoverSamba.innerHTML = '<span>🔍 自動搜尋區域網路 SAMBA / NAS 伺服器</span>';
+
+        if (!res || !res.success || !res.servers || res.servers.length === 0) {
+          showToast('ℹ️ 區域網路內未探測到開啟 SMB (連接埠 445) 的伺服器，請確認 NAS / SAMBA 伺服器已開機並連線至相同網路。');
+          return;
+        }
+
+        if (discoveredServersBox && discoveredServersList) {
+          discoveredServersBox.style.display = 'block';
+          if (discoveredServersCountBadge) discoveredServersCountBadge.textContent = `${res.servers.length} 台伺服器`;
+          discoveredServersList.innerHTML = '';
+
+          res.servers.forEach(srv => {
+            const card = document.createElement('div');
+            card.className = 'folder-list-item';
+            card.style.background = 'rgba(0,0,0,0.3)';
+            card.style.borderColor = 'rgba(37,99,235,0.3)';
+            card.style.flexDirection = 'column';
+            card.style.alignItems = 'stretch';
+            card.style.gap = '10px';
+
+            let sharesHtml = '';
+            if (srv.shares && srv.shares.length > 0) {
+              sharesHtml = `
+                <div style="margin-top: 6px; padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px dashed rgba(255,255,255,0.1);">
+                  <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">📁 發現的共用資料夾 (點擊直接匯入)：</div>
+                  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    ${srv.shares.map(sh => `
+                      <button class="btn btn-secondary btn-sm btn-quick-connect-share" data-unc="\\\\${srv.ip}\\${sh.name}" style="background: rgba(37,99,235,0.15); color: #93c5fd; border: 1px solid rgba(37,99,235,0.35); padding: 4px 10px; font-size: 12px; cursor: pointer;">
+                        📂 ${escapeXml(sh.name)} ${sh.comment ? `<span style="opacity: 0.7; font-size: 10px;">(${escapeXml(sh.comment)})</span>` : ''} ➔
+                      </button>
+                    `).join('')}
+                  </div>
+                </div>
+              `;
+            } else {
+              sharesHtml = `
+                <div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">
+                  🔒 需帳號密碼存取或未開放公開列舉，請點擊「填入連線表單」輸入共用名稱與密碼。
+                </div>
+              `;
+            }
+
+            card.innerHTML = `
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <span style="font-size: 20px;">🖥️</span>
+                  <div>
+                    <div style="font-weight: 700; font-size: 14px; color: #60a5fa;">${escapeXml(srv.hostName || srv.ip)}</div>
+                    <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">IP: <span style="font-family: monospace;">${escapeXml(srv.ip)}</span> • ${escapeXml(srv.serverDesc || 'SAMBA 伺服器')}</div>
+                  </div>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn btn-secondary btn-sm btn-fill-samba" data-ip="${escapeXml(srv.ip)}" data-host="${escapeXml(srv.hostName || srv.ip)}" style="font-size: 12px;">填入連線表單</button>
+                </div>
+              </div>
+              ${sharesHtml}
+            `;
+
+            // 綁定「填入連線表單」
+            const fillBtn = card.querySelector('.btn-fill-samba');
+            if (fillBtn) {
+              fillBtn.addEventListener('click', () => {
+                if (manualSambaForm) manualSambaForm.style.display = 'block';
+                const hostInput = document.getElementById('sambaInputHost');
+                if (hostInput) {
+                  hostInput.value = srv.ip;
+                  hostInput.focus();
+                }
+                const shareInput = document.getElementById('sambaInputShare');
+                if (shareInput && srv.shares && srv.shares[0]) {
+                  shareInput.value = srv.shares[0].name;
+                }
+                showToast(`已填入伺服器 ${srv.hostName || srv.ip}，請輸入帳密或確認共用名稱`);
+              });
+            }
+
+            // 綁定「直接連線共用」
+            card.querySelectorAll('.btn-quick-connect-share').forEach(btn => {
+              btn.addEventListener('click', async () => {
+                const unc = btn.getAttribute('data-unc');
+                if (!unc) return;
+                await runNetworkFolderScan(unc);
+              });
+            });
+
+            discoveredServersList.appendChild(card);
+          });
+        }
+      } catch (err) {
+        btnAutoDiscoverSamba.disabled = false;
+        btnAutoDiscoverSamba.innerHTML = '<span>🔍 自動搜尋區域網路 SAMBA / NAS 伺服器</span>';
+        alert(`搜尋失敗：${err.message || err}`);
+      }
+    });
+  }
+
   if (btnToggleManualSamba && manualSambaForm) {
     btnToggleManualSamba.addEventListener('click', () => {
       const isHidden = manualSambaForm.style.display === 'none';

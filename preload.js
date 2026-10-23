@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectNetworkFolder: () => ipcRenderer.invoke('dialog:selectNetworkFolder'),
   connectSambaShare: (params) => ipcRenderer.invoke('samba:connectAndScan', params),
   testSambaShare: (uncPath) => ipcRenderer.invoke('samba:testShare', uncPath),
+  discoverSambaServers: () => ipcRenderer.invoke('samba:discoverServers'),
   scanFolder: (folderPath) => ipcRenderer.invoke('library:scanFolder', folderPath),
   onScanProgress: (callback) => {
     ipcRenderer.on('library:scanProgress', (_event, data) => callback(data));

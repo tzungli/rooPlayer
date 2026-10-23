@@ -949,12 +949,30 @@
           </div>
           
           <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
-            <button class="btn btn-primary" id="btnBrowseNetworkFolder">
+            <button class="btn btn-primary" id="btnAutoDiscoverSamba" style="background: linear-gradient(135deg, #2563eb, #1d4ed8); border: none; display: inline-flex; align-items: center; gap: 6px;">
+              <span>🔍 自動搜尋區域網路 SAMBA / NAS 伺服器</span>
+            </button>
+            <button class="btn btn-secondary" id="btnBrowseNetworkFolder">
               <span>📂 瀏覽區域網路共用資料夾 (UNC)</span>
             </button>
             <button class="btn btn-secondary" id="btnToggleManualSamba">
               <span>⚙️ 手動輸入 SAMBA 連線參數</span>
             </button>
+          </div>
+
+          <!-- Discovered Servers Panel (動態呈現自動搜尋結果) -->
+          <div id="discoveredServersBox" style="display: none; background: rgba(37, 99, 235, 0.05); border: 1px solid rgba(37, 99, 235, 0.25); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 16px;">🔍</span>
+                <h4 style="margin: 0; font-size: 14px; color: var(--text-main);">發現的區域網路 SAMBA / NAS 伺服器</h4>
+                <span class="badge" id="discoveredServersCountBadge" style="background: rgba(37, 99, 235, 0.2); color: #60a5fa; border: 1px solid rgba(37, 99, 235, 0.4); font-size: 11px;">0 台伺服器</span>
+              </div>
+              <button class="btn btn-secondary btn-sm" id="btnCloseDiscoveredServers">關閉 ✕</button>
+            </div>
+            <div id="discoveredServersList" style="display: flex; flex-direction: column; gap: 10px;">
+              <!-- Injected via JS -->
+            </div>
           </div>
 
           <!-- Manual Samba Input Form -->

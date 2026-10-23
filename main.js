@@ -2399,6 +2399,124 @@ ipcMain.handle('samba:testShare', async (event, uncPath) => {
   }
 });
 
+// 輔助：探測區域網路 SAMBA / NAS 伺服器
+function getLocalSubnetsForDiscovery() {
+  const ifaces = os.networkInterfaces();
+  const subnets = [];
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    for (const a of addrs) {
+      if (a.family === 'IPv4' && !a.internal && !a.address.startsWith('169.254.')) {
+        const parts = a.address.split('.');
+        if (parts.length === 4) {
+          subnets.push({
+            localIp: a.address,
+            prefix: parts.slice(0, 3).join('.') + '.'
+          });
+        }
+      }
+    }
+  }
+  return subnets;
+}
+
+function probePortTcp(ip, port, timeout = 750) {
+  return new Promise((resolve) => {
+    const s = new net.Socket();
+    s.setTimeout(timeout);
+    s.on('connect', () => { s.destroy(); resolve(true); });
+    s.on('timeout', () => { s.destroy(); resolve(false); });
+    s.on('error', () => { s.destroy(); resolve(false); });
+    s.connect(port, ip);
+  });
+}
+
+function queryNetViewShares(ip) {
+  return new Promise((resolve) => {
+    exec('net view \\\\' + ip, { windowsHide: true }, (err, stdout) => {
+      const shares = [];
+      let serverDesc = '';
+      if (!err && stdout) {
+        const lines = stdout.split(/\r?\n/);
+        let inTable = false;
+        for (const line of lines) {
+          if (!serverDesc && line.includes('server (')) {
+            serverDesc = line.trim();
+          }
+          if (line.includes('---')) {
+            inTable = true;
+            continue;
+          }
+          if (inTable) {
+            if (line.includes('The command completed') || line.includes('命令成功完成')) break;
+            const match = line.match(/^([A-Za-z0-9_$\-\.\s]+?)\s{2,}(Disk|印表機|Print|磁碟)?\s*(.*)$/i);
+            if (match) {
+              const name = match[1].trim();
+              if (name && !name.endsWith('$')) {
+                shares.push({ name, comment: (match[3] || '').trim() });
+              }
+            }
+          }
+        }
+      }
+      resolve({ serverDesc, shares });
+    });
+  });
+}
+
+function queryHostNameNetbios(ip) {
+  return new Promise((resolve) => {
+    exec('nbtstat -A ' + ip, { windowsHide: true }, (err, stdout) => {
+      if (!err && stdout) {
+        const match = stdout.match(/^\s*([A-Za-z0-9_\-]+)\s+<00>\s+UNIQUE/m);
+        if (match) return resolve(match[1].trim());
+      }
+      resolve(null);
+    });
+  });
+}
+
+ipcMain.handle('samba:discoverServers', async () => {
+  try {
+    const subnets = getLocalSubnetsForDiscovery();
+    const foundServers = [];
+
+    for (const sn of subnets) {
+      const promises = [];
+      for (let i = 1; i <= 254; i++) {
+        const targetIp = sn.prefix + i;
+        if (targetIp === sn.localIp) continue;
+        promises.push((async () => {
+          const ok = await probePortTcp(targetIp, 445, 750);
+          return ok ? targetIp : null;
+        })());
+      }
+      const results = await Promise.all(promises);
+      const aliveIps = results.filter(Boolean);
+
+      for (const ip of aliveIps) {
+        const [hostName, viewRes] = await Promise.all([
+          queryHostNameNetbios(ip),
+          queryNetViewShares(ip)
+        ]);
+        foundServers.push({
+          ip,
+          hostName: hostName || ip,
+          serverDesc: viewRes.serverDesc || 'SAMBA / NAS 伺服器',
+          shares: viewRes.shares || []
+        });
+      }
+    }
+
+    return {
+      success: true,
+      servers: foundServers
+    };
+  } catch (err) {
+    console.error('Failed to discover SAMBA servers:', err);
+    return { success: false, error: err.message, servers: [] };
+  }
+});
+
 // Library scan & persistence
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.aiff', '.dsf', '.dff', '.wma']);
 
