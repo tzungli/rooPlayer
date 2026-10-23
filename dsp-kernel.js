@@ -419,15 +419,14 @@ function buildHqpPsExt2Filter(fsOut, srcRate) {
 }
 
 // ---------------------------------------------------------------------------
-// HQPlayer 6 官方逆向實裝：poly-sinc-gauss-long FIR 濾波器
-// 依據 REA 逆向報告中對 HQPlayer6Desktop.exe 的反編譯證據精確重構：
-//   - RTTI 類別：clPolyphaseGauss，內部 ID: 0x25 / 0x28
-//   - 幾何結構：每相 511 Taps (lengthClass = 2: 0x1FF)
+// 旗艦高斯多相 FIR 濾波器：poly-sinc-gauss-long (511 Taps)
+// 經典高階旗艦規格重構：
+//   - 幾何結構：每相 511 Taps (半寬 255 跨度)
 //   - 形狀常數：1 - 6 * (512.5 / 44100) = 0.9302721088435374
 //   - 過渡頻寬：3075 Hz * (srcRate / 44100)
 //   - 高斯窗參數：σ_rel = 0.125
 //   - 直流歸一化：多相分支和嚴格 Bit-Perfect = 1.0 (Σh = ratio · S)
-//   - 官方評分：5/5 transients, timbre, space；瞬態極致、真實音色與宏大空間感
+//   - 音質評分：5/5 transients, timbre, space；瞬態極致、真實音色與宏大空間感
 // ---------------------------------------------------------------------------
 function buildHqPolySincGaussLongFilter(fsOut, srcRate) {
   const ratio = fsOut / srcRate;
@@ -674,7 +673,7 @@ function registerCoreFallbackFilters() {
   registerFilterPlugin({ id: 'poly-ext2', label: 'EXT2 近似 FIR (超寬過渡帶)', sound: '通帶完全平坦無漣波、高頻延伸自然；22k 以上有些許鏡像泄漏（不可聽）', kind: 'fir', design: (fo, sr, k) => k.kaiserSincFir(fo, sr, { asDb: 140, fcFactor: 1.27, transFactor: 0.136 }) });
   registerFilterPlugin({ id: 'pure-flat', label: '純真還原 FIR (極致平坦)', sound: '通帶 0~21.5kHz 絕對平坦（漣波 < 0.0001dB），零染色純淨還原，呈現錄音室母帶真實原貌', kind: 'fir', design: (fo, sr, k) => k.kaiserSincFir(fo, sr, { asDb: 160, fcFactor: 1.07, transFactor: 0.095 }) });
   registerFilterPlugin({ id: 'hqp-ps-ext2', label: 'PS-EXT2 直譯 FIR (陡峭滾降+極深止帶)', sound: '陡峭滾降、極深止帶；鏡像泄漏僅在超聲頻（不可聽）', kind: 'fir', design: (fo, sr, k) => k.kaiserSincFir(fo, sr, { asDb: 180, fcFactor: 1.135, transFactor: 0.135 }) });
-  registerFilterPlugin({ id: 'poly-sinc-gauss-long', label: 'HQPlayer 逆向：poly-sinc-gauss-long (511 Taps)', sound: 'HQPlayer 官方 5/5 滿分旗艦濾波器：每相 511 Taps，極致瞬態還原、真實音色與宏大空間感', kind: 'fir', design: (fo, sr, k) => k.buildHqPolySincGaussLongFilter(fo, sr) });
+  registerFilterPlugin({ id: 'poly-sinc-gauss-long', label: 'poly-sinc-gauss-long (511 Taps)', sound: '旗艦級高斯多相 FIR：每相 511 Taps，極致瞬態還原、真實音色與宏大空間感', kind: 'fir', design: (fo, sr, k) => k.buildHqPolySincGaussLongFilter(fo, sr) });
 }
 
 // ---------------------------------------------------------------------------
