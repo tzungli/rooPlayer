@@ -16,7 +16,7 @@
   
 　　6-2.音樂檔(TIDAL)->升頻->DLNA->串流機
   
-　　6-3.音樂檔(TIDAL)->DLNA->HQPLAYER 6以上->升頻->串流機
+　　6-3.音樂檔(TIDAL)->DLNA->HQPLAYER 6 以上->升頻->串流機
   
 7.自動比對 KKBOX <-> 本機檔案 <-> TIDAL
 
