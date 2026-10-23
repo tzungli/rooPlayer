@@ -14326,14 +14326,21 @@ function setupScannerEvents() {
         return;
       }
 
-      // Collect current favorites, play counts, and history
+      // 收集完整資料庫的所有面向：資料夾、曲目、我的最愛（含詳細快照）、播放紀錄、最近聆聽、播放清單、播放統計
       const currentFavorites = state.favorites || { albums: [], tracks: [], artists: [] };
+      const currentFavoriteSnapshots = {
+        tracks: Object.fromEntries(favoriteTrackSnapshots),
+        albums: Object.fromEntries(favoriteAlbumSnapshots)
+      };
+      const currentPlaylists = getPlaylists();
       const currentPlayStats = getPlayStats();
       const currentPlaybackHistory = getPlaybackHistory();
       const currentRecentAlbums = state.recentlyPlayedAlbums || [];
 
       const res = await window.electronAPI.exportLibrary(null, {
         favorites: currentFavorites,
+        favoriteSnapshots: currentFavoriteSnapshots,
+        playlists: currentPlaylists,
         playStats: currentPlayStats,
         playbackHistory: currentPlaybackHistory,
         recentlyPlayedAlbums: currentRecentAlbums
@@ -14344,8 +14351,9 @@ function setupScannerEvents() {
         const favAlbs = (res.favoriteCounts && res.favoriteCounts.albums) || 0;
         const favTrks = (res.favoriteCounts && res.favoriteCounts.tracks) || 0;
         const favArts = (res.favoriteCounts && res.favoriteCounts.artists) || 0;
+        const plCount = res.playlistCount || 0;
         const histCount = res.historyCount || 0;
-        alert(`🎉 資料庫匯出成功！\n\n已儲存至：${res.filePath}\n• 收錄資料夾：${res.folderCount} 個\n• 音訊曲目：${res.trackCount} 首\n• 我的最愛：${favAlbs} 張專輯 / ${favTrks} 首歌曲 / ${favArts} 位演出者\n• 包含 ${histCount} 筆播放歷史紀錄與完整統計次數`);
+        alert(`🎉 資料庫匯出成功！\n\n已儲存至：${res.filePath}\n• 收錄資料夾：${res.folderCount} 個\n• 音訊曲目：${res.trackCount} 首\n• 我的最愛：${favAlbs} 張專輯 / ${favTrks} 首歌曲 / ${favArts} 位演出者\n• 播放清單：${plCount} 個\n• 包含 ${histCount} 筆播放歷史紀錄與完整統計次數`);
       } else {
         alert(`❌ 資料庫匯出失敗：${(res && res.error) || '未知錯誤'}`);
       }
@@ -14398,6 +14406,22 @@ function setupScannerEvents() {
             }
           });
 
+          saveFavorites();
+          syncAllFavoriteUIs();
+        }
+
+        // 2.5. Merge Favorite Snapshots
+        if (res.importedFavoriteSnapshots) {
+          if (res.importedFavoriteSnapshots.tracks) {
+            Object.entries(res.importedFavoriteSnapshots.tracks).forEach(([k, v]) => {
+              favoriteTrackSnapshots.set(k.toLowerCase(), v);
+            });
+          }
+          if (res.importedFavoriteSnapshots.albums) {
+            Object.entries(res.importedFavoriteSnapshots.albums).forEach(([k, v]) => {
+              favoriteAlbumSnapshots.set(k.toLowerCase(), v);
+            });
+          }
           saveFavorites();
           syncAllFavoriteUIs();
         }
@@ -14463,6 +14487,35 @@ function setupScannerEvents() {
           } catch (_) {}
         }
 
+        // 3.6. Merge Playlists
+        let playlistsMergedCount = 0;
+        if (res.importedPlaylists && Array.isArray(res.importedPlaylists)) {
+          const curPlaylists = getPlaylists();
+          res.importedPlaylists.forEach(pl => {
+            if (pl && pl.name) {
+              const existingIdx = curPlaylists.findIndex(p => p.id === pl.id || p.name === pl.name);
+              if (existingIdx >= 0) {
+                const existingPl = curPlaylists[existingIdx];
+                const seenTrk = new Set((existingPl.tracks || []).map(t => t.id || t.filePath || t.title));
+                (pl.tracks || []).forEach(t => {
+                  const k = t.id || t.filePath || t.title;
+                  if (!seenTrk.has(k)) {
+                    seenTrk.add(k);
+                    if (!existingPl.tracks) existingPl.tracks = [];
+                    existingPl.tracks.push(t);
+                  }
+                });
+                existingPl.updatedAt = new Date().toISOString();
+                playlistsMergedCount++;
+              } else {
+                curPlaylists.push(pl);
+                playlistsMergedCount++;
+              }
+            }
+          });
+          persistPlaylists(curPlaylists);
+        }
+
         rebuildLibraryCollections();
         renderAll();
 
@@ -14471,7 +14524,8 @@ function setupScannerEvents() {
           ...res.report,
           favAddedCount,
           playStatsMergedCount,
-          historyMergedCount
+          historyMergedCount,
+          playlistsMergedCount
         };
         showImportReportModal(enrichedReport);
       } else {
