@@ -1249,21 +1249,11 @@ class DlnaManager extends EventEmitter {
       );
     } else {
       didlParts.push(`    <res protocolInfo="${protocolInfo}" ${durationAttr}>${streamUrl}</res>`);
-      // 擴充相容性：針對 WAV 串流額外宣告標準 LPCM 協議，確保嚴格遵守 DLNA 規格的品牌（如 Pioneer/Yamaha/Sony）能完美辨別
+      // 擴充相容性：針對 WAV 串流額外宣告相容的 audio/x-wav 協議
       if (mimeType === 'audio/wav') {
-        didlParts.push(`    <res protocolInfo="http-get:*:audio/L16:*" ${durationAttr}>${streamUrl}</res>`);
         didlParts.push(`    <res protocolInfo="http-get:*:audio/x-wav:*" ${durationAttr}>${streamUrl}</res>`);
       }
     }
-
-    // Secondary artwork resources placed AFTER audio resources
-    didlParts.push(
-      `    <res protocolInfo="http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_LRG;DLNA.ORG_FLAGS=00900000000000000000000000000000">${coverUrl}</res>`,
-      `    <res protocolInfo="http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_MED;DLNA.ORG_FLAGS=00900000000000000000000000000000">${coverUrl}</res>`,
-      `    <res protocolInfo="http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_TN;DLNA.ORG_FLAGS=00900000000000000000000000000000">${coverUrl}</res>`,
-      `    <res protocolInfo="http-get:*:image/jpeg:*">${coverUrl}</res>`,
-      `    <res protocolInfo="http-get:*:image/png:*">${coverUrl}</res>`
-    );
 
     didlParts.push(
       '  </item>',
@@ -1286,9 +1276,7 @@ class DlnaManager extends EventEmitter {
           dev.avControlUrl,
           'urn:schemas-upnp-org:service:AVTransport:1',
           'SetAVTransportURI',
-          `<InstanceID>0</InstanceID>
-           <CurrentURI>${escapeXml(streamUrl)}</CurrentURI>
-           <CurrentURIMetaData>${metaPayload}</CurrentURIMetaData>`
+          `<InstanceID>0</InstanceID><CurrentURI>${escapeXml(streamUrl)}</CurrentURI><CurrentURIMetaData>${metaPayload}</CurrentURIMetaData>`
         );
         uriSuccess = true;
         break;
@@ -1306,9 +1294,35 @@ class DlnaManager extends EventEmitter {
       return { success: false, cancelled: true };
     }
 
-    // 協定層防跳幀保護：發送 Play 之前給予設備 200ms 握手安定時間，讓設備有充足時間探測 URL、
-    // 建立 TCP 連線與內部預載緩衝區，徹底避免設備因倉促開播而丟棄開頭封包
-    await new Promise(r => setTimeout(r, 200));
+    // 關鍵相容性優化（專為 HQPlayer 等嚴格遵循 UPnP 規範的高階發燒渲染器設計）：
+    // 很多專業播放器（如 HQPlayer）在接收到 SetAVTransportURI 後，會將狀態置為 TRANSITIONING。
+    // 若在 TRANSITIONING 尚未結束前就發送 Play，HQPlayer 會直接回報「705: Transition not available」錯誤並拒播！
+    // 因此在發送 Play 前，先等待設備離開 TRANSITIONING 狀態（最多等待 1500ms，一旦就緒立即發送 Play）：
+    let transitioned = false;
+    for (let waitTick = 0; waitTick < 15; waitTick++) {
+      if (opId !== this._playOpCounter) return { success: false, cancelled: true };
+      try {
+        const transInfoXml = await this.sendSoapRequest(
+          dev.avControlUrl,
+          'urn:schemas-upnp-org:service:AVTransport:1',
+          'GetTransportInfo',
+          '<InstanceID>0</InstanceID>',
+          800
+        );
+        const stMatch = transInfoXml.match(/<CurrentTransportState>(.*?)<\/CurrentTransportState>/i);
+        const curState = stMatch ? stMatch[1].trim().toUpperCase() : '';
+        if (curState && curState !== 'TRANSITIONING') {
+          transitioned = true;
+          break;
+        }
+      } catch (e) {
+        // 部分簡易設備不支援 GetTransportInfo，略過
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (!transitioned) {
+      await new Promise(r => setTimeout(r, 150));
+    }
 
     // 4. Play with retry loop
     this._prepareStage = 'play';
@@ -1322,8 +1336,7 @@ class DlnaManager extends EventEmitter {
           dev.avControlUrl,
           'urn:schemas-upnp-org:service:AVTransport:1',
           'Play',
-          `<InstanceID>0</InstanceID>
-           <Speed>1</Speed>`
+          `<InstanceID>0</InstanceID><Speed>1</Speed>`
         );
         playSuccess = true;
         break;
