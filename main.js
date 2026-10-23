@@ -4,6 +4,9 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { pathToFileURL, fileURLToPath } = require('url');
 const http = require('http');
+const nodeNet = require('net');
+const os = require('os');
+const { exec } = require('child_process');
 
 // Increase V8 maximum heap limit to 4GB to handle large audiophile libraries smoothly
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
@@ -2419,9 +2422,9 @@ function getLocalSubnetsForDiscovery() {
   return subnets;
 }
 
-function probePortTcp(ip, port, timeout = 750) {
+function probePortTcp(ip, port, timeout = 1200) {
   return new Promise((resolve) => {
-    const s = new net.Socket();
+    const s = new nodeNet.Socket();
     s.setTimeout(timeout);
     s.on('connect', () => { s.destroy(); resolve(true); });
     s.on('timeout', () => { s.destroy(); resolve(false); });
