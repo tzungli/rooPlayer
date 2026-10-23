@@ -1,20 +1,51 @@
 {
   "name": "rooplayer",
-  "version": "0.1.0",
+  "version": "0.8.0",
   "description": "rooPlayer - Audiophile Music Media Manager",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "pack:green": "electron-builder --win zip portable"
+  },
+  "build": {
+    "appId": "com.tzungli.rooplayer",
+    "productName": "rooPlayer",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "zip",
+        "portable"
+      ],
+      "icon": "icon.png"
+    },
+    "portable": {
+      "artifactName": "${productName}-v${version}-portable.${ext}"
+    },
+    "files": [
+      "**/*",
+      "!release/**",
+      "!dist/**",
+      "!_acl-recovery/**",
+      "!**/*.map"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "tools/rp-wasapi-exclusive.exe",
+      "dsd-modulator-worker.js"
+    ]
   },
   "keywords": [
     "music",
     "audiophile",
     "media-manager"
   ],
-  "author": "",
+  "author": "tzungli",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^44.7.0"
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "@wasm-audio-decoders/flac": "^0.2.11",

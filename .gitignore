@@ -15,3 +15,7 @@ bin/
 
 # WASAPI 獨佔輸出 helper：只版控 C# 原始檔，.exe 由主行程執行期用系統 csc 編譯到 userData
 tools/*.exe
+
+# 發行打包產物
+release/
+dist/
