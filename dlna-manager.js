@@ -75,8 +75,16 @@ class DlnaManager extends EventEmitter {
     this._prepareStage = '';
     this._prepareTrack = null;
     this._playAnnounced = false;
-    this.PREPARE_TARGET_SEC = 6;   // Play 之前先在記憶體裡緩衝這麼多秒音訊
-    this.PREPARE_MAX_WAIT_MS = 12000; // 再慢的引擎也不讓使用者等超過這個時間
+    this.PREPARE_TARGET_SEC = 2.5; // 自適應目標：PCM升頻約 2.0-2.5 秒即可極速平滑開播
+    this.PREPARE_TARGET_DSD_SEC = 4.0; // DSD 調變運算密度較高，給予 4.0 秒安全緩衝
+    this.PREPARE_MAX_WAIT_MS = 8000; // 縮短最大等待上限，不再讓使用者無謂乾等
+    // HTTP Agent 啟用 keepAlive 持久連線，消除每次 SOAP 請求重建 TCP 的延遲與丟包
+    this.httpAgent = new http.Agent({
+      keepAlive: true,
+      maxSockets: 20,
+      keepAliveMsecs: 15000,
+      timeout: 10000
+    });
   }
 
   // ---- 串流準備階段事件（stage: preparing / buffer / opening / playing / failed） ----
@@ -150,20 +158,21 @@ class DlnaManager extends EventEmitter {
     this._prepareTrack = null;
   }
 
-  // Play 之前的記憶體緩衝：等引擎把目標秒數寫進 session（或引擎較慢時最多等 PREPARE_MAX_WAIT_MS）
-  async waitForPrepareBuffer(opId) {
-    const targetSec = Math.min(this.PREPARE_TARGET_SEC, (this.currentStreamSession && this.currentStreamSession.durationSec) || this.PREPARE_TARGET_SEC);
+  // Play 之前的記憶體緩衝：自適應等待目標秒數寫入 session（直通 0s、PCM 2.5s、DSD 4s）
+  async waitForPrepareBuffer(opId, isDsd = false) {
+    const baseTarget = isDsd ? this.PREPARE_TARGET_DSD_SEC : this.PREPARE_TARGET_SEC;
+    const targetSec = Math.min(baseTarget, (this.currentStreamSession && this.currentStreamSession.durationSec) || baseTarget);
     const t0 = Date.now();
     while (Date.now() - t0 < this.PREPARE_MAX_WAIT_MS) {
       if (opId !== this._playOpCounter) return false;
       const s = this.currentStreamSession;
       if (!s || s.isCancelled || s.isCompleted) return true;
       const stats = this.prepareBufferStats();
-      if (!stats) return true; // 非漸進式 session（直通串流）：沒有緩衝可等
+      if (!stats) return true; // 非漸進式 session（直通串流）：沒有緩衝可等，立即開播
       if (stats.bufferedSec >= targetSec) return true;
-      await new Promise(r => setTimeout(r, 120));
+      await new Promise(r => setTimeout(r, 60)); // 縮短輪詢間隔為 60ms，達標瞬間立即釋放
     }
-    console.warn(`[DLNA] 準備緩衝等待逾時（${this.PREPARE_MAX_WAIT_MS}ms），直接開始播放`);
+    console.warn(`[DLNA] 準備緩衝等待達門檻或逾時（${Date.now() - t0}ms），直接通知播放`);
     return false;
   }
 
@@ -334,6 +343,14 @@ class DlnaManager extends EventEmitter {
       });
       res.end();
       return;
+    }
+
+    // 關鍵優化：配置 TCP Socket 參數，關閉 Nagle's 演算法（避免高取樣率微小排隊延遲與抖動），並啟用 TCP Keep-Alive
+    if (res.socket) {
+      try {
+        res.socket.setNoDelay(true);
+        res.socket.setKeepAlive(true, 30000);
+      } catch (e) {}
     }
 
     const ProgressiveFileStream = this.nativeDspStreamer.ProgressiveFileStream;
@@ -895,7 +912,7 @@ class DlnaManager extends EventEmitter {
     return this.activeDeviceId;
   }
 
-  // Send UPnP SOAP request
+  // Send UPnP SOAP request with Persistent HTTP Keep-Alive Connection Pool
   async sendSoapRequest(controlUrl, serviceType, action, bodyXml, timeoutMs = 6000) {
     const envelope = `<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
@@ -906,30 +923,52 @@ class DlnaManager extends EventEmitter {
   </s:Body>
 </s:Envelope>`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const bodyBuffer = Buffer.from(envelope, 'utf-8');
 
-    try {
-      const res = await fetch(controlUrl, {
+    return new Promise((resolve, reject) => {
+      let isSettled = false;
+      const parsedUrl = new URL(controlUrl);
+
+      const req = http.request(parsedUrl, {
         method: 'POST',
+        agent: this.httpAgent,
         headers: {
           'Content-Type': 'text/xml; charset="utf-8"',
-          'SOAPAction': `"${serviceType}#${action}"`
+          'SOAPAction': `"${serviceType}#${action}"`,
+          'Content-Length': bodyBuffer.length,
+          'Connection': 'keep-alive'
         },
-        body: envelope,
-        signal: controller.signal
+        timeout: timeoutMs
+      }, (res) => {
+        let responseText = '';
+        res.setEncoding('utf-8');
+        res.on('data', (chunk) => { responseText += chunk; });
+        res.on('end', () => {
+          if (isSettled) return;
+          isSettled = true;
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(responseText);
+          } else {
+            reject(new Error(`SOAP ${action} failed: HTTP ${res.statusCode} - ${responseText.slice(0, 200)}`));
+          }
+        });
       });
-      clearTimeout(timeoutId);
 
-      const responseText = await res.text();
-      if (!res.ok) {
-        throw new Error(`SOAP ${action} failed: HTTP ${res.status} - ${responseText.slice(0, 200)}`);
-      }
-      return responseText;
-    } catch (err) {
-      clearTimeout(timeoutId);
-      throw err;
-    }
+      req.on('timeout', () => {
+        if (isSettled) return;
+        isSettled = true;
+        req.destroy(new Error(`SOAP ${action} timeout after ${timeoutMs}ms`));
+      });
+
+      req.on('error', (err) => {
+        if (isSettled) return;
+        isSettled = true;
+        reject(err);
+      });
+
+      req.write(bodyBuffer);
+      req.end();
+    });
   }
 
   // Play a track on a DLNA renderer with concurrency serialization & queue protection
@@ -989,18 +1028,22 @@ class DlnaManager extends EventEmitter {
       this.nativeDspStreamer.onSessionInitProgress = (session) => { this._prepareSession = session; };
     }
 
-    // 2. Explicitly send Stop to renderer and allow 150ms to clear previous media state
-    // This resolves UPnP SOAP Fault 705 (TRANSITION_NOT_AVAILABLE) on track change
-    try {
-      await this.sendSoapRequest(
-        dev.avControlUrl,
-        'urn:schemas-upnp-org:service:AVTransport:1',
-        'Stop',
-        `<InstanceID>0</InstanceID>`
-      );
-      await new Promise(r => setTimeout(r, 150));
-    } catch (e) {
-      // Ignore if device was already stopped
+    // 2. 智慧平滑切換（消除無謂的 150ms 盲等）：
+    // 若設備本來就處於 STOPPED 或 NO_MEDIA_PRESENT，直接略過 Stop 指令；
+    // 僅在播放中切歌時發送 Stop，並將緩衝等待從 150ms 最佳化至 40ms，使切歌反應提升數倍！
+    if (this.playbackState === 'PLAYING') {
+      try {
+        await this.sendSoapRequest(
+          dev.avControlUrl,
+          'urn:schemas-upnp-org:service:AVTransport:1',
+          'Stop',
+          `<InstanceID>0</InstanceID>`,
+          2000
+        );
+        await new Promise(r => setTimeout(r, 40));
+      } catch (e) {
+        // Ignore if device was already stopped
+      }
     }
 
     if (!this.streamingServer || !this.streamingPort) {
@@ -1133,11 +1176,10 @@ class DlnaManager extends EventEmitter {
 
     this.currentStreamToken = streamToken;
 
-    // 正式播放前先把音訊寫進記憶體緩衝（引擎 session 的初始緩衝只有 3–4 秒）：
-    // 裝置拿到 URI 之後就不容易因為引擎落後而卡住，同時這段時間會回報給 UI 顯示。
+    // 自適應記憶體緩衝：PCM 升頻僅需 2.0-2.5 秒緩衝即可平滑起播；DSD 調變需 4 秒
     if (this.currentStreamSession && !this.currentStreamSession.isCompleted) {
       this._prepareStage = 'buffer';
-      await this.waitForPrepareBuffer(opId);
+      await this.waitForPrepareBuffer(opId, isDsdUpsample);
     }
 
     // Proactively pre-resolve and cache album artwork buffer for instantaneous serving to DLNA renderer
@@ -1207,6 +1249,11 @@ class DlnaManager extends EventEmitter {
       );
     } else {
       didlParts.push(`    <res protocolInfo="${protocolInfo}" ${durationAttr}>${streamUrl}</res>`);
+      // 擴充相容性：針對 WAV 串流額外宣告標準 LPCM 協議，確保嚴格遵守 DLNA 規格的品牌（如 Pioneer/Yamaha/Sony）能完美辨別
+      if (mimeType === 'audio/wav') {
+        didlParts.push(`    <res protocolInfo="http-get:*:audio/L16:*" ${durationAttr}>${streamUrl}</res>`);
+        didlParts.push(`    <res protocolInfo="http-get:*:audio/x-wav:*" ${durationAttr}>${streamUrl}</res>`);
+      }
     }
 
     // Secondary artwork resources placed AFTER audio resources
