@@ -8428,7 +8428,8 @@ function drawUfPreview(cv, data, ctx) {
   cv.style.cursor = 'default';
   const cs = getComputedStyle(document.documentElement);
   const textCol = (cs.getPropertyValue('--text-muted') || '#888').trim() || '#888';
-  const padL = 42, padR = 8, padT = 16, padB = 24;
+  // 左側留白加大：dB 標籤（-48dB 等）要完整落在畫布內，不再被左邊緣裁切
+  const padL = 52, padR = 10, padT = 16, padB = 34;
   // 最佳化分貝軸（Y 軸）：動態範圍設為 +3dB 到 -60dB（跨度 63dB）
   // 過去 -120dB 讓通帶與過渡帶擠在頂部 1/5；現在改為 0~-60dB，滾降曲線與不同窗函數的陡峭度擴大超過 2 倍！
   const dbTop = 3, dbBot = -60;
@@ -8446,8 +8447,12 @@ function drawUfPreview(cv, data, ctx) {
   // 現在把 X 軸視窗直接縮放並平移至截止點附近：xMin = max(0, fc - 1.3×源Nyq), xMax = min(fsOut/2, fc + 0.6×源Nyq)。
   // 這樣滾降的完整弧度、不同 taps 的陡峭差異都會橫向展開到畫布寬度的 40% 以上，一眼可辨！
   const fcRaw = Number.isFinite(data.fcHz) && data.fcHz > 0 ? Math.min(data.fcHz, fsOut / 2) : 0;
-  const fMin = fcRaw > 0 ? Math.max(0, fcRaw - 1.3 * srcNyq) : 0;
-  const fMax = fcRaw > 0 ? Math.min(fsOut / 2, fcRaw + 0.6 * srcNyq) : Math.min(fsOut / 2, 1.1 * srcNyq * 2);
+  // 左緣固定從音頻帶低端（源Nyq/10 ≈ 2.2kHz）開始：低頻端才能放得下 5k/10k/15k… 的數字刻度；
+  // 若仍用 fc−1.3×源Nyq，左緣會貼著 0Hz，第一個可用刻度（20k）剛好被源 Nyquist 虛線吃掉，整段左半邊都沒有數字。
+  const fMin = fcRaw > 0 ? Math.max(0, srcNyq / 10) : 0;
+  // 右緣至少涵蓋鏡像帶＋抑制零點（fc + 0.6×源Nyq），再向外補到「整數 kHz」邊界（例如 38.1k → 40k）：
+  // 軸寬變成整数 kHz，所有可選步進都是整数 kHz，刻度數字永遠乾淨好讀。
+  const fMax = fcRaw > 0 ? Math.min(fsOut / 2, Math.ceil((fcRaw + 0.6 * srcNyq) / 1000) * 1000) : Math.min(fsOut / 2, 1.1 * srcNyq * 2);
   const xOf = f => padL + (f - fMin) / (fMax - fMin) * (W - padL - padR);
   const plotW = W - padL - padR;
   // 邊界：源 Nyquist（可聽音頻上緣）、截止 fc（可拖曳）、鏡像抑制零點（止帶起點）
@@ -8481,39 +8486,54 @@ function drawUfPreview(cv, data, ctx) {
     fillBand(srcNyq, fMax, 'rgba(248,113,113,0.06)');
   }
 
-  // ---- dB 網格（+3dB ~ -60dB，標示 0, -12, -24, -36, -48, -60 dB，過渡帶深度清清楚楚）----
+  // ---- dB 網格（+3dB ~ -60dB，標籤靠右對齊貼齊繪圖區左緣，完整可見不被裁切）----
   g.strokeStyle = 'rgba(128,128,128,0.18)'; g.fillStyle = textCol; g.font = '10px sans-serif'; g.lineWidth = 1;
+  g.textAlign = 'right';
   for (const db of [0, -6, -12, -24, -36, -48]) {
     const y = yOf(db);
     g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke();
-    g.fillText(db === 0 ? '0dB' : db + 'dB', 4, y + 3);
+    g.fillText(db === 0 ? '0dB' : db + 'dB', padL - 5, y + 3);
   }
 
-  // ---- 頻率網格：依「可見視窗寬度」自動選步進，讓轉折位置能直接讀 kHz。
-  // 源 Nyquist／截止／止帶的虛線本身就算刻度，所以它們附近不再放數字，避免疊字。----
+  // ---- 頻率網格：依「可見視窗寬度」自動選步進。刻度一律標出完整數值與單位
+  // （小於 1kHz 顯示 Hz、其餘顯示 kHz，例如 500Hz / 1.5k / 24k），一眼讀得出單位。
+  // 虛線標記（源Nyq／截止）附近只「挪開」數字、不取消刻度：把標籤推到最近的可用位置，
+  // 避免窄欄下整條軸沒有數字可讀。----
   const spanHz = fMax - fMin;
-  let stepHz = 500;
-  for (const s of [500, 1000, 2000, 5000, 10000]) { if (Math.floor(spanHz / s) <= 8) { stepHz = s; break; } }
-  const nearMark = (f) => {
-    const xs = [xOf(f)];
-    if (hasMarks) xs.push(fcxX, xOf(stopMark), xOf(srcNyq));
-    return xs.some(x => Math.abs(x - xOf(f)) < 20);
-  };
+  let stepHz = 100;
+  for (const s of [100, 200, 500, 1000, 2000, 5000, 10000]) { if (Math.floor(spanHz / s) <= 8) { stepHz = s; break; } }
+  const markXs = hasMarks ? [fcxX, xOf(stopMark), xOf(srcNyq)].filter(x => Number.isFinite(x)) : [];
   g.textAlign = 'center';
-  const fmtTick = (f) => stepHz >= 1000 ? (Math.round(f / 1000) + 'k') : ((f / 1000).toFixed(1) + 'k');
+  const fmtTick = (f) => {
+    if (f < 1000) return Math.round(f) + 'Hz';
+    if (stepHz < 1000 || f % 1000 !== 0) return (f / 1000).toFixed(1) + 'kHz';
+    return Math.round(f / 1000) + 'kHz';
+  };
   for (let f = Math.ceil(fMin / stepHz) * stepHz; f <= fMax + 1; f += stepHz) {
     const x = xOf(Math.min(f, fMax));
-    if (nearMark(f)) continue; // 讓位給源 Nyquist／截止／止帶標記，避免數字與虛線文字重疊
     g.strokeStyle = 'rgba(128,128,128,0.14)';
     g.beginPath(); g.moveTo(x, padT); g.lineTo(x, H - padB); g.stroke();
+    // 數字與虛線標記太近時，把數字往兩側推（先左後右），推到畫布內才畫；真的放不下才省略
+    let tx = x;
+    const clash = (cand) => markXs.some(mx => Math.abs(cand - mx) < 24);
+    if (clash(tx)) {
+      const left = x - 24, right = x + 24;
+      const okL = left >= padL + 12 && !clash(left), okR = right <= W - padR - 12 && !clash(right);
+      if (okL) tx = left; else if (okR) tx = right; else continue;
+    }
     g.fillStyle = textCol;
-    g.fillText(fmtTick(f), x, H - 8);
+    g.fillText(fmtTick(f), tx, H - 20);
   }
 
-  // 清楚標示 X 軸單位「(kHz)」於右下角座標刻度末端
-  g.textAlign = 'right';
+  // ---- 底部頻率軸：畫出一條實線軸與兩端範圍標籤（Hz〜kHz 完整單位），清楚標示圖表的頻率跨度。----
+  g.strokeStyle = 'rgba(128,128,128,0.35)';
+  g.beginPath(); g.moveTo(padL, H - padB); g.lineTo(W - padR, H - padB); g.stroke();
+  const axisFmt = (f) => f < 1000 ? Math.round(f) + 'Hz' : (Math.round(f / 100) / 10) + 'kHz';
   g.fillStyle = textCol;
-  g.fillText('(kHz)', W - padR, H - 8);
+  // 範圍文字放最底行（H-5），與刻度數字行（H-20）錯開；兩側還得避開「音頻帶／衰減中」區域標字的中間段，
+  // 所以左標籤從左下角起、右標籤靠右下角收，中間留給區域名稱。
+  g.textAlign = 'left';
+  g.fillText('頻率軸 ' + axisFmt(fMin) + ' ~ ' + axisFmt(fMax), padL, H - 5);
 
   // ---- 邊界虛線與圖內標字。標字一律放在繪圖區上方（曲線都在下方，不會壓到）。
   // 源 Nyquist 與截止線常貼得很近（cutoffRel≈1.05 時只差幾個像素），窄欄下文字比線距還寬：
