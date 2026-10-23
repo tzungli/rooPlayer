@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, session, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -1404,22 +1404,60 @@ ipcMain.handle('util:translateToZhTw', async (event, text) => {
 // ==========================================================
 // TIDAL Streaming Subsystem IPC & Auth
 // ==========================================================
+// 憑證以 Electron safeStorage（Windows DPAPI）系統級加密：金鑰綁定目前 Windows 登入帳號，
+// 檔案複製到其他電腦或使用者下皆無法解密。單一檔案、版本前綴相容：
+//   RPEnc2: = safeStorage 密文 base64（本機系統綁定保護）
+//   RPEnc1: = 舊版加密格式（來源碼未收錄，無法本地解密；讀到時提示重新登入以升級為 RPEnc2）
 const TIDAL_AUTH_FILE = path.join(app.getPath('userData'), 'rooplayer_tidal_auth.json');
+
+function tidalAuthEncryptionAvailable() {
+  try {
+    return safeStorage.isEncryptionAvailable();
+  } catch (e) {
+    return false;
+  }
+}
 
 function loadTidalAuth() {
   try {
-    if (fs.existsSync(TIDAL_AUTH_FILE)) {
-      return JSON.parse(fs.readFileSync(TIDAL_AUTH_FILE, 'utf-8'));
+    if (!fs.existsSync(TIDAL_AUTH_FILE)) return null;
+    const text = fs.readFileSync(TIDAL_AUTH_FILE, 'utf-8');
+    if (/^RPEnc2:/.test(text)) {
+      // 系統級加密（DPAPI）：僅本機目前登入使用者可解密
+      if (!tidalAuthEncryptionAvailable()) {
+        console.warn('[TIDAL] Auth file is system-encrypted but encryption is unavailable in this environment');
+        return null;
+      }
+      const buf = Buffer.from(text.slice('RPEnc2:'.length), 'base64');
+      return JSON.parse(safeStorage.decryptString(buf));
     }
+    if (/^RPEnc1:/.test(text)) {
+      // 舊版加密憑證：無法在本機解密時視為未登入，讓使用者重新登入 TIDAL
+      // 即自動以 RPEnc2（系統級加密）覆寫升級。
+      console.warn('[TIDAL] Legacy encrypted auth detected; re-login required to upgrade storage');
+      return null;
+    }
+    // 更早的純 JSON 明文：讀出後立即升級為系統級加密，減少明文殘留
+    const data = JSON.parse(text);
+    saveTidalAuth(data);
+    return data;
   } catch (e) {
     console.warn('[TIDAL] Failed to read auth file:', e);
+    return null;
   }
-  return null;
 }
 
 function saveTidalAuth(data) {
   try {
-    fs.writeFileSync(TIDAL_AUTH_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    const raw = JSON.stringify(data);
+    if (tidalAuthEncryptionAvailable()) {
+      // safeStorage：Windows DPAPI 等級、綁定目前登入帳號的系統級加密
+      const enc = safeStorage.encryptString(raw).toString('base64');
+      fs.writeFileSync(TIDAL_AUTH_FILE, 'RPEnc2:' + enc, 'utf-8');
+    } else {
+      // 極少數不支援系統加密的環境：以 RPB1: + base64 封裝避免明文直讀（非系統級保護）
+      fs.writeFileSync(TIDAL_AUTH_FILE, 'RPB1:' + Buffer.from(raw, 'utf-8').toString('base64'), 'utf-8');
+    }
     return true;
   } catch (e) {
     console.error('[TIDAL] Failed to save auth file:', e);
