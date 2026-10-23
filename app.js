@@ -1509,6 +1509,9 @@ function getStarSvg(isActive = false, size = 16) {
 }
 
 // ----------------- Favorites State Management -----------------
+const favoriteTrackSnapshots = new Map();
+const favoriteAlbumSnapshots = new Map();
+
 function initFavorites() {
   try {
     const raw = localStorage.getItem('roon_favorites');
@@ -1520,6 +1523,12 @@ function initFavorites() {
         artists: Array.isArray(parsed.artists) ? parsed.artists : []
       };
     }
+    const rawSnaps = localStorage.getItem('roon_favorite_snapshots');
+    if (rawSnaps) {
+      const p = JSON.parse(rawSnaps);
+      if (p.tracks) Object.entries(p.tracks).forEach(([k, v]) => favoriteTrackSnapshots.set(k.toLowerCase(), v));
+      if (p.albums) Object.entries(p.albums).forEach(([k, v]) => favoriteAlbumSnapshots.set(k.toLowerCase(), v));
+    }
   } catch (e) {
     console.warn('Error reading roon_favorites:', e);
   }
@@ -1528,6 +1537,11 @@ function initFavorites() {
 function saveFavorites() {
   try {
     localStorage.setItem('roon_favorites', JSON.stringify(state.favorites));
+    const snapsObj = {
+      tracks: Object.fromEntries(favoriteTrackSnapshots),
+      albums: Object.fromEntries(favoriteAlbumSnapshots)
+    };
+    localStorage.setItem('roon_favorite_snapshots', JSON.stringify(snapsObj));
   } catch (e) {
     console.warn('Error saving roon_favorites:', e);
   }
@@ -1540,8 +1554,9 @@ function getAlbumKey(album) {
 
 function getTrackKey(track) {
   if (!track) return '';
-  if (track.filePath) return track.filePath;
-  if (track.isTidal) return `tidal_${track.tidalId || track.id}`;
+  if (track.isTidal) return `tidal_${track.tidalId || track.id}`.toLowerCase();
+  if (track.isKkbox) return `kkbox_${track.kkboxId || track.id}`.toLowerCase();
+  if (track.filePath) return `local_${track.filePath.toLowerCase().replace(/\\/g, '/')}`;
   return `${(track.title || '').trim()}___${(track.artist || '').trim()}`.toLowerCase();
 }
 
@@ -1551,38 +1566,110 @@ function isAlbumFavorite(album) {
   return state.favorites.albums.some(k => k.toLowerCase() === key);
 }
 
-function toggleAlbumFavorite(album) {
+function toggleAlbumFavorite(album, triggerBtn = null) {
   if (!album) return;
   const key = getAlbumKey(album);
   const idx = state.favorites.albums.findIndex(k => k.toLowerCase() === key);
-  if (idx >= 0) {
+  const nowFav = (idx < 0);
+  if (!nowFav) {
     state.favorites.albums.splice(idx, 1);
+    favoriteAlbumSnapshots.delete(key);
     showToast(`已從最愛專輯移除《${album.title}》`);
   } else {
     state.favorites.albums.push(key);
+    favoriteAlbumSnapshots.set(key, {
+      title: album.title,
+      artist: album.artist,
+      year: album.year || '',
+      cover: album.cover || '',
+      tracksCount: (album.tracks && album.tracks.length) || album.tracksCount || 0,
+      tracks: album.tracks || []
+    });
     showToast(`♥ 已將《${album.title}》加入最愛專輯`);
   }
+
+  if (triggerBtn) {
+    triggerBtn.classList.toggle('active', nowFav);
+    const labelSpan = triggerBtn.querySelector('span');
+    if (labelSpan) {
+      labelSpan.textContent = nowFav ? '已在最愛專輯' : '加入最愛專輯';
+      triggerBtn.innerHTML = `${getHeartSvg(nowFav, 15)} <span>${labelSpan.textContent}</span>`;
+    } else {
+      triggerBtn.innerHTML = getHeartSvg(nowFav, 15);
+    }
+    triggerBtn.title = nowFav ? '取消最愛專輯' : '加入最愛專輯';
+  }
+
   saveFavorites();
   syncAllFavoriteUIs();
 }
 
 function isTrackFavorite(track) {
   if (!track) return false;
-  const key = getTrackKey(track);
-  return state.favorites.tracks.some(k => k.toLowerCase() === key.toLowerCase());
+  const primaryKey = getTrackKey(track);
+  const titleArtistKey = `${(track.title || '').trim()}___${(track.artist || '').trim()}`.toLowerCase();
+  const normalizedPath = track.filePath ? `local_${track.filePath.toLowerCase().replace(/\\/g, '/')}` : '';
+  const rawPath = track.filePath ? track.filePath.toLowerCase() : '';
+
+  return state.favorites.tracks.some(k => {
+    const kl = k.toLowerCase().replace(/\\/g, '/');
+    return kl === primaryKey ||
+           kl === titleArtistKey ||
+           (normalizedPath && kl === normalizedPath) ||
+           (rawPath && kl === rawPath) ||
+           (track.tidalId && kl === `tidal_${track.tidalId}`.toLowerCase()) ||
+           (track.kkboxId && kl === `kkbox_${track.kkboxId}`.toLowerCase());
+  });
 }
 
-function toggleTrackFavorite(track) {
+function toggleTrackFavorite(track, triggerBtn = null) {
   if (!track) return;
-  const key = getTrackKey(track);
-  const idx = state.favorites.tracks.findIndex(k => k.toLowerCase() === key.toLowerCase());
-  if (idx >= 0) {
-    state.favorites.tracks.splice(idx, 1);
+  const isFav = isTrackFavorite(track);
+  const nowFav = !isFav;
+  const primaryKey = getTrackKey(track);
+
+  if (!nowFav) {
+    const titleArtistKey = `${(track.title || '').trim()}___${(track.artist || '').trim()}`.toLowerCase();
+    const normalizedPath = track.filePath ? `local_${track.filePath.toLowerCase().replace(/\\/g, '/')}` : '';
+    state.favorites.tracks = state.favorites.tracks.filter(k => {
+      const kl = k.toLowerCase().replace(/\\/g, '/');
+      if (kl === primaryKey || kl === titleArtistKey || (normalizedPath && kl === normalizedPath)) {
+        favoriteTrackSnapshots.delete(kl);
+        return false;
+      }
+      return true;
+    });
     showToast(`已從最愛歌曲移除「${track.title}」`);
   } else {
-    state.favorites.tracks.push(key);
+    if (!state.favorites.tracks.some(k => k.toLowerCase() === primaryKey)) {
+      state.favorites.tracks.push(primaryKey);
+    }
+    favoriteTrackSnapshots.set(primaryKey, {
+      id: track.id || primaryKey,
+      title: track.title,
+      artist: track.artist,
+      album: track.album || '',
+      duration: track.duration || 0,
+      filePath: track.filePath || '',
+      cover: track.cover || '',
+      formatName: track.formatName || 'PCM',
+      sampleRate: track.sampleRate || 44100,
+      bitsPerSample: track.bitsPerSample || 16,
+      isTidal: !!track.isTidal,
+      tidalId: track.tidalId || null,
+      isKkbox: !!track.isKkbox,
+      kkboxId: track.kkboxId || null
+    });
     showToast(`♥ 已將「${track.title}」加入最愛歌曲`);
   }
+
+  // 樂觀立即更新點擊按鈕，毫秒級點亮實心愛心
+  if (triggerBtn) {
+    triggerBtn.classList.toggle('active', nowFav);
+    triggerBtn.innerHTML = getHeartSvg(nowFav, 14);
+    triggerBtn.title = nowFav ? '取消最愛歌曲' : '加入最愛歌曲';
+  }
+
   saveFavorites();
   syncAllFavoriteUIs();
 }
@@ -1593,27 +1680,87 @@ function isArtistFavorite(artistName) {
   return state.favorites.artists.some(a => a.toLowerCase() === name);
 }
 
-function toggleArtistFavorite(artistName) {
+function toggleArtistFavorite(artistName, triggerBtn = null) {
   if (!artistName) return;
   const name = artistName.trim();
   const idx = state.favorites.artists.findIndex(a => a.toLowerCase() === name.toLowerCase());
-  if (idx >= 0) {
+  const nowFav = (idx < 0);
+  if (!nowFav) {
     state.favorites.artists.splice(idx, 1);
     showToast(`已從最愛演出者移除「${name}」`);
   } else {
     state.favorites.artists.push(name);
     showToast(`⭐ 已將「${name}」加入最愛演出者`);
   }
+  if (triggerBtn) {
+    triggerBtn.classList.toggle('active', nowFav);
+    const labelSpan = triggerBtn.querySelector('span');
+    if (labelSpan) {
+      labelSpan.textContent = nowFav ? '已在最愛演出者' : '加入最愛演出者';
+      triggerBtn.innerHTML = `${getStarSvg(nowFav, 15)} <span>${labelSpan.textContent}</span>`;
+    } else {
+      triggerBtn.innerHTML = getStarSvg(nowFav, 14);
+    }
+    triggerBtn.title = nowFav ? '取消最愛演出者' : '加入最愛演出者';
+  }
   saveFavorites();
   syncAllFavoriteUIs();
 }
 
 function getFavoriteAlbumsList() {
-  return state.albums.filter(alb => isAlbumFavorite(alb));
+  const list = [];
+  const seen = new Set();
+
+  state.albums.forEach(alb => {
+    if (isAlbumFavorite(alb)) {
+      const k = getAlbumKey(alb);
+      if (!seen.has(k)) {
+        seen.add(k);
+        list.push(alb);
+      }
+    }
+  });
+
+  state.favorites.albums.forEach(k => {
+    const kl = k.toLowerCase();
+    if (!seen.has(kl)) {
+      const snap = favoriteAlbumSnapshots.get(kl);
+      if (snap) {
+        seen.add(kl);
+        list.push(snap);
+      }
+    }
+  });
+
+  return list;
 }
 
 function getFavoriteTracksList() {
-  return state.tracks.filter(track => isTrackFavorite(track));
+  const list = [];
+  const seen = new Set();
+
+  state.tracks.forEach(t => {
+    if (isTrackFavorite(t)) {
+      const k = getTrackKey(t);
+      if (!seen.has(k)) {
+        seen.add(k);
+        list.push(t);
+      }
+    }
+  });
+
+  state.favorites.tracks.forEach(k => {
+    const kl = k.toLowerCase().replace(/\\/g, '/');
+    if (!seen.has(kl)) {
+      const snap = favoriteTrackSnapshots.get(kl);
+      if (snap) {
+        seen.add(kl);
+        list.push(snap);
+      }
+    }
+  });
+
+  return list;
 }
 
 function getFavoriteArtistsList() {
@@ -1654,19 +1801,23 @@ function syncAllFavoriteUIs() {
     }
   }
 
-  // Re-render favorites views
-  renderFavAlbums();
-  renderFavTracks();
-  renderFavArtists();
+  // Re-render favorites views if visible
+  if (state.currentView === 'favAlbums') renderFavAlbums();
+  if (state.currentView === 'favTracks') renderFavTracks();
+  if (state.currentView === 'favArtists') renderFavArtists();
 
   // Re-sync all visible album card heart buttons
   document.querySelectorAll('.album-card').forEach(card => {
-    const titleEl = card.querySelector('.album-title');
-    const artistEl = card.querySelector('.album-artist');
-    if (titleEl && artistEl) {
-      const title = titleEl.textContent;
-      const artist = artistEl.textContent;
-      const isFav = state.favorites.albums.some(k => k.toLowerCase() === `${title}___${artist}`.toLowerCase());
+    let album = card._album;
+    if (!album) {
+      const titleEl = card.querySelector('.album-title');
+      const artistEl = card.querySelector('.album-artist');
+      if (titleEl && artistEl) {
+        album = { title: titleEl.textContent, artist: artistEl.textContent };
+      }
+    }
+    if (album) {
+      const isFav = isAlbumFavorite(album);
       const favBtn = card.querySelector('.card-fav-btn');
       if (favBtn) {
         favBtn.classList.toggle('active', isFav);
@@ -1691,22 +1842,27 @@ function syncAllFavoriteUIs() {
     }
   });
 
-  // Re-sync all visible track table rows heart buttons
-  document.querySelectorAll('tr').forEach(tr => {
-    const favBtn = tr.querySelector('.btn-track-fav');
-    if (favBtn) {
-      const titleSpan = tr.querySelector('.track-name-span');
-      const titleCell = titleSpan || tr.querySelector('.track-title-cell');
-      if (titleCell) {
-        const title = titleCell.textContent.trim();
-        const matchingTrack = state.tracks.find(t => t.title === title);
-        if (matchingTrack) {
-          const isFav = isTrackFavorite(matchingTrack);
-          favBtn.classList.toggle('active', isFav);
-          favBtn.innerHTML = getHeartSvg(isFav, 14);
-          favBtn.title = isFav ? '取消最愛歌曲' : '加入最愛歌曲';
+  // Re-sync all visible track heart buttons across all views (tables, lists, TIDAL, KKBOX)
+  document.querySelectorAll('.btn-track-fav').forEach(favBtn => {
+    let track = favBtn._track;
+    if (!track) {
+      const row = favBtn.closest('tr') || favBtn.closest('.kkbox-track-row');
+      if (row) {
+        track = row._track || row._kkboxTrack;
+        if (!track) {
+          const titleSpan = row.querySelector('.track-name-span') || row.querySelector('.kkbox-track-title');
+          const title = titleSpan ? titleSpan.textContent.trim() : '';
+          if (title) {
+            track = state.tracks.find(t => t.title === title) || { title };
+          }
         }
       }
+    }
+    if (track) {
+      const isFav = isTrackFavorite(track);
+      favBtn.classList.toggle('active', isFav);
+      favBtn.innerHTML = getHeartSvg(isFav, 14);
+      favBtn.title = isFav ? '取消最愛歌曲' : '加入最愛歌曲';
     }
   });
 }
@@ -1976,10 +2132,10 @@ function updateBadgesAndStats() {
     genreBadge.textContent = totalGenres;
   }
 
-  // Favorites badges and headers
-  const favAlbumsCount = getFavoriteAlbumsList().length;
-  const favTracksCount = getFavoriteTracksList().length;
-  const favArtistsCount = getFavoriteArtistsList().length;
+  // Favorites badges and headers: 直接顯示真實收藏總數，無論曲目來自本地、TIDAL 還是線上收藏，徽章即時更新
+  const favAlbumsCount = (state.favorites && state.favorites.albums) ? state.favorites.albums.length : 0;
+  const favTracksCount = (state.favorites && state.favorites.tracks) ? state.favorites.tracks.length : 0;
+  const favArtistsCount = (state.favorites && state.favorites.artists) ? state.favorites.artists.length : 0;
 
   const favAlbumsBadge = document.getElementById('favAlbumsCountBadge');
   if (favAlbumsBadge) favAlbumsBadge.textContent = favAlbumsCount;
@@ -2790,6 +2946,7 @@ function renderAlbums() {
 function createAlbumCard(album) {
   const card = document.createElement('div');
   card.className = 'album-card';
+  card._album = album;
 
   const defaultCover = createSvgCover(album.title, album.artist, '#27272a', '#09090b');
   const coverSrc = formatCoverSrc(album.cover) || defaultCover;
@@ -2850,9 +3007,10 @@ function createAlbumCard(album) {
 
   // Click card to open album details, or click artist to view artist details
   card.addEventListener('click', (e) => {
-    if (e.target.closest('.card-fav-btn')) {
+    const favBtn = e.target.closest('.card-fav-btn');
+    if (favBtn) {
       e.stopPropagation();
-      toggleAlbumFavorite(album);
+      toggleAlbumFavorite(album, favBtn);
     } else if (e.target.closest('.card-play-btn')) {
       e.stopPropagation();
       playAlbum(album);
@@ -3670,6 +3828,7 @@ function renderNextTracksChunk() {
   chunk.forEach((track, localIdx) => {
     const idx = tracksRenderOffset + localIdx;
     const tr = document.createElement('tr');
+    tr._track = track;
     const isHires = (track.bitsPerSample >= 24) || (track.sampleRate > 48000);
     const specLabel = `${track.formatName || 'PCM'} ${track.bitsPerSample ? track.bitsPerSample + 'b/' : ''}${Math.round((track.sampleRate || 44100)/1000)}k`;
     const isFav = isTrackFavorite(track);
@@ -3699,9 +3858,10 @@ function renderNextTracksChunk() {
         handleTrackExternalLinkClick(extLink);
         return;
       }
-      if (e.target.closest('.btn-track-fav')) {
+      const favBtn = e.target.closest('.btn-track-fav');
+      if (favBtn) {
         e.stopPropagation();
-        toggleTrackFavorite(track);
+        toggleTrackFavorite(track, favBtn);
         return;
       }
       playTrackList(currentDisplayTracks, idx);
@@ -5926,6 +6086,7 @@ function renderDetailTracklist(album) {
   }
   album.tracks.forEach((t, idx) => {
     const tr = document.createElement('tr');
+    tr._track = t;
     const isFav = isTrackFavorite(t);
     const trackWithArtist = t.artist ? t : { ...t, artist: album.artist };
     const onlineLinksHtml = generateTrackOnlineLinks(trackWithArtist);
@@ -5962,9 +6123,10 @@ function renderDetailTracklist(album) {
         handleTrackExternalLinkClick(extLink);
         return;
       }
-      if (e.target.closest('.btn-track-fav')) {
+      const favBtn = e.target.closest('.btn-track-fav');
+      if (favBtn) {
         e.stopPropagation();
-        toggleTrackFavorite(t);
+        toggleTrackFavorite(t, favBtn);
         return;
       }
       playTrackList(album.tracks, idx);
@@ -6426,7 +6588,7 @@ function openAlbumDetail(album) {
     btnFavAlbum.innerHTML = `${getHeartSvg(isFav, 15)} <span>${isFav ? '已在最愛專輯' : '加入最愛專輯'}</span>`;
     btnFavAlbum.onclick = (e) => {
       e.stopPropagation();
-      toggleAlbumFavorite(album);
+      toggleAlbumFavorite(album, btnFavAlbum);
     };
   }
 
@@ -13034,6 +13196,7 @@ function renderPlaybackHistory() {
 
     historyList.forEach((track, idx) => {
       const tr = document.createElement('tr');
+      tr._track = track;
       const isHires = (track.bitsPerSample >= 24) || (track.sampleRate > 48000);
       const isFav = isTrackFavorite(track);
       const specLabel = `${track.formatName || 'PCM'} ${track.bitsPerSample ? track.bitsPerSample + 'b/' : ''}${Math.round((track.sampleRate || 44100)/1000)}k`;
@@ -13064,15 +13227,10 @@ function renderPlaybackHistory() {
           handleTrackExternalLinkClick(extLink);
           return;
         }
-        if (e.target.closest('.btn-track-fav')) {
+        const favBtn = e.target.closest('.btn-track-fav');
+        if (favBtn) {
           e.stopPropagation();
-          toggleTrackFavorite(track);
-          const favBtn = tr.querySelector('.btn-track-fav');
-          if (favBtn) {
-            const nowFav = isTrackFavorite(track);
-            favBtn.classList.toggle('active', nowFav);
-            favBtn.innerHTML = getHeartSvg(nowFav, 14);
-          }
+          toggleTrackFavorite(track, favBtn);
           return;
         }
         if (e.target.closest('.btn-history-play')) {
@@ -13162,6 +13320,7 @@ function renderFavTracks() {
 
     favList.forEach((track, idx) => {
       const tr = document.createElement('tr');
+      tr._track = track;
       const isHires = (track.bitsPerSample >= 24) || (track.sampleRate > 48000);
       const specLabel = `${track.formatName || 'PCM'} ${track.bitsPerSample ? track.bitsPerSample + 'b/' : ''}${Math.round((track.sampleRate || 44100)/1000)}k`;
       const onlineLinksHtml = generateTrackOnlineLinks(track);
@@ -13191,9 +13350,10 @@ function renderFavTracks() {
           handleTrackExternalLinkClick(extLink);
           return;
         }
-        if (e.target.closest('.btn-track-fav')) {
+        const favBtn = e.target.closest('.btn-track-fav');
+        if (favBtn) {
           e.stopPropagation();
-          toggleTrackFavorite(track);
+          toggleTrackFavorite(track, favBtn);
           return;
         }
         playTrackList(favList, idx);
@@ -14513,7 +14673,7 @@ function setupPlayerControls() {
     playerHeartBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (state.currentTrackIndex !== -1 && state.queue[state.currentTrackIndex]) {
-        toggleTrackFavorite(state.queue[state.currentTrackIndex]);
+        toggleTrackFavorite(state.queue[state.currentTrackIndex], playerHeartBtn);
       } else {
         showToast('目前沒有播放中的曲目');
       }
@@ -16162,12 +16322,10 @@ function initKkboxStreaming() {
       // Favorite
       const btnFav = row.querySelector('.btn-track-fav');
       if (btnFav) {
+        btnFav._track = track;
         btnFav.addEventListener('click', (e) => {
           e.stopPropagation();
-          toggleTrackFavorite(track);
-          const nowFav = isTrackFavorite(track);
-          btnFav.classList.toggle('active', nowFav);
-          btnFav.innerHTML = getHeartSvg(nowFav, 14);
+          toggleTrackFavorite(track, btnFav);
         });
       }
 
@@ -16952,6 +17110,7 @@ async function loadTidalCollection(force = false) {
         } else {
           favTracks.forEach((t, idx) => {
             const tr = document.createElement('tr');
+            tr._track = t;
             const isHiRes = (t.sampleRate > 48000 || t.bitsPerSample >= 24 || t.audioQuality === 'HI_RES_LOSSLESS');
             const specLabel = isHiRes ? 'Hi-Res 24-bit' : 'FLAC 16-bit';
             const isFav = isTrackFavorite(t);
@@ -16971,15 +17130,10 @@ async function loadTidalCollection(force = false) {
             `;
 
             tr.addEventListener('click', (e) => {
-              if (e.target.closest('.btn-track-fav')) {
+              const btnFav = e.target.closest('.btn-track-fav');
+              if (btnFav) {
                 e.stopPropagation();
-                toggleTrackFavorite(t);
-                const btnFav = tr.querySelector('.btn-track-fav');
-                const nowFav = isTrackFavorite(t);
-                if (btnFav) {
-                  btnFav.classList.toggle('active', nowFav);
-                  btnFav.innerHTML = getHeartSvg(nowFav, 14);
-                }
+                toggleTrackFavorite(t, btnFav);
                 return;
               }
               playTrackList(favTracks, idx);
