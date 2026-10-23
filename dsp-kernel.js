@@ -144,7 +144,8 @@ const DSD_SAMPLES_PER_BLOCK = DSD_BLOCK_SIZE * 8;
 //    即使在 DSD512 極高過取樣率下狀態變數幅值始終穩定在 2.5 內，不觸碰 CLAMP。
 // ---------------------------------------------------------------------------
 const CIFFR_5_C = [0.5, 0.5, 0.4, 0.3, 0.15];
-const CIFFR_5_SCALE = 0.75;
+// 發燒級安全調變電平（SACD Scarlet Book 標準：-6 dBFS），徹底杜絕高階 SDM 積分器在滿幅大動態時發散過載產生沙沙雜音
+const CIFFR_5_SCALE = 0.50;
 const CIFFR_5_CLAMP = 6.0;
 
 const CIFFR_5_TABLE = {
@@ -163,7 +164,8 @@ function getCiff5Params(invRatio) {
 }
 
 const CIFFR_7_C = [0.4, 0.4, 0.3, 0.3, 0.2, 0.2, 0.1];
-const CIFFR_7_SCALE = 0.70;
+// 發燒級安全調變電平（7 階 SDM 穩態上限 -6.38 dBFS），杜絕高階積分器發散
+const CIFFR_7_SCALE = 0.48;
 const CIFFR_7_CLAMP = 8.0;
 
 const CIFFR_7_TABLE = {
@@ -1054,31 +1056,32 @@ class DsdModulator {
 
           {
             // 5th-Order CIFFR: 1 DC zero + 2 Chebyshev audio-band resonator zero pairs (Lee OBG <= 1.55)
+            // 加入極微弱 Leaky Loss (0.999999) 消除長時播放下的直流累積，防止連續播放數首歌後積分器發散產生沙沙雜音
             const uL = rawL * scale;
-            s1_L += c1 * (uL - y_L);
+            s1_L = s1_L * 0.999999 + c1 * (uL - y_L);
             if (s1_L > CLAMP) s1_L = CLAMP; else if (s1_L < -CLAMP) s1_L = -CLAMP;
-            s2_L += c2 * s1_L - g1 * s3_L;
+            s2_L = s2_L * 0.999999 + c2 * s1_L - g1 * s3_L;
             if (s2_L > CLAMP) s2_L = CLAMP; else if (s2_L < -CLAMP) s2_L = -CLAMP;
-            s3_L += c3 * s2_L;
+            s3_L = s3_L * 0.999999 + c3 * s2_L;
             if (s3_L > CLAMP) s3_L = CLAMP; else if (s3_L < -CLAMP) s3_L = -CLAMP;
-            s4_L += c4 * s3_L - g2 * s5_L;
+            s4_L = s4_L * 0.999999 + c4 * s3_L - g2 * s5_L;
             if (s4_L > CLAMP) s4_L = CLAMP; else if (s4_L < -CLAMP) s4_L = -CLAMP;
-            s5_L += c5 * s4_L;
+            s5_L = s5_L * 0.999999 + c5 * s4_L;
             if (s5_L > CLAMP) s5_L = CLAMP; else if (s5_L < -CLAMP) s5_L = -CLAMP;
             const sigma_L = uL + a1 * s1_L + a2 * s2_L + a3 * s3_L + a4 * s4_L + a5 * s5_L;
             y_L = (sigma_L >= 0) ? 1.0 : -1.0;
             byteValL = (byteValL << 1) | (y_L > 0 ? 1 : 0); // DSF spec: MSB-first
 
             const uR = rawR * scale;
-            s1_R += c1 * (uR - y_R);
+            s1_R = s1_R * 0.999999 + c1 * (uR - y_R);
             if (s1_R > CLAMP) s1_R = CLAMP; else if (s1_R < -CLAMP) s1_R = -CLAMP;
-            s2_R += c2 * s1_R - g1 * s3_R;
+            s2_R = s2_R * 0.999999 + c2 * s1_R - g1 * s3_R;
             if (s2_R > CLAMP) s2_R = CLAMP; else if (s2_R < -CLAMP) s2_R = -CLAMP;
-            s3_R += c3 * s2_R;
+            s3_R = s3_R * 0.999999 + c3 * s2_R;
             if (s3_R > CLAMP) s3_R = CLAMP; else if (s3_R < -CLAMP) s3_R = -CLAMP;
-            s4_R += c4 * s3_R - g2 * s5_R;
+            s4_R = s4_R * 0.999999 + c4 * s3_R - g2 * s5_R;
             if (s4_R > CLAMP) s4_R = CLAMP; else if (s4_R < -CLAMP) s4_R = -CLAMP;
-            s5_R += c5 * s4_R;
+            s5_R = s5_R * 0.999999 + c5 * s4_R;
             if (s5_R > CLAMP) s5_R = CLAMP; else if (s5_R < -CLAMP) s5_R = -CLAMP;
             const sigma_R = uR + a1 * s1_R + a2 * s2_R + a3 * s3_R + a4 * s4_R + a5 * s5_R;
             y_R = (sigma_R >= 0) ? 1.0 : -1.0;
@@ -1193,18 +1196,18 @@ class DsdModulator {
 
           {
             // 2nd-Order Boser-Wooley SDM with Anti-Windup Clamping
-            const uL = rawL * 0.75;
-            s1_L += uL - y_L;
+            const uL = rawL * 0.50;
+            s1_L = s1_L * 0.999999 + uL - y_L;
             if (s1_L > 3.0) s1_L = 3.0; else if (s1_L < -3.0) s1_L = -3.0;
-            s2_L += s1_L - 0.5 * y_L;
+            s2_L = s2_L * 0.999999 + s1_L - 0.5 * y_L;
             if (s2_L > 3.0) s2_L = 3.0; else if (s2_L < -3.0) s2_L = -3.0;
             y_L = (s2_L >= 0) ? 1.0 : -1.0;
             byteValL = (byteValL << 1) | (y_L > 0 ? 1 : 0); // DSF spec: MSB-first
 
-            const uR = rawR * 0.75;
-            s1_R += uR - y_R;
+            const uR = rawR * 0.50;
+            s1_R = s1_R * 0.999999 + uR - y_R;
             if (s1_R > 3.0) s1_R = 3.0; else if (s1_R < -3.0) s1_R = -3.0;
-            s2_R += s1_R - 0.5 * y_R;
+            s2_R = s2_R * 0.999999 + s1_R - 0.5 * y_R;
             if (s2_R > 3.0) s2_R = 3.0; else if (s2_R < -3.0) s2_R = -3.0;
             y_R = (s2_R >= 0) ? 1.0 : -1.0;
             byteValR = (byteValR << 1) | (y_R > 0 ? 1 : 0); // DSF spec: MSB-first
@@ -1326,39 +1329,40 @@ class DsdModulator {
 
           {
             // 7th-Order CIFFR: 1 DC zero + 3 Chebyshev audio-band resonator zero pairs (Lee OBG <= 1.50)
+            // 加入極微弱 Leaky Loss (0.999999) 消除長時播放下的直流累積，防止連續播放數首歌後積分器發散產生沙沙雜音
             const uL = rawL * scale;
-            s1_L += c1 * (uL - y_L);
+            s1_L = s1_L * 0.999999 + c1 * (uL - y_L);
             if (s1_L > CLAMP) s1_L = CLAMP; else if (s1_L < -CLAMP) s1_L = -CLAMP;
-            s2_L += c2 * s1_L - g1 * s3_L;
+            s2_L = s2_L * 0.999999 + c2 * s1_L - g1 * s3_L;
             if (s2_L > CLAMP) s2_L = CLAMP; else if (s2_L < -CLAMP) s2_L = -CLAMP;
-            s3_L += c3 * s2_L;
+            s3_L = s3_L * 0.999999 + c3 * s2_L;
             if (s3_L > CLAMP) s3_L = CLAMP; else if (s3_L < -CLAMP) s3_L = -CLAMP;
-            s4_L += c4 * s3_L - g2 * s5_L;
+            s4_L = s4_L * 0.999999 + c4 * s3_L - g2 * s5_L;
             if (s4_L > CLAMP) s4_L = CLAMP; else if (s4_L < -CLAMP) s4_L = -CLAMP;
-            s5_L += c5 * s4_L;
+            s5_L = s5_L * 0.999999 + c5 * s4_L;
             if (s5_L > CLAMP) s5_L = CLAMP; else if (s5_L < -CLAMP) s5_L = -CLAMP;
-            s6_L += c6 * s5_L - g3 * s7_L;
+            s6_L = s6_L * 0.999999 + c6 * s5_L - g3 * s7_L;
             if (s6_L > CLAMP) s6_L = CLAMP; else if (s6_L < -CLAMP) s6_L = -CLAMP;
-            s7_L += c7 * s6_L;
+            s7_L = s7_L * 0.999999 + c7 * s6_L;
             if (s7_L > CLAMP) s7_L = CLAMP; else if (s7_L < -CLAMP) s7_L = -CLAMP;
             const sigma_L = uL + a1 * s1_L + a2 * s2_L + a3 * s3_L + a4 * s4_L + a5 * s5_L + a6 * s6_L + a7 * s7_L;
             y_L = (sigma_L >= 0) ? 1.0 : -1.0;
             byteValL = (byteValL << 1) | (y_L > 0 ? 1 : 0); // DSF spec: MSB-first
 
             const uR = rawR * scale;
-            s1_R += c1 * (uR - y_R);
+            s1_R = s1_R * 0.999999 + c1 * (uR - y_R);
             if (s1_R > CLAMP) s1_R = CLAMP; else if (s1_R < -CLAMP) s1_R = -CLAMP;
-            s2_R += c2 * s1_R - g1 * s3_R;
+            s2_R = s2_R * 0.999999 + c2 * s1_R - g1 * s3_R;
             if (s2_R > CLAMP) s2_R = CLAMP; else if (s2_R < -CLAMP) s2_R = -CLAMP;
-            s3_R += c3 * s2_R;
+            s3_R = s3_R * 0.999999 + c3 * s2_R;
             if (s3_R > CLAMP) s3_R = CLAMP; else if (s3_R < -CLAMP) s3_R = -CLAMP;
-            s4_R += c4 * s3_R - g2 * s5_R;
+            s4_R = s4_R * 0.999999 + c4 * s3_R - g2 * s5_R;
             if (s4_R > CLAMP) s4_R = CLAMP; else if (s4_R < -CLAMP) s4_R = -CLAMP;
-            s5_R += c5 * s4_R;
+            s5_R = s5_R * 0.999999 + c5 * s4_R;
             if (s5_R > CLAMP) s5_R = CLAMP; else if (s5_R < -CLAMP) s5_R = -CLAMP;
-            s6_R += c6 * s5_R - g3 * s7_R;
+            s6_R = s6_R * 0.999999 + c6 * s5_R - g3 * s7_R;
             if (s6_R > CLAMP) s6_R = CLAMP; else if (s6_R < -CLAMP) s6_R = -CLAMP;
-            s7_R += c7 * s6_R;
+            s7_R = s7_R * 0.999999 + c7 * s6_R;
             if (s7_R > CLAMP) s7_R = CLAMP; else if (s7_R < -CLAMP) s7_R = -CLAMP;
             const sigma_R = uR + a1 * s1_R + a2 * s2_R + a3 * s3_R + a4 * s4_R + a5 * s5_R + a6 * s6_R + a7 * s7_R;
             y_R = (sigma_R >= 0) ? 1.0 : -1.0;

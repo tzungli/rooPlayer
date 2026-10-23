@@ -213,7 +213,8 @@ class NativeDspStreamer {
     // Warm-up / guard bit counts are multiples of stepBits so their input-sample spans are integral.
     const stepBits = dsdRate / gcd(srcRate, dsdRate);
     // Guard: max FIR window span in input samples (design cap 150 MMAC/s/ch) + interpolation margin.
-    const guardSamples = Math.ceil(150e6 / dsdRate) + 4;
+    // 必須基於 srcRate (而非 dsdRate) 確保有足夠的輸入樣本讓 FIR 濾波器衰減至零，杜絕 Chunk 邊界截斷失真
+    const guardSamples = Math.ceil(150e6 / srcRate / 2) + 32;
     const guardBits = Math.ceil((guardSamples * dsdRate / srcRate) / stepBits) * stepBits;
     const warmupLcm = (samplesPerBlock * stepBits) / gcd(samplesPerBlock, stepBits);
     // Pre-roll = ~1.5 s of the segment's PRECEDING audio (true modulator warm-up) + FIR guard,

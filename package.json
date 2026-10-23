@@ -1,6 +1,6 @@
 {
   "name": "rooplayer",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "rooPlayer - Audiophile Music Media Manager",
   "main": "main.js",
   "scripts": {
