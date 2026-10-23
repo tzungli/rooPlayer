@@ -1080,7 +1080,7 @@ class DlnaManager extends EventEmitter {
           `<InstanceID>0</InstanceID>`,
           2000
         );
-        await new Promise(r => setTimeout(r, 40));
+        await new Promise(r => setTimeout(r, 150));
       } catch (e) {
         // Ignore if device was already stopped
       }
@@ -1336,11 +1336,14 @@ class DlnaManager extends EventEmitter {
     }
 
     // 關鍵相容性優化（專為 HQPlayer 等嚴格遵循 UPnP 規範的高階發燒渲染器設計）：
-    // 很多專業播放器（如 HQPlayer）在接收到 SetAVTransportURI 後，會將狀態置為 TRANSITIONING。
-    // 若在 TRANSITIONING 尚未結束前就發送 Play，HQPlayer 會直接回報「705: Transition not available」錯誤並拒播！
-    // 因此在發送 Play 前，先等待設備離開 TRANSITIONING 狀態（最多等待 1500ms，一旦就緒立即發送 Play）：
+    // 很多專業播放器（如 HQPlayer）在接收到 SetAVTransportURI 後，會先清空播放清單並非同步載入新歌曲。
+    // 在此期間其狀態為 TRANSITIONING，且內部尚未完成 Track 裝載。
+    // 若過早發送 Play，HQPlayer 會直接回報「702: No contents」或「705: Transition not available」錯誤並拒播！
+    // 因此在發送 Play 前，先等待 200ms 讓設備收到 URI 並啟動非同步載入，隨後確認狀態就緒：
+    await new Promise(r => setTimeout(r, 200));
+
     let transitioned = false;
-    for (let waitTick = 0; waitTick < 15; waitTick++) {
+    for (let waitTick = 0; waitTick < 12; waitTick++) {
       if (opId !== this._playOpCounter) return { success: false, cancelled: true };
       try {
         const transInfoXml = await this.sendSoapRequest(
@@ -1357,7 +1360,7 @@ class DlnaManager extends EventEmitter {
           break;
         }
       } catch (e) {
-        // 部分簡易設備不支援 GetTransportInfo，略過
+        break; // 不支援 GetTransportInfo 的設備直接前進
       }
       await new Promise(r => setTimeout(r, 100));
     }
@@ -1365,12 +1368,12 @@ class DlnaManager extends EventEmitter {
       await new Promise(r => setTimeout(r, 150));
     }
 
-    // 4. Play with retry loop
+    // 4. Play with retry loop (含 702 No contents 智慧退避容錯)
     this._prepareStage = 'play';
     this.emitPrepare();
     let playSuccess = false;
     let lastPlayError = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 4; attempt++) {
       if (opId !== this._playOpCounter) return { success: false, cancelled: true };
       try {
         await this.sendSoapRequest(
@@ -1380,16 +1383,18 @@ class DlnaManager extends EventEmitter {
           `<InstanceID>0</InstanceID><Speed>1</Speed>`
         );
         playSuccess = true;
-        console.log(`[DLNA] Play action accepted by "${dev.name || dev.id}"`);
+        console.log(`[DLNA] Play action accepted by "${dev.name || dev.id}" on attempt ${attempt}`);
         break;
       } catch (err) {
         lastPlayError = err;
         console.warn(`[DLNA] Play action attempt ${attempt} failed:`, err.message);
-        await new Promise(r => setTimeout(r, 200));
+        // 702 (No contents) 或 701/705 代表設備正在非同步載入新歌曲，等待 450ms 讓設備完成內部 OpenURI 再重試
+        const isContentLoading = /702|701|705|No contents|Transition/i.test(err.message);
+        await new Promise(r => setTimeout(r, isContentLoading ? 450 : 200));
       }
     }
     if (!playSuccess) {
-      throw lastPlayError || new Error('Play action failed after 3 attempts');
+      throw lastPlayError || new Error('Play action failed after 4 attempts');
     }
 
     if (opId !== this._playOpCounter) {
