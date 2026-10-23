@@ -1152,7 +1152,9 @@ class DlnaManager extends EventEmitter {
         // Audiophile streamer / DAC: Progressive on-the-fly DSD modulation in DSF container (Worker + Flow Control)
         const dsdOrder = dspOptions ? (dspOptions.dsdOrder || 5) : 5;
         const filterPhase = dspOptions ? (dspOptions.filterPhase || 'linear') : 'linear';
-        const session = await this.nativeDspStreamer.createDsdSession(streamToken, track.filePath, startSec, dspOptions.dsdMode, track, dsdOrder, filterPhase, dspOptions.peq, dspOptions.conv, true);
+        const ultrasonicFilter = (dspOptions && dspOptions.ultrasonicFilter) || '30k';
+        const dither = (dspOptions && dspOptions.dither) || 'gauss1';
+        const session = await this.nativeDspStreamer.createDsdSession(streamToken, track.filePath, startSec, dspOptions.dsdMode, track, dsdOrder, filterPhase, dspOptions.peq, dspOptions.conv, true, ultrasonicFilter, dither);
         this.currentStreamSession = session;
         activeFilePath = session.filePath;
         streamUrl = `http://${localIp}:${this.streamingPort}/stream/${streamToken}/audio.dsf`;

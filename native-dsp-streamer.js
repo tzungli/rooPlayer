@@ -148,7 +148,7 @@ class NativeDspStreamer {
   // short (~5 s), starts at sample 0 with no warm-up, and is bit-identical to a single-pass
   // whole-file encoding. Chunk/view boundaries keep the input<->output sample mapping exact
   // (required for non-integer ratios such as 48k -> DSD).
-  async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear', peqOptions = null, convOptions = null, isDlna = false) {
+  async createDsdSession(token, filePath, startSec = 0, dsdMode = 'dsd64', track = null, dsdOrder = 5, filterPhase = 'linear', peqOptions = null, convOptions = null, isDlna = false, ultrasonicFilter = '30k', dither = 'gauss1') {
     this.cancelSession(token);
 
     const tmpFile = path.join(this.cacheDir, `stream_${token}_${Date.now()}.dsf`);
@@ -285,6 +285,8 @@ class NativeDspStreamer {
     session.peqOptions = peqOptions && peqOptions.enabled ? peqOptions : null;
     session.convOptions = convIrRaw ? convOptions : null;
     session.convIrRaw = convIrRaw;
+    session.ultrasonicFilter = ultrasonicFilter || '30k';
+    session.dither = dither || 'gauss1';
 
     const workerPath = path.join(__dirname, 'dsd-modulator-worker.js');
     const pool = [];             // resident worker entries { worker, idle, currentChunk }
@@ -389,7 +391,9 @@ class NativeDspStreamer {
           dsdMode,
           dsdOrder,
           filterPhase,
-          peqOptions: session.peqOptions
+          peqOptions: session.peqOptions,
+          ultrasonicFilter: session.ultrasonicFilter,
+          dither: session.dither
         }
       });
       const entry = { worker, idle: true, currentChunk: -1 };

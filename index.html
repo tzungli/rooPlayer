@@ -1444,7 +1444,7 @@
               <div class="app-info-titles">
                 <div class="app-title-row">
                   <h2>rooPlayer</h2>
-                  <span class="version-tag">v0.8.1 (Build 2026.10)</span>
+                  <span class="version-tag">v0.8.2 (Build 2026.10)</span>
                   <span class="engine-tag">Core • Local Audiophile</span>
                 </div>
                 <p class="app-tagline">次世代發燒級數位音訊媒體庫與極致無損串流核心播放器</p>
@@ -2160,6 +2160,19 @@
               </div>
             </div>
 
+            <!-- Dynamic Ultrasonic Filter Stage -->
+            <div class="signal-arrow ultrasonic-dsp-element" id="signalUltrasonicArrow" style="display: none;">↓</div>
+            <div class="signal-stage ultrasonic-dsp-element" id="signalUltrasonicStage" style="display: none;">
+              <div class="stage-icon">🛡️</div>
+              <div class="stage-info">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <div class="stage-title" id="signalUltrasonicTitle">超音波噪聲防護濾波</div>
+                  <span class="stage-badge-dsp">PROTECTION ACTIVE</span>
+                </div>
+                <div class="stage-desc" id="signalUltrasonicDesc">30 kHz 截止：平滑切除超聲頻量化雜訊，杜絕 DAC 運放過載</div>
+              </div>
+            </div>
+
             <div class="signal-arrow">↓</div>
             <div class="signal-stage">
               <div class="stage-icon">⚡</div>
@@ -2236,6 +2249,34 @@
                   <button class="dsp-pill pill-dsd" data-order="2" title="2 階 Boser-Wooley 經典調變 (溫潤厚實，類比黑膠感)">2 階 (經典溫潤)</button>
                   <button class="dsp-pill pill-dsd active" data-order="5" title="5 階 CRFB 雙重諧振零點調變 (發燒高動態，噪聲外推至 100kHz)">5 階 (CRFB 發燒推薦)</button>
                   <button class="dsp-pill pill-dsd" data-order="7" title="7 階 CRFB 三重諧振零點調變 (極致微動態解析，極寬音場)">7 階 (極致微動態)</button>
+                </div>
+              </div>
+
+              <!-- Ultrasonic Noise Protection Filter (類似 HQPlayer Filter 20k/30k/40k/50k) -->
+              <div class="dsp-option-group" id="dspUltrasonicGroup">
+                <div class="dsp-option-label">
+                  <span>🛡️ 超音波噪聲防護濾波 (Ultrasonic Filter)</span>
+                  <span class="dsp-hint-badge dsd-badge-color" id="dspActiveUltrasonicHint">30 kHz (預設推薦)</span>
+                </div>
+                <div class="dsp-pill-selector" id="dspUltrasonicSelector">
+                  <button class="dsp-pill pill-dsd" data-ultrasonic="none" title="關閉超音波防護 (無濾波)">關閉 (None)</button>
+                  <button class="dsp-pill pill-dsd" data-ultrasonic="20k" title="20 kHz 截止：強效防護，徹底隔絕超高頻，適合敏感型 DAC 或老晶片">20 kHz</button>
+                  <button class="dsp-pill pill-dsd active" data-ultrasonic="30k" title="30 kHz 截止 (預設推薦)：發燒黃金平衡，兼具極限空氣感與超音波噪聲徹底阻隔">30 kHz (預設推薦)</button>
+                  <button class="dsp-pill pill-dsd" data-ultrasonic="40k" title="40 kHz 截止：寬廣高頻延伸，有效降低 DAC 射頻互調失真">40 kHz</button>
+                  <button class="dsp-pill pill-dsd" data-ultrasonic="50k" title="50 kHz 截止：極限解析保留，消除超高頻發散噪聲">50 kHz</button>
+                </div>
+              </div>
+
+              <!-- Quantization Dither Selection (含 HQPlayer Gauss1 演算法) -->
+              <div class="dsp-option-group" id="dspDitherGroup">
+                <div class="dsp-option-label">
+                  <span>✨ 量化抖動 (Quantization Dither)</span>
+                  <span class="dsp-hint-badge" id="dspActiveDitherHint">Gauss1 (高斯溫潤)</span>
+                </div>
+                <div class="dsp-pill-selector" id="dspDitherSelector">
+                  <button class="dsp-pill active" data-dither="gauss1" title="Gauss1：高斯機率密度分佈抖動 (HQPlayer 同款演算法，徹底打散極限環，背景溫潤深黑)">Gauss1 (高斯溫潤 - 推薦)</button>
+                  <button class="dsp-pill" data-dither="tpdf" title="TPDF：標準三角形機率密度抖動 (經典錄音室標準，線性純淨無諧波失真)">TPDF (三角形分佈)</button>
+                  <button class="dsp-pill" data-dither="none" title="關閉抖動 (無 Dither)">關閉 (None)</button>
                 </div>
               </div>
 

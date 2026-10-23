@@ -221,6 +221,8 @@ function buildDspOptions(track) {
     dsdMode: engineOn && isDsdRateMode(state.dsp.rateMode) ? state.dsp.rateMode : '',
     dsdOrder: state.dsp.dsdOrder || 5,
     filterPhase: state.dsp.filterPhase || 'linear',
+    ultrasonicFilter: (state.dsp && state.dsp.ultrasonicFilter) || '30k',
+    dither: (state.dsp && state.dsp.dither) || 'gauss1',
     peq: peqPayload,
     conv: convPayload
   };
@@ -279,11 +281,13 @@ const state = {
         rateMode: saved.rateMode || '4x',
         dsdOrder: [2, 5, 7].includes(parseInt(saved.dsdOrder, 10)) ? parseInt(saved.dsdOrder, 10) : 5,
         filterPhase: isValidFilterPhaseId(saved.filterPhase) ? saved.filterPhase : 'linear',
+        ultrasonicFilter: ['none', '20k', '30k', '40k', '50k'].includes(saved.ultrasonicFilter) ? saved.ultrasonicFilter : '30k',
+        dither: ['none', 'tpdf', 'gauss1'].includes(saved.dither) ? saved.dither : 'gauss1',
         peq: normalizePeqSettings(saved.peq),
         conv: normalizeConvSettings(saved.conv)
       };
     } catch (e) {
-      return { enabled: false, rateMode: '4x', dsdOrder: 5, filterPhase: 'linear', peq: normalizePeqSettings(null), conv: normalizeConvSettings(null) };
+      return { enabled: false, rateMode: '4x', dsdOrder: 5, filterPhase: 'linear', ultrasonicFilter: '30k', dither: 'gauss1', peq: normalizePeqSettings(null), conv: normalizeConvSettings(null) };
     }
   })()
 };
@@ -7496,6 +7500,24 @@ function updateSignalPathUI(track = null) {
     if (dspActivePhaseHint) dspActivePhaseHint.textContent = phasePill.textContent;
   }
 
+  const curUltrasonic = state.dsp.ultrasonicFilter || '30k';
+  const ultrasonicPill = document.querySelector(`#dspUltrasonicSelector .dsp-pill[data-ultrasonic="${curUltrasonic}"]`);
+  const dspActiveUltrasonicHint = document.getElementById('dspActiveUltrasonicHint');
+  if (ultrasonicPill) {
+    document.querySelectorAll('#dspUltrasonicSelector .dsp-pill').forEach(p => p.classList.remove('active'));
+    ultrasonicPill.classList.add('active');
+    if (dspActiveUltrasonicHint) dspActiveUltrasonicHint.textContent = ultrasonicPill.textContent;
+  }
+
+  const curDither = state.dsp.dither || 'gauss1';
+  const ditherPill = document.querySelector(`#dspDitherSelector .dsp-pill[data-dither="${curDither}"]`);
+  const dspActiveDitherHint = document.getElementById('dspActiveDitherHint');
+  if (ditherPill) {
+    document.querySelectorAll('#dspDitherSelector .dsp-pill').forEach(p => p.classList.remove('active'));
+    ditherPill.classList.add('active');
+    if (dspActiveDitherHint) dspActiveDitherHint.textContent = ditherPill.textContent;
+  }
+
   // PEQ editor state (modal open / live sync)
   syncPeqModalUI();
 
@@ -7726,6 +7748,24 @@ function updateSignalPathUI(track = null) {
     } else {
       convArrow.style.display = 'none';
       convStage.style.display = 'none';
+    }
+  }
+
+  // Ultrasonic Filter stage node (HQPlayer 類似架構): 預設 30k 截止
+  const ultrasonicStage = document.getElementById('signalUltrasonicStage');
+  const ultrasonicArrow = document.getElementById('signalUltrasonicArrow');
+  const ultrasonicMode = (state.dsp && state.dsp.ultrasonicFilter) || '30k';
+  if (ultrasonicStage && ultrasonicArrow) {
+    if (ultrasonicMode !== 'none') {
+      ultrasonicArrow.style.display = 'block';
+      ultrasonicStage.style.display = 'flex';
+      const ultrasonicTitle = document.getElementById('signalUltrasonicTitle');
+      const ultrasonicDesc = document.getElementById('signalUltrasonicDesc');
+      if (ultrasonicTitle) ultrasonicTitle.textContent = `超音波噪聲防護 (${ultrasonicMode.toUpperCase()})`;
+      if (ultrasonicDesc) ultrasonicDesc.textContent = `${ultrasonicMode.toUpperCase()} 2 階 Butterworth 低通濾波：杜絕超聲頻量化雜訊灌入 DAC 類比運放`;
+    } else {
+      ultrasonicArrow.style.display = 'none';
+      ultrasonicStage.style.display = 'none';
     }
   }
 }
@@ -9480,6 +9520,44 @@ function initDspControls() {
       localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
       if (dspActivePhaseHint) dspActivePhaseHint.textContent = btn.textContent;
       renderUserFilterChips();
+      triggerLiveDspUpdate();
+    });
+  }
+
+  // 超音波噪聲防護濾波器選擇 (none, 20k, 30k, 40k, 50k)
+  const dspUltrasonicSelector = document.getElementById('dspUltrasonicSelector');
+  const dspActiveUltrasonicHint = document.getElementById('dspActiveUltrasonicHint');
+  if (dspUltrasonicSelector) {
+    dspUltrasonicSelector.addEventListener('click', (e) => {
+      const btn = e.target.closest('.dsp-pill');
+      if (!btn) return;
+      const mode = btn.getAttribute('data-ultrasonic') || '30k';
+
+      dspUltrasonicSelector.querySelectorAll('.dsp-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+
+      state.dsp.ultrasonicFilter = mode;
+      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+      if (dspActiveUltrasonicHint) dspActiveUltrasonicHint.textContent = btn.textContent;
+      triggerLiveDspUpdate();
+    });
+  }
+
+  // 量化抖動演算法選擇 (gauss1, tpdf, none)
+  const dspDitherSelector = document.getElementById('dspDitherSelector');
+  const dspActiveDitherHint = document.getElementById('dspActiveDitherHint');
+  if (dspDitherSelector) {
+    dspDitherSelector.addEventListener('click', (e) => {
+      const btn = e.target.closest('.dsp-pill');
+      if (!btn) return;
+      const ditherMode = btn.getAttribute('data-dither') || 'gauss1';
+
+      dspDitherSelector.querySelectorAll('.dsp-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+
+      state.dsp.dither = ditherMode;
+      localStorage.setItem('rooplayer_dsp_settings', JSON.stringify(state.dsp));
+      if (dspActiveDitherHint) dspActiveDitherHint.textContent = btn.textContent;
       triggerLiveDspUpdate();
     });
   }

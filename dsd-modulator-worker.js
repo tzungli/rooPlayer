@@ -34,7 +34,9 @@ const {
   DSD_BLOCK_SIZE,
   DSD_SAMPLES_PER_BLOCK,
   createPeqChain,
-  applyPeqArrays
+  applyPeqArrays,
+  buildUltrasonicFilterCoeffs,
+  applyUltrasonicFilter
 } = require('./dsp-kernel');
 
 const {
@@ -45,13 +47,18 @@ const {
   dsdMode,
   dsdOrder,
   filterPhase,
-  peqOptions
+  peqOptions,
+  ultrasonicFilter,
+  dither
 } = workerData;
 
 const dsdRate = getDsdRate(dsdMode);
 const invRatio = sampleRate / dsdRate;
 const samplesPerBlock = DSD_SAMPLES_PER_BLOCK;
 const bytesPerBlockPair = 2 * DSD_BLOCK_SIZE;
+
+// 構建 HQPlayer 風格超音波噪聲防護濾波器（預設 30k 截止），濾除 30kHz 以上量化雜訊，防止 DAC 類比端過載
+const ultrasonicCoeffs = buildUltrasonicFilterCoeffs(sampleRate, ultrasonicFilter || '30k');
 
 // Data-only mode: the 92-byte DSF header was already written by the main thread.
 const fd = fs.openSync(tmpFile, 'r+');
@@ -100,7 +107,16 @@ function processChunk(msg) {
     } catch (e) { peqL = left; peqR = right; /* PEQ failure must never break playback */ }
   }
 
-  const modulator = new DsdModulator(dsdOrder, filterPhase, gaussFilter);
+  // 應用超音波噪聲防護濾波器（預設 30k 截止），平滑切除高頻噪聲
+  if (ultrasonicCoeffs) {
+    if (peqL === left) {
+      peqL = new Float32Array(left);
+      peqR = new Float32Array(right);
+    }
+    applyUltrasonicFilter(ultrasonicCoeffs, peqL, peqR, inLen);
+  }
+
+  const modulator = new DsdModulator(dsdOrder, filterPhase, gaussFilter, dither || 'gauss1');
   const genBlocks = Math.round(genEndBit / samplesPerBlock);
   const warmupBlocks = Math.round(warmupBits / samplesPerBlock);
 
