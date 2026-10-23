@@ -2463,11 +2463,29 @@ function queryNetViewShares(ip) {
   });
 }
 
+function getArpIpsForDiscovery() {
+  return new Promise((resolve) => {
+    exec('arp -a', { windowsHide: true }, (err, stdout) => {
+      const ips = [];
+      if (!err && stdout) {
+        const lines = stdout.split(/\r?\n/);
+        for (const line of lines) {
+          const m = line.match(/\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([a-f0-9]{2}(?:-[a-f0-9]{2}){5})/i);
+          if (m && !m[1].startsWith('127.') && !m[1].startsWith('255.') && !m[1].startsWith('224.') && !m[1].startsWith('239.')) {
+            ips.push({ ip: m[1], mac: m[2].toLowerCase() });
+          }
+        }
+      }
+      resolve(ips);
+    });
+  });
+}
+
 function queryHostNameNetbios(ip) {
   return new Promise((resolve) => {
     exec('nbtstat -A ' + ip, { windowsHide: true }, (err, stdout) => {
       if (!err && stdout) {
-        const match = stdout.match(/^\s*([A-Za-z0-9_\-]+)\s+<00>\s+UNIQUE/m);
+        const match = stdout.match(/^\s*([A-Za-z0-9_\-]+)\s+<00>/m);
         if (match) return resolve(match[1].trim());
       }
       resolve(null);
@@ -2478,29 +2496,49 @@ function queryHostNameNetbios(ip) {
 ipcMain.handle('samba:discoverServers', async () => {
   try {
     const subnets = getLocalSubnetsForDiscovery();
+    const arpEntries = await getArpIpsForDiscovery();
     const foundServers = [];
 
     for (const sn of subnets) {
-      const promises = [];
+      // 結合 ARP 活躍清單與整段並行探測，超時放寬至 1200ms
+      const targetIps = new Set();
+      arpEntries.forEach(e => {
+        if (e.ip.startsWith(sn.prefix) && e.ip !== sn.localIp) targetIps.add(e.ip);
+      });
       for (let i = 1; i <= 254; i++) {
-        const targetIp = sn.prefix + i;
-        if (targetIp === sn.localIp) continue;
-        promises.push((async () => {
-          const ok = await probePortTcp(targetIp, 445, 750);
-          return ok ? targetIp : null;
-        })());
+        const ip = sn.prefix + i;
+        if (ip !== sn.localIp) targetIps.add(ip);
       }
+
+      const promises = Array.from(targetIps).map(async (targetIp) => {
+        const ok = await probePortTcp(targetIp, 445, 1200);
+        return ok ? targetIp : null;
+      });
+
       const results = await Promise.all(promises);
       const aliveIps = results.filter(Boolean);
 
       for (const ip of aliveIps) {
-        const [hostName, viewRes] = await Promise.all([
+        const [hostNameNbt, viewRes] = await Promise.all([
           queryHostNameNetbios(ip),
           queryNetViewShares(ip)
         ]);
+
+        let finalHost = hostNameNbt;
+        if (!finalHost && viewRes.serverDesc) {
+          const descMatch = viewRes.serverDesc.match(/^([A-Za-z0-9_\-]+)\s+server/i);
+          if (descMatch) finalHost = descMatch[1].trim();
+        }
+        if (!finalHost) {
+          const arpMatch = arpEntries.find(e => e.ip === ip);
+          if (arpMatch && arpMatch.mac.startsWith('00-23-f2')) {
+            finalHost = 'ACS-' + arpMatch.mac.split('-').slice(3).join('').toUpperCase();
+          }
+        }
+
         foundServers.push({
           ip,
-          hostName: hostName || ip,
+          hostName: finalHost || ip,
           serverDesc: viewRes.serverDesc || 'SAMBA / NAS 伺服器',
           shares: viewRes.shares || []
         });

@@ -14482,12 +14482,13 @@ function setupScannerEvents() {
               `;
             }
 
+            const displayName = (srv.hostName && srv.hostName !== srv.ip) ? `${srv.hostName} (${srv.ip})` : (srv.hostName || srv.ip);
             card.innerHTML = `
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div style="display: flex; align-items: center; gap: 10px;">
                   <span style="font-size: 20px;">🖥️</span>
                   <div>
-                    <div style="font-weight: 700; font-size: 14px; color: #60a5fa;">${escapeXml(srv.hostName || srv.ip)}</div>
+                    <div style="font-weight: 700; font-size: 14px; color: #60a5fa;">${escapeXml(displayName)}</div>
                     <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">IP: <span style="font-family: monospace;">${escapeXml(srv.ip)}</span> • ${escapeXml(srv.serverDesc || 'SAMBA 伺服器')}</div>
                   </div>
                 </div>
