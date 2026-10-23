@@ -137,6 +137,7 @@ window.I18N_MESSAGE_TEMPLATES = [
 
   // ---------------- 自訂濾波器 / PEQ / 卷積 ----------------
   ['⚠️ 請先為濾波器取名稱', '⚠️ Please name the filter first'],
+  ['⚠️ 無法產生頻率響應預覽（請檢查參數）', '⚠️ Could not generate the frequency response preview (please check the parameters)'],
   ['🛠️ 已建立自訂濾波器「‖」並套用', '🛠️ Created custom filter “‖” and applied it'],
   ['🗑️ 已刪除自訂濾波器', '🗑️ Custom filter deleted'],
   ['⚠️ 刪除失敗', '⚠️ Delete failed'],
@@ -194,7 +195,11 @@ window.I18N_MESSAGE_TEMPLATES = [
   ['原始 DSD 母帶碼流 (Bitstream 1-bit PDM)', 'Original DSD master bitstream (1-bit PDM)'],
   ['可選 DSD 格式', 'Available DSD formats'],
   ['使用 DSD 調變中', 'DSD modulation in use'],
-  ['‖k → ‖k 脈絡', '‖k → ‖k path'],
+  ['依播放中的 ‖ 曲目 ➔ 輸出 ‖', 'Based on the playing ‖ track ➔ output ‖'],
+  ['播放原生 DSD：升頻濾波器不参与（固定輸出 88.2k PCM）', 'Native DSD is playing: the upsampling filter is not involved (fixed 88.2k PCM output)'],
+  ['‖ ×源Nyq（此脈絡最高 ‖）', '‖ × source Nyquist (max ‖ in this context)'],
+  ['‖ ×源Nyq', '‖ × source Nyquist'],
+  ['目前未播放真實曲目・以 ‖ 為假設脈絡（實際效果依播放取樣率而變）', 'No real track is playing — assuming a ‖ context (the actual result depends on the sample rate being played)'],
   ['DSP ENHANCED (PCM ➔ ‖ ‖階)', 'DSP ENHANCED (PCM ➔ ‖ ‖-order)'],
   ['DSP (‖ / ‖階) | 1-bit / ‖ ⚡', 'DSP (‖ / ‖-order) | 1-bit / ‖ ⚡'],
   ['‖負荷 ~‖MMAC/s', '‖ load ~‖ MMAC/s'],

@@ -2315,6 +2315,8 @@ body.table-col-resizing * {
   background: rgba(0, 0, 0, 0.35);
   border: 1px solid var(--border-color);
   border-radius: 10px;
+  /* 截止線可在圖上直接拖曳：游標回饋由 JS 依位置切換（ew-resize / crosshair） */
+  touch-action: none;
 }
 
 .uf-preview-legend {

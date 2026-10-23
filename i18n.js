@@ -329,8 +329,12 @@
     'ⓘ 對聲音的影響': 'ⓘ Audible effect',
     '聲音特色描述（顯示於濾波器按鈕滑鼠提示）': 'How it sounds (shown in the filter button’s tooltip)',
     '例如：高頻柔化、鈴振不可聽': 'e.g. softens highs, ringing inaudible',
+    '中負荷': 'Medium load',
     '低負荷': 'Low load',
     '高負荷': 'High load',
+    '無法產生預覽（請檢查參數）': 'No preview available (please check the parameters)',
+    '綠＝可聽音頻保留區・黃虛線＝濾波器截止點（圖上可直接拖曳）・琥珀＝過渡帶（高頻滾降位置）・紅＝升頻鏡像被抑制的區域': 'Green = audible range preserved ・ yellow dashed line = filter cutoff (drag it right on the graph) ・ amber = transition band (where the highs roll off) ・ red = images from upsampling being suppressed',
+    '黃色截止線可直接左右拖曳＝調整截止延伸；綠區原音保留、琥珀為過渡帶、紅區鏡像被抑制': 'Drag the yellow cutoff line left/right to adjust cutoff extension; green keeps the original audio, amber is the transition band, red shows images being suppressed',
     '通帶平坦區・源Nyquist 標記・鏡像泄漏區・止帶（-120dB 底）': 'Passband flat region ・ source Nyquist marker ・ image leakage band ・ stop band (-120 dB floor)',
     '自訂濾波器以純參數儲存，引擎自動做安全驗證與夾限；任何異常自動退回線性相位，不影響播放穩定。': 'Custom filters are stored as pure parameters; the engine validates and clamps them, and falls back to linear phase on any anomaly, so playback stability is unaffected.',
     '參數窗（滑桿可調）': 'Parametric window (adjustable sliders)',
@@ -430,6 +434,13 @@
 
   // ---------------- 已知含動態内容的字串（regex → 英文，$1… 取自原文） ----------------
   const I18N_PATTERNS = [
+    [/^源 Nyquist ([\d.]+)k$/, 'Source Nyquist $1k'],
+    [/^截止 ([\d.]+)k ←拖曳$/, 'Cutoff $1k ←drag'],
+    [/^止帶 ↓(\d+)k$/, 'Stop band ↓$1k'],
+    [/^音頻帶（原音保留）$/, 'Audible band (kept as-is)'],
+    [/^過渡帶$/, 'Transition band'],
+    [/^鏡像衰減中$/, 'Images rolling off'],
+    [/^鏡像完全抑制（止帶）$/, 'Images fully suppressed (stop band)'],
     [/^共 (\d+) 個播放清單（曲目依儲存的順序播放）$/, '$1 playlists (tracks play in the saved order)'],
     [/^最近播放的 (\d+) 首歌曲 \(依時間由最近到最久排序\)$/, 'Your last $1 tracks (newest first)'],
     [/^已緩衝 ([\d.]+) 秒音訊 \/ 目標 ([\d.]+) 秒 · ([\d.]+) MB · 已等 ([\d.]+) 秒$/, 'Buffered $1 s of audio / target $2 s · $3 MB · waiting $4 s'],

@@ -606,8 +606,21 @@ function userFilterSpecToDescriptor(spec) {
       const L = Math.max(8, Math.min(v.taps, Lcap > 0 ? Lcap : v.taps));
       const w = kernel.sincWindowTapFn(fsOut, srcRate, { cutoffRel: v.cutoffRel, L, window: v.window, asDb: v.asDb, sigmaRel: v.sigmaRel });
       if (!w) return null;
-      if (v.phase === 'minimum') return kernel.minimumPhaseFromTapFn(fsOut, srcRate, L, w.S, w.tapFn);
-      return kernel.windowedSincFir(fsOut, srcRate, { cutoffRel: v.cutoffRel, taps: L, window: v.window, asDb: v.asDb, sigmaRel: v.sigmaRel });
+      // 實際設計點（含 0.45·fsOut 上限）：給預覽畫「截止線」與各轉折標記用。
+      // 多相升頻的 h 以 fsOut/S 為取樣週期，其頻譜週期化；第一個零點在
+      //   P − fc（P = fsOut/S：整數倍頻 P=fsOut；非整數比 S=8 → P=源取樣率）。
+      // imageZeroHz = 源取樣率鏡像的抑制零點 |srcRate − fc|（升頻後鏡像能量就在那裡被壓掉）；
+      // transLoHz / stopBandHz = h 週期化頻譜的第一個零點 P − fc。
+      // 兩者都回傳：渲染端依顯示範圍選圖上能看見的那個來標「止帶」。
+      const P = fsOut / w.S;
+      const marks = {
+        fcHz: w.fc,
+        imageZeroHz: Math.max(srcRate - w.fc, 0),
+        transLoHz: Math.max(P - w.fc, w.fc),
+        stopBandHz: Math.max(P - w.fc, w.fc)
+      };
+      if (v.phase === 'minimum') return Object.assign(marks, kernel.minimumPhaseFromTapFn(fsOut, srcRate, L, w.S, w.tapFn));
+      return Object.assign(marks, kernel.windowedSincFir(fsOut, srcRate, { cutoffRel: v.cutoffRel, taps: L, window: v.window, asDb: v.asDb, sigmaRel: v.sigmaRel }));
     }
   };
 }
@@ -639,7 +652,10 @@ function reloadUserFilters() {
   return { loaded: 0, failed: [] };
 }
 
-// 頻率響應預覽：回傳 { xs(Hz), ysDb }（0..min(fsOut/2, 1.6×源Nyquist)，-120dB 底）。
+// 頻率響應預覽：回傳 { xs(Hz), ysDb, srcNyq, fsOut, fcHz, imageZeroHz, transLoHz, stopBandHz }。
+// xs 範圍 0..min(fsOut/2, 1.3×源取樣率)（完整顯示音頻帶＋鏡像帶），-120dB 底。
+// fcHz = 實際生效的截止點（含 0.45·fsOut 上限，渲染端畫可拖曳的「截止線」）；
+// imageZeroHz / transLoHz / stopBandHz = 升頻鏡像與 h 週期化的抑制零點（標「止帶」用）。
 function previewUserFilterSpec(spec, srcRate, fsOut) {
   const d = userFilterSpecToDescriptor(spec);
   if (!d) return null;
@@ -647,7 +663,7 @@ function previewUserFilterSpec(spec, srcRate, fsOut) {
   try { gf = d.design(fsOut, srcRate, FILTER_TOOLBOX); } catch (e) { return null; }
   if (!gf) return null;
   const N = 512;
-  const fMax = Math.min(fsOut / 2, 1.15 * srcRate); // 完整顯示鏡像帶（源取樣率 ± 截止）
+  const fMax = Math.min(fsOut / 2, 1.3 * srcRate); // 完整顯示鏡像帶（源取樣率 ± 截止）
   const h = gf.h, S = gf.S, norm = gf.ratio * S;
   const xs = new Array(N), ysDb = new Array(N);
   for (let i = 0; i < N; i++) {
@@ -665,7 +681,7 @@ function previewUserFilterSpec(spec, srcRate, fsOut) {
     xs[i] = f;
     ysDb[i] = Math.max(-120, 20 * Math.log10(Math.max(mag, 1e-7)));
   }
-  return { xs, ysDb, srcNyq: srcRate / 2, fsOut };
+  return { xs, ysDb, srcNyq: srcRate / 2, fsOut, fcHz: gf.fcHz || 0, imageZeroHz: gf.imageZeroHz || 0, transLoHz: gf.transLoHz || 0, stopBandHz: gf.stopBandHz || 0 };
 }
 
 loadFilterPlugins();

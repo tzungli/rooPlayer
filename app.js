@@ -8179,17 +8179,38 @@ let ufPreviewTimer = null;
 
 const UF_WINDOW_LABELS = { hann: 'Hann', hamming: 'Hamming', blackman: 'Blackman', blackmanHarris: 'Blackman-Harris', kaiser: 'Kaiser', nuttall: 'Nuttall', blackmanNuttall: 'Blackman-Nuttall', gauss: 'Gauss', chebyshev: 'Chebyshev' };
 
+// 預覽脈絡＝升頻濾波器「實際作用在哪個取樣率上」，所以以正在播放的曲目為準：
+//   1) 播放中的曲目（state.currentTrackIndex）；2) 退回佇列第一首；3) 退回曲庫第一首。
+// 兩點必須對齊引擎的真實行為，否則使用者會看到「拖了卻沒反應」的圖：
+//   ・原生 DSF/DFF 走 playDsdTrack，固定輸出 88.2kHz PCM，不經升頻濾波器 → 用 88200。
+//   ・合成示範曲（isDemo）走 Web Audio 合成、不经引擎 → 不能拿它的 sampleRate 當脈絡。
+function isNativeDsdTrack(track) {
+  if (!track || track.isDemo || !track.filePath) return false;
+  const ext = getAudioFormatFromPath(track.filePath, track.formatName || '').toUpperCase();
+  return ext === 'DSF' || ext === 'DFF' || ext === 'DSD';
+}
+
+function ufPlaybackContext() {
+  const playing = (state.currentTrackIndex >= 0 && state.queue && state.queue[state.currentTrackIndex]) || null;
+  const track = playing || (state.queue && state.queue[0]) || (state.tracks && state.tracks[0]) || null;
+  if (!track || track.isDemo) return { track: null, srcRate: 44100 };
+  if (isNativeDsdTrack(track)) return { track, srcRate: 88200, nativeDsd: true };
+  return { track, srcRate: track.sampleRate || 44100, nativeDsd: false };
+}
+
 function ufPreviewContext() {
-  const track = (state.queue && state.queue[0]) || (state.tracks && state.tracks[0]) || null;
-  const srcRate = (track && track.sampleRate) || 44100;
+  const pb = ufPlaybackContext();
   const rateMode = state.dsp.rateMode || '4x';
   let targetRate;
-  if (isDsdRateMode(rateMode)) {
+  if (pb.nativeDsd) {
+    // 原生 DSD：升頻濾波器不参与，預覽以它實際輸出的 PCM 取樣率為脈絡
+    targetRate = 88200;
+  } else if (isDsdRateMode(rateMode)) {
     targetRate = { dsd64: 2822400, dsd128: 5644800, dsd256: 11289600, dsd512: 22579200 }[rateMode] || 2822400;
   } else {
-    targetRate = calculateTargetSampleRate(srcRate, rateMode);
+    targetRate = calculateTargetSampleRate(pb.srcRate, rateMode);
   }
-  return { srcRate, targetRate };
+  return { srcRate: pb.srcRate, targetRate, nativeDsd: pb.nativeDsd };
 }
 
 async function refreshUserFilterSlots() {
@@ -8248,12 +8269,19 @@ function ufSpecFromForm() {
 function ufUpdateFormReadouts() {
   const spec = ufSpecFromForm();
   document.getElementById('ufAsVal').textContent = spec.asDb + ' dB';
-  document.getElementById('ufCutVal').textContent = spec.cutoffRel.toFixed(2) + ' ×源Nyq';
   document.getElementById('ufTapVal').textContent = spec.taps + ' taps';
   document.getElementById('ufSigmaVal').textContent = spec.sigmaRel.toFixed(2) + ' ×L';
   document.getElementById('ufAsRow').style.display = (spec.window === 'kaiser' || spec.window === 'chebyshev') ? '' : 'none';
   document.getElementById('ufSigmaRow').style.display = spec.window === 'gauss' ? '' : 'none';
   const ctx = ufPreviewContext();
+  // 截止延伸若被升頻脈絡截斷（0.45·輸出取樣率），readout 要顯示真正生效的數字，
+  // 否則使用者拖到最大卻看到曲線沒動，會以為壞了。
+  const relCeil = 0.45 * ctx.targetRate / (ctx.srcRate / 2);
+  const effRel = Math.min(spec.cutoffRel, relCeil);
+  const cutTxt = spec.cutoffRel.toFixed(2) + ' ×源Nyq';
+  document.getElementById('ufCutVal').textContent = effRel + 0.005 < spec.cutoffRel
+    ? `${cutTxt}（此脈絡最高 ${effRel.toFixed(2)}）`
+    : cutTxt;
   const mmac = Math.round(spec.taps * ctx.targetRate * 2 / 1e6);
   const badge = document.getElementById('ufLoadBadge');
   const level = mmac < 60 ? '低' : (mmac < 150 ? '中' : '高');
@@ -8287,18 +8315,99 @@ function ufSchedulePreview() {
 async function ufDoPreview() {
   const cv = document.getElementById('ufPreviewCanvas');
   if (!cv || !window.electronAPI || typeof window.electronAPI.previewFilterSpec !== 'function') return;
+  const pb = ufPlaybackContext();
   const ctx = ufPreviewContext();
   const note = document.getElementById('ufPreviewCtxNote');
-  if (note) note.textContent = `${(ctx.srcRate / 1000).toFixed(1)}k → ${ctx.targetRate >= 1e6 ? (ctx.targetRate / 1e6).toFixed(2) + 'M' : (ctx.targetRate / 1000).toFixed(1)}k 脈絡`;
+  if (note) {
+    const srcTxt = `${(ctx.srcRate / 1000).toFixed(1)}k`;
+    const outTxt = ctx.targetRate >= 1e6 ? (ctx.targetRate / 1e6).toFixed(2) + 'M' : `${(ctx.targetRate / 1000).toFixed(1)}k`;
+    // 脈絡要寫清楚「根據什麼算出來的」，否則使用者不知道圖上的 22kHz 從哪來
+    if (pb.nativeDsd) {
+      note.textContent = '播放原生 DSD：升頻濾波器不参与（固定輸出 88.2k PCM）';
+    } else if (pb.track) {
+      note.textContent = `依播放中的 ${srcTxt} 曲目 ➔ 輸出 ${outTxt}`;
+    } else {
+      note.textContent = `目前未播放真實曲目・以 ${srcTxt} 為假設脈絡（實際效果依播放取樣率而變）`;
+    }
+  }
+  // 換算實際生效的設計點：引擎把滑桿的 cutoffRel 先以 0.45×輸出取樣率為上限截斷
+  // （sincWindowTapFn: fc = min(cutoffRel·源Nyq, 0.45·fsOut)）。把該上限反推回滑桿刻度，
+  // 就是「圖上拖曳／滑桿」真正能到的最大延伸（例如 192k 升頻下只有 ~0.98×源Nyq）；
+  // 超過的部分拖了也不會有反應，不給拖。
+  const relCeil = 0.45 * ctx.targetRate / (ctx.srcRate / 2);
+  ufCutRelMax = Math.max(0.8, Math.min(1.35, relCeil));
   let data = null;
   // 預覽不需要名稱（引擎驗證要求名稱）；尚未命名時用預覽專用名稱，讓滑桿可以邊拖邊看
   const previewSpec = ufSpecFromForm();
   if (!previewSpec.name) previewSpec.name = '預覽用濾波器';
   try { data = await window.electronAPI.previewFilterSpec(previewSpec, ctx.srcRate, ctx.targetRate); } catch (e) {}
-  drawUfPreview(cv, data);
+  if (!data || !data.xs || !data.xs.length) {
+    showToast('⚠️ 無法產生頻率響應預覽（請檢查參數）');
+  }
+  drawUfPreview(cv, data, ctx);
 }
 
-function drawUfPreview(cv, data) {
+// ----------------- 頻率響應預覽：繪製與圖上拖曳 -----------------
+// 線性軸 0 ~ min(fsOut/2, 1.3×源取樣率)：音頻帶、鏡像帶同時可見，轉折位置可直接讀 kHz。
+// 三條邊界（源Nyquist／截止 fc／過渡帶上緣）把圖分成通帶・過渡帶・鏡像泄漏區並直接標字；
+// 截止線可左右拖曳＝調整「截止延伸」滑桿，讓參數與曲線的因果關係看得見。
+
+let ufCutDragging = false;
+
+// 最近一次預覽的資料與座標映射（圖上拖曳的 hit-test 與換算需要）
+let ufPreviewData = null;   // 含 fcHz / transLoHz / srcNyq / fsOut
+let ufPreviewCtx = null;    // { srcRate, targetRate }
+let ufPreviewGeom = null;   // 最近一次繪製的座標映射
+let ufCutRelMax = 1.35;     // 目前升頻脈絡下截止延伸真正能到的上限（0.45·fsOut 反推）
+
+function ufCutFromPointer(clientX) {
+  const cv = document.getElementById('ufPreviewCanvas');
+  if (!cv || !ufPreviewGeom) return;
+  const rect = cv.getBoundingClientRect();
+  const g = ufPreviewGeom;
+  const x = Math.min(Math.max(rect.left + g.padL, clientX), rect.right - g.padR);
+  const fc = ((x - (rect.left + g.padL)) / (g.plotW || 1)) * g.fMax;
+  const srcRate = (ufPreviewCtx && ufPreviewCtx.srcRate) || 44100;
+  // 上限用 ufCutRelMax（引擎截斷後真正可達的延伸），不是滑桿的理論最大值
+  const rel = Math.min(ufCutRelMax, Math.max(0.8, Math.round((fc / (srcRate / 2)) * 100) / 100));
+  const slider = document.getElementById('ufCutSlider');
+  if (!slider) return;
+  const v = Math.round(rel * 100);
+  if (parseInt(slider.value, 10) === v) return;
+  slider.value = String(v);
+  ufUpdateFormReadouts();
+  ufSchedulePreview();
+}
+
+function initUfPreviewCanvasInteractions() {
+  const cv = document.getElementById('ufPreviewCanvas');
+  if (!cv || typeof cv.setPointerCapture !== 'function') return;
+  cv.addEventListener('pointerdown', (e) => {
+    const geom = ufPreviewGeom;
+    if (!geom || !ufPreviewData) return;
+    const rect = cv.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    // 圖表繪圖區內都可拖：以滑桿值對應的實際截止點為命中目標
+    if (x < geom.padL - 6 || x > geom.cssW - geom.padR + 6) return;
+    ufCutDragging = true;
+    try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+    ufCutFromPointer(e.clientX);
+    e.preventDefault();
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!ufCutDragging) return;
+    ufCutFromPointer(e.clientX);
+  });
+  const endDrag = (e) => {
+    if (!ufCutDragging) return;
+    ufCutDragging = false;
+    try { cv.releasePointerCapture(e.pointerId); } catch (err) {}
+  };
+  cv.addEventListener('pointerup', endDrag);
+  cv.addEventListener('pointercancel', endDrag);
+}
+
+function drawUfPreview(cv, data, ctx) {
   // 依實際顯示寬度（含 devicePixelRatio）設定畫布解析度：欄寬再窄，座標軸文字與曲線都保持清晰
   const rect = cv.getBoundingClientRect();
   const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -8311,54 +8420,226 @@ function drawUfPreview(cv, data) {
   g.setTransform(dpr, 0, 0, dpr, 0, 0); // 之後一律以 CSS 像素作單位
   const W = cssW, H = cssH;
   g.clearRect(0, 0, W, H);
+  ufPreviewData = data || null;
+  if (ctx) ufPreviewCtx = ctx;
+  ufPreviewGeom = null;
+  cv.style.cursor = 'default';
   const cs = getComputedStyle(document.documentElement);
-  const gridCol = 'rgba(128,128,128,0.18)';
   const textCol = (cs.getPropertyValue('--text-muted') || '#888').trim() || '#888';
-  const padL = 42, padR = 8, padT = 12, padB = 20;
+  const padL = 42, padR = 8, padT = 16, padB = 24;
   const dbTop = 6, dbBot = -120;
   const yOf = db => padT + (dbTop - db) / (dbTop - dbBot) * (H - padT - padB);
   if (!data || !data.xs || !data.xs.length) {
     g.fillStyle = textCol; g.font = '12px sans-serif';
     g.fillText('無法產生預覽（請檢查參數）', padL, H / 2);
+    cv.style.cursor = 'default';
     return;
   }
-  const fMax = data.xs[data.xs.length - 1] || 1;
+  const srcNyq = data.srcNyq || 22050;
+  const fsOut = data.fsOut || ((ufPreviewCtx && ufPreviewCtx.targetRate) || 176400);
+  // 線性軸：0 ~ min(輸出奈奎斯特, 1.3×源取樣率)，音頻帶與鏡像帶同時可見
+  const fMax = Math.min(fsOut / 2, 1.3 * srcNyq * 2);
   const xOf = f => padL + f / fMax * (W - padL - padR);
-  // dB grid
-  g.strokeStyle = gridCol; g.fillStyle = textCol; g.font = '10px sans-serif'; g.lineWidth = 1;
+  const plotW = W - padL - padR;
+  // 邊界：源 Nyquist（可聽音頻上緣）、截止 fc（可拖曳）、鏡像抑制零點（止帶起點）
+  const hasMarks = Number.isFinite(data.fcHz) && data.fcHz > 0;
+  const fcHz = hasMarks ? Math.min(data.fcHz, fMax) : 0;
+  const fcxX = xOf(fcHz); // 截止線的 x（止帶標字要避開它）
+  // 引擎回傳的兩個真實抑制零點：鏡像帶（srcRate−fc）與 h 週期化頻譜（P−fc）。
+  // 顯示範圍內能看見哪個就用哪個標「止帶」；兩個都超出範圍就不標。
+  const imgZero = hasMarks && Number.isFinite(data.imageZeroHz) ? data.imageZeroHz : 0;
+  const stopZero = hasMarks && Number.isFinite(data.transLoHz) ? data.transLoHz : 0;
+  const candidates = [imgZero, stopZero].filter(f => f > fcHz + fMax * 0.02 && f < fMax);
+  const stopMark = candidates.length ? Math.min(...candidates) : 0; // 較近的零點＝曲線實際跌落的轉折
+
+  // ---- 區域底色：通帶（綠）／過渡帶＋鏡像衰減（琥珀）／止帶（紅）----
+  const bandY0 = padT, bandY1 = H - padB;
+  const fillBand = (f0, f1, col) => {
+    if (!(f1 > f0)) return;
+    g.fillStyle = col;
+    g.fillRect(xOf(f0), bandY0, xOf(f1) - xOf(f0), bandY1 - bandY0);
+  };
+  fillBand(0, srcNyq, 'rgba(52,211,153,0.07)');
+  if (hasMarks) {
+    const stopFill = stopMark || fMax;
+    fillBand(srcNyq, fcHz, 'rgba(251,146,60,0.10)');
+    fillBand(fcHz, stopFill, 'rgba(251,146,60,0.05)');
+    if (stopMark) fillBand(stopMark, fMax, 'rgba(248,113,113,0.07)');
+  } else {
+    fillBand(srcNyq, fMax, 'rgba(248,113,113,0.06)');
+  }
+
+  // ---- dB 網格（每 24dB）----
+  g.strokeStyle = 'rgba(128,128,128,0.18)'; g.fillStyle = textCol; g.font = '10px sans-serif'; g.lineWidth = 1;
   for (const db of [0, -24, -48, -72, -96, -120]) {
     const y = yOf(db);
     g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke();
     g.fillText(db === 0 ? '0dB' : db + 'dB', 4, y + 3);
   }
-  // frequency grid + labels
-  const srcNyq = data.srcNyq;
-  const marks = [srcNyq, srcNyq * 2].filter(f => f <= fMax);
-  for (const f of [0, ...marks]) {
+
+  // ---- 頻率網格：依軸寬自動選步進（2k/5k/10k），讓轉折位置能直接讀 kHz。
+  // 源 Nyquist／截止／止帶的虛線本身就算刻度，所以它們附近不再放數字，避免疊字。----
+  let stepK = 2;
+  if (plotW / (fMax / 2000) < 34) stepK = 5;
+  if (plotW / (fMax / 5000) < 34) stepK = 10;
+  const stepHz = stepK * 1000;
+  const nearMark = (f) => {
+    const xs = [xOf(f)];
+    if (hasMarks) xs.push(fcxX, xOf(stopMark), xOf(srcNyq));
+    return xs.some(x => Math.abs(x - xOf(f)) < 20);
+  };
+  g.textAlign = 'center';
+  for (let f = 0; f <= fMax + 1; f += stepHz) {
+    const x = xOf(Math.min(f, fMax));
+    if (nearMark(f)) continue; // 讓位給源 Nyquist／截止／止帶標記，避免數字與虛線文字重疊
+    g.strokeStyle = 'rgba(128,128,128,0.14)';
+    g.beginPath(); g.moveTo(x, padT); g.lineTo(x, H - padB); g.stroke();
+    g.fillStyle = textCol;
+    g.fillText(f === 0 ? '0' : Math.round(f / 1000) + 'k', x, H - 8);
+  }
+
+  // ---- 邊界虛線與圖內標字。標字一律放在繪圖區上方（曲線都在下方，不會壓到）。
+  // 源 Nyquist 與截止線常貼得很近（cutoffRel≈1.05 時只差幾個像素），窄欄下文字比線距還寬：
+  // 兩條線的標字一律放在「外側」（Nyquist 放左、截止放右）——這樣它們永遠朝相反方向長出去，
+  // 不會互相壓到；只有真的超出繪圖區才改用較短的文字，再放不下就不寫字（保留虛線）。----
+  const labelCandidates = (x, texts, preferRight) => {
+    g.font = '10px sans-serif';
+    const out = [];
+    for (const txt of texts) {
+      const w = g.measureText(txt).width;
+      const left = { side: 'left', x0: x + 3, x1: x + 3 + w };
+      const right = { side: 'right', x0: x - 3 - w, x1: x - 3 };
+      const fitsLeft = left.x0 >= padL && left.x1 <= W - padR;
+      const fitsRight = right.x0 >= padL && right.x1 <= W - padR;
+      if (preferRight) { if (fitsRight) out.push({ txt, x, w, side: 'right', x0: right.x0, x1: right.x1 }); if (fitsLeft) out.push({ txt, x, w, side: 'left', x0: left.x0, x1: left.x1 }); }
+      else { if (fitsLeft) out.push({ txt, x, w, side: 'left', x0: left.x0, x1: left.x1 }); if (fitsRight) out.push({ txt, x, w, side: 'right', x0: right.x0, x1: right.x1 }); }
+    }
+    return out;
+  };
+  const drawBoundary = (f, col) => {
     const x = xOf(f);
-    if (f === srcNyq) {
-      g.save();
-      g.strokeStyle = 'rgba(251,146,60,0.65)'; g.setLineDash([5, 4]);
-      g.beginPath(); g.moveTo(x, padT); g.lineTo(x, H - padB); g.stroke();
-      g.restore();
-      g.fillStyle = 'rgba(251,146,60,0.9)';
-      g.fillText('源Nyq', x - 14, H - 8);
-    } else {
-      g.strokeStyle = gridCol;
-      g.beginPath(); g.moveTo(x, padT); g.lineTo(x, H - padB); g.stroke();
-      g.fillStyle = textCol;
-      g.fillText(f === 0 ? '0' : Math.round(f / 1000) + 'k', x - 6, H - 8);
+    g.save();
+    g.strokeStyle = col; g.setLineDash([5, 4]);
+    g.beginPath(); g.moveTo(x, padT); g.lineTo(x, H - padB); g.stroke();
+    g.restore();
+  };
+  const drawLabelAt = (col, p) => {
+    if (!p) return null;
+    g.font = '10px sans-serif';
+    g.fillStyle = col;
+    if (p.side === 'right') { g.textAlign = 'right'; g.fillText(p.txt, p.x - 3, padT + 10); }
+    else { g.textAlign = 'left'; g.fillText(p.txt, p.x + 3, padT + 10); }
+    return p;
+  };
+  drawBoundary(srcNyq, 'rgba(251,146,60,0.8)');
+  if (hasMarks) drawBoundary(fcHz, '#fbbf24');
+  if (stopMark) drawBoundary(stopMark, 'rgba(248,113,113,0.55)');
+  const occupied = []; // 上方已放下的標字範圍，其餘標字要避開
+  const srcTexts = [`源 Nyquist ${Math.round(srcNyq / 100) / 10}k`, `源Nyq ${Math.round(srcNyq / 100) / 10}k`];
+  if (hasMarks) {
+    // 一律放外側：源 Nyquist 標字往左長、截止標字往右長，兩者永遠背對背，不會重疊。
+    const srcP = drawLabelAt('rgba(251,146,60,0.9)', labelCandidates(xOf(srcNyq), srcTexts, true)[0]);
+    const cutP = drawLabelAt('#fbbf24', labelCandidates(fcxX, [`截止 ${(fcHz / 1000).toFixed(1)}k ←拖曳`, `截止 ${(fcHz / 1000).toFixed(1)}k`], false)[0]);
+    if (srcP) occupied.push(srcP);
+    if (cutP) occupied.push(cutP);
+  } else {
+    const srcP = drawLabelAt('rgba(251,146,60,0.9)', labelCandidates(xOf(srcNyq), srcTexts, true)[0]);
+    if (srcP) occupied.push(srcP);
+  }
+  if (hasMarks && stopMark) {
+    // 「止帶」標字：放虛線左側最直覺，但上方已被截止／源 Nyquist 標字佔用時改放繪圖區底部錯開。
+    const sx = xOf(stopMark);
+    const stopTxt = `止帶 ↓${Math.round(stopMark / 1000)}k`;
+    g.font = '10px sans-serif';
+    const sw = g.measureText(stopTxt).width;
+    const topFree = !occupied.some(o => (sx - 3 - sw) < o.x1 && o.x0 < (sx - 3));
+    if (sx - sw >= padL && sx - 3 > fcxX + 4 && topFree) {
+      g.textAlign = 'right';
+      g.fillStyle = 'rgba(248,113,113,0.95)';
+      g.fillText(stopTxt, sx - 3, padT + 10);
+    } else if (sx + sw <= W - padR) {
+      g.textAlign = 'left';
+      g.fillStyle = 'rgba(248,113,113,0.95)';
+      g.fillText(stopTxt, sx + 3, H - padB - 6);
+    } else if (sx - sw >= padL) {
+      g.textAlign = 'right';
+      g.fillStyle = 'rgba(248,113,113,0.95)';
+      g.fillText(stopTxt, sx - 3, H - padB - 6);
     }
   }
-  // response curve
+
+  // ---- 區域名稱（繪圖區底部，避開上方標字與曲線）。先收集每段可用的文字長度，
+  // 再從最重要的兩段開始挑：同一列上互不重疊、且能完整落在該段範圍內才畫。----
+  g.textAlign = 'center';
+  g.font = 'bold 10px sans-serif';
+  const zoneCandidates = (f0, f1, texts, col) => {
+    if (!(f1 > f0)) return [];
+    const lo = xOf(f0), hi = xOf(f1);
+    const out = [];
+    for (const txt of texts) {
+      const w = g.measureText(txt).width;
+      if (hi - lo < w) continue; // 這段太窄：換更短的文字，或整段不標
+      const x = (lo + hi) / 2;
+      if (x - w / 2 < padL || x + w / 2 > W - padR) continue;
+      out.push({ txt, col, x, x0: x - w / 2, x1: x + w / 2 });
+    }
+    return out;
+  };
+  const placedZones = [];
+  const tryPlaceZone = (opts) => {
+    for (const o of opts) {
+      if (placedZones.some(p => o.x0 < p.x1 && p.x0 < o.x1)) continue;
+      placedZones.push(o);
+      g.fillStyle = o.col;
+      g.fillText(o.txt, o.x, H - padB - 6);
+      return;
+    }
+  };
+  // 優先序：保留區（使用者最想知道哪些聲音留下來）→ 止帶 → 過渡帶 → 衰減中
+  tryPlaceZone(zoneCandidates(0, srcNyq, ['音頻帶（原音保留）', '音頻帶'], 'rgba(52,211,153,0.85)'));
+  if (hasMarks) {
+    if (stopMark) {
+      tryPlaceZone(zoneCandidates(stopMark, fMax, ['鏡像完全抑制（止帶）', '止帶'], 'rgba(248,113,113,0.85)'));
+      tryPlaceZone(zoneCandidates(fcHz, stopMark, ['鏡像衰減中', '衰減中'], 'rgba(251,146,60,0.75)'));
+    } else {
+      tryPlaceZone(zoneCandidates(fcHz, fMax, ['鏡像衰減中', '衰減中'], 'rgba(251,146,60,0.75)'));
+    }
+    tryPlaceZone(zoneCandidates(srcNyq, fcHz, ['過渡帶'], 'rgba(251,146,60,0.9)'));
+  } else {
+    tryPlaceZone(zoneCandidates(srcNyq, fMax, ['鏡像衰減中', '衰減中'], 'rgba(248,113,113,0.85)'));
+  }
+
+  // ---- 響應曲線（通帶內加淡色填充，強調「保留區間」）----
+  const pts = [];
+  for (let i = 0; i < data.xs.length; i++) {
+    pts.push([xOf(data.xs[i]), yOf(Math.max(dbBot, Math.min(dbTop, data.ysDb[i])))]);
+  }
+  g.beginPath();
+  g.moveTo(pts[0][0], yOf(0));
+  for (const [x, y] of pts) g.lineTo(x, y);
+  g.lineTo(pts[pts.length - 1][0], yOf(0));
+  g.closePath();
+  g.fillStyle = 'rgba(52,211,153,0.10)';
+  g.fill();
   g.strokeStyle = '#34d399'; g.lineWidth = 1.8;
   g.beginPath();
-  for (let i = 0; i < data.xs.length; i++) {
-    const x = xOf(data.xs[i]);
-    const y = yOf(Math.max(dbBot, Math.min(dbTop, data.ysDb[i])));
-    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-  }
+  for (let i = 0; i < pts.length; i++) { if (i === 0) g.moveTo(pts[i][0], pts[i][1]); else g.lineTo(pts[i][0], pts[i][1]); }
   g.stroke();
+
+  // ---- 記錄座標映射與游標回饋（截止線附近 → ew-resize）----
+  ufPreviewGeom = { cssW, cssH, padL, padR, plotW, fMax, srcNyq, fsOut };
+  if (hasMarks) {
+    cv.style.cursor = 'crosshair';
+    cv.onmousemove = (e) => {
+      if (ufCutDragging || !ufPreviewGeom) return;
+      const r = cv.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const fcx = ufPreviewGeom.padL + (Math.min(data.fcHz, ufPreviewGeom.fMax) / ufPreviewGeom.fMax) * ufPreviewGeom.plotW;
+      cv.style.cursor = Math.abs(x - fcx) <= 12 ? 'ew-resize' : 'crosshair';
+    };
+  } else {
+    cv.onmousemove = null;
+  }
   g.lineWidth = 1;
 }
 
@@ -8517,6 +8798,57 @@ async function runUfLayoutSelfTest() {
       ok('頻率響應預覽管線可用', `點數 ${previewData.xs.length}｜源Nyq ${Math.round(previewData.srcNyq / 1000)}kHz`);
     } else {
       bad('頻率響應預覽管線可用', 'previewFilterSpec 未回傳資料');
+    }
+    if (previewData && Number.isFinite(previewData.fcHz) && previewData.fcHz > 0) {
+      ok('預覽回傳截止點標記（圖上可拖曳的依據）', `fc=${(previewData.fcHz / 1000).toFixed(2)}kHz`);
+    } else {
+      bad('預覽回傳截止點標記（圖上可拖曳的依據）', 'previewFilterSpec 缺少 fcHz');
+    }
+
+    // 圖上拖曳：按下並向右移動指針 → 「截止延伸」滑桿必須跟著變，且觸發重新預覽
+    const dragOk = (() => {
+      try {
+        const r0 = cv.getBoundingClientRect();
+        const mkEv = (type, x) => new PointerEvent(type, { pointerId: 1, clientX: x, clientY: r0.top + r0.height / 2, bubbles: true, cancelable: true });
+        const before = parseInt(document.getElementById('ufCutSlider').value, 10);
+        cv.dispatchEvent(mkEv('pointerdown', r0.left + Math.round(r0.width * 0.5)));
+        cv.dispatchEvent(mkEv('pointermove', r0.left + Math.round(r0.width * 0.72)));
+        const after = parseInt(document.getElementById('ufCutSlider').value, 10);
+        cv.dispatchEvent(mkEv('pointerup', r0.left + Math.round(r0.width * 0.72)));
+        return { moved: after > before, from: before, to: after };
+      } catch (e) { return { moved: false, error: String((e && e.message) || e) }; }
+    })();
+    if (dragOk.moved) ok('圖上拖曳截止線會同步到「截止延伸」滑桿', `滑桿 ${dragOk.from}% → ${dragOk.to}%`);
+    else bad('圖上拖曳截止線會同步到「截止延伸」滑桿', JSON.stringify(dragOk));
+
+    // 脈絡必須跟著實際播放的曲目：換一首不同取樣率的曲子，預覽的源 Nyquist 要跟著變。
+    // （用假佇列＋還原，不觸發任何播放。）
+    const savedQueue = state.queue, savedIdx = state.currentTrackIndex;
+    try {
+      state.queue = [{ title: 'ctx-48k', filePath: 'x.flac', sampleRate: 48000 }];
+      state.currentTrackIndex = 0;
+      const c1 = ufPreviewContext();
+      state.queue = [{ title: 'ctx-88k', filePath: 'y.flac', sampleRate: 88200 }];
+      state.currentTrackIndex = 0;
+      const c2 = ufPreviewContext();
+      state.queue = [{ title: 'dsf', filePath: 'z.dsf', formatName: 'DSF', sampleRate: 2822400 }];
+      state.currentTrackIndex = 0;
+      const c3 = ufPreviewContext();
+      if (c1.srcRate === 48000 && c2.srcRate === 88200 && c1.targetRate !== c2.targetRate) {
+        ok('預覽脈絡跟著目前播放的曲目取樣率', `48k→${c1.targetRate / 1000}k｜88.2k→${c2.targetRate / 1000}k`);
+      } else {
+        bad('預覽脈絡跟著目前播放的曲目取樣率', JSON.stringify({ c1, c2 }));
+      }
+      if (c3.srcRate === 88200 && c3.targetRate === 88200) {
+        ok('原生 DSD 播放時脈絡退回其 PCM 輸出取樣率', `88.2k（升頻濾波器不参与）`);
+      } else {
+        bad('原生 DSD 播放時脈絡退回其 PCM 輸出取樣率', JSON.stringify(c3));
+      }
+    } catch (e) {
+      bad('預覽脈絡跟著目前播放的曲目取樣率', String((e && e.message) || e));
+    } finally {
+      state.queue = savedQueue;
+      state.currentTrackIndex = savedIdx;
     }
 
     // 曲線與網格會延伸到畫布右側；只有錯誤提示時右側是空的
@@ -8722,6 +9054,8 @@ function initUserFilterControls() {
   ['ufAsSlider', 'ufCutSlider', 'ufTapSlider'].forEach(id => {
     $(id).addEventListener('input', () => { ufUpdateFormReadouts(); ufSchedulePreview(); });
   });
+  $('ufSigmaSlider').addEventListener('input', () => { ufUpdateFormReadouts(); ufSchedulePreview(); });
+  initUfPreviewCanvasInteractions(); // 圖上直接拖曳截止延伸（與滑桿雙向同步）
   $('ufSaveBtn').addEventListener('click', ufSaveFlow);
   $('ufDeleteBtn').addEventListener('click', () => { if (ufEditingId) ufDeleteFlow(ufEditingId); });
 
@@ -8758,6 +9092,11 @@ function initDspControls() {
 
   const triggerLiveDspUpdate = () => {
     updateSignalPathUI();
+    // 升頻倍率／格式一換，預覽脈絡（源 ➔ 輸出取樣率）就跟著變；編輯器開著就要重算。
+    try {
+      const ed = document.getElementById('ufEditorPanel');
+      if (ed && ed.style.display !== 'none') ufSchedulePreview();
+    } catch (e) {}
     if (state.dsp.enabled && state.isPlaying) {
       const track = state.queue[state.currentTrackIndex];
       if (track && !track.isDemo && track.filePath) {
@@ -11301,6 +11640,23 @@ async function runLanguageSelfTest() {
       bad('confirm / alert 訊息翻譯，詞彙表沒收的維持中文', `${confirmText} / ${confirmLong} / ${unknownText}`);
     }
 
+    // --- 自訂濾波器預覽的新增字串（動態 readout／脈絡註記）也要有英文 ---
+    const ufProbe = [
+      ['0.98 ×源Nyq', '0.98 × source Nyquist'],
+      ['1.35 ×源Nyq（此脈絡最高 0.98）', '1.35 × source Nyquist (max 0.98 in this context)'],
+      ['依播放中的 44.1k 曲目 ➔ 輸出 176.4k', null],
+      ['目前未播放真實曲目・以 44.1k 為假設脈絡（實際效果依播放取樣率而變）', null],
+      ['播放原生 DSD：升頻濾波器不参与（固定輸出 88.2k PCM）', null]
+    ];
+    const ufBad = [];
+    for (const p of ufProbe) {
+      const got = window.I18N.translateMessage(p[0]);
+      if (p[1] !== null && got !== p[1]) ufBad.push(`${p[0]} → ${got}（應為 ${p[1]}）`);
+      else if (p[1] === null && (!got || got === p[0])) ufBad.push(`${p[0]} 未被翻譯`);
+    }
+    if (ufBad.length === 0) ok('自訂濾波器預覽的動態文字（截止 readout／脈絡註記）有英文對應', `${ufProbe.length} 個案例全對`);
+    else bad('自訂濾波器預覽的動態文字（截止 readout／脈絡註記）有英文對應', ufBad.join(' ; '));
+
     try { window.electronAPI.captureStep(33, 'English UI'); } catch (err) {}
     await sleep(200);
 
@@ -11484,6 +11840,11 @@ function updateQueueActiveItem() {
   items.forEach((el, idx) => {
     el.classList.toggle('current', idx === state.currentTrackIndex);
   });
+  // 換曲＝升頻脈絡（源取樣率）變了：自訂濾波器編輯器開著時預覽圖要跟著重算
+  try {
+    const ed = document.getElementById('ufEditorPanel');
+    if (ed && ed.style.display !== 'none') ufSchedulePreview();
+  } catch (e) {}
 }
 
 // ----------------- 播放佇列對比度自我測試（main.js --test-queue-contrast） -----------------
