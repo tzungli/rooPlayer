@@ -8282,9 +8282,11 @@ function ufUpdateFormReadouts() {
   document.getElementById('ufCutVal').textContent = effRel + 0.005 < spec.cutoffRel
     ? `${cutTxt}（此脈絡最高 ${effRel.toFixed(2)}）`
     : cutTxt;
-  const mmac = Math.round(spec.taps * ctx.targetRate * 2 / 1e6);
+  // 多相升頻 FIR 的真實雙聲道運算量：每個輸入樣本貢獻 2 * spec.taps 個係數
+  // 實體運算量 = (2 * taps) * srcRate * 2 聲道
+  const mmac = Math.round(spec.taps * 2 * (ctx.srcRate || 44100) * 2 / 1e6);
   const badge = document.getElementById('ufLoadBadge');
-  const level = mmac < 60 ? '低' : (mmac < 150 ? '中' : '高');
+  const level = mmac < 40 ? '低' : (mmac < 100 ? '中' : '高');
   badge.textContent = `${level}負荷 ~${mmac}MMAC/s`;
   badge.className = 'uf-load' + (level === '中' ? ' load-mid' : (level === '高' ? ' load-high' : ''));
 }
@@ -8427,7 +8429,9 @@ function drawUfPreview(cv, data, ctx) {
   const cs = getComputedStyle(document.documentElement);
   const textCol = (cs.getPropertyValue('--text-muted') || '#888').trim() || '#888';
   const padL = 42, padR = 8, padT = 16, padB = 24;
-  const dbTop = 6, dbBot = -120;
+  // 方案 A 最佳化：將 Y 軸動態範圍改為 +3dB 到 -72dB（原 -120dB 壓縮了 3/4 空間在不可聽噪聲上）
+  // 讓通帶平坦度、轉折點與滾降斜率的垂直空間擴大將近一倍，調整窗函數與 Taps 的差異清晰可見！
+  const dbTop = 3, dbBot = -72;
   const yOf = db => padT + (dbTop - db) / (dbTop - dbBot) * (H - padT - padB);
   if (!data || !data.xs || !data.xs.length) {
     g.fillStyle = textCol; g.font = '12px sans-serif';
@@ -8469,9 +8473,9 @@ function drawUfPreview(cv, data, ctx) {
     fillBand(srcNyq, fMax, 'rgba(248,113,113,0.06)');
   }
 
-  // ---- dB 網格（每 24dB）----
+  // ---- dB 網格（+3dB ~ -72dB，每 12dB 或 24dB，凸顯轉折與過渡帶深度）----
   g.strokeStyle = 'rgba(128,128,128,0.18)'; g.fillStyle = textCol; g.font = '10px sans-serif'; g.lineWidth = 1;
-  for (const db of [0, -24, -48, -72, -96, -120]) {
+  for (const db of [0, -12, -24, -48, -72]) {
     const y = yOf(db);
     g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke();
     g.fillText(db === 0 ? '0dB' : db + 'dB', 4, y + 3);
