@@ -24,8 +24,8 @@
 
 二、串流測試：
 
-AURENDER ACS10=完全正常。
+AURENDER ACS10 = 完全正常。
 
-Eversolo T8 =在DSD512七階調變下偶有卡頓。
+Eversolo T8 = 在DSD512七階調變下偶有卡頓。
 
-HQPlayer撥放正常但暫停或停止偶有出錯。
+HQPlayer 6 = 撥放正常但暫停或停止偶有出錯。
