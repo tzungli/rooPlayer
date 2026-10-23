@@ -8923,13 +8923,14 @@ async function runUfLayoutSelfTest() {
       const widePreviewR = preview.getBoundingClientRect();
       const wideFormR = form.getBoundingClientRect();
       const wideCvR = cv.getBoundingClientRect();
-      if (widePreviewR.width >= 340 && widePreviewR.width <= 381) {
-        ok('寬視窗層級：預覽固定佔右側 340–380px', `預覽 ${Math.round(widePreviewR.width)}px｜操作區 ${Math.round(wideFormR.width)}px`);
+      // 寬視窗層級：預覽取得更寬的圖表區（430–561px），操作區仍保有長滑桿與不擁擠的分段按鈕（≥330px）
+      if (widePreviewR.width >= 430 && widePreviewR.width <= 561) {
+        ok('寬視窗層級：預覽取得加寬圖表區 430–560px', `預覽 ${Math.round(widePreviewR.width)}px｜操作區 ${Math.round(wideFormR.width)}px`);
       } else {
-        bad('寬視窗層級：預覽固定佔右側 340–380px', `預覽 ${Math.round(widePreviewR.width)}px｜操作區 ${Math.round(wideFormR.width)}px`);
+        bad('寬視窗層級：預覽取得加寬圖表區 430–560px', `預覽 ${Math.round(widePreviewR.width)}px｜操作區 ${Math.round(wideFormR.width)}px`);
       }
-      if (wideFormR.width >= 500) ok('寬視窗層級：操作區取得剩餘寬度', `${Math.round(wideFormR.width)}px`);
-      else bad('寬視窗層級：操作區取得剩餘寬度', `${Math.round(wideFormR.width)}px`);
+      if (wideFormR.width >= 330) ok('寬視窗層級：操作區維持長滑桿可用寬度', `${Math.round(wideFormR.width)}px`);
+      else bad('寬視窗層級：操作區維持長滑桿可用寬度', `${Math.round(wideFormR.width)}px`);
       const wantWideW = Math.round(Math.round(wideCvR.width) * dpr);
       if (Math.abs(cv.width - wantWideW) <= 2) ok('欄寬改變後預覽解析度跟著更新', `顯示 ${Math.round(wideCvR.width)}px → 畫布 ${cv.width}px`);
       else bad('欄寬改變後預覽解析度跟著更新', `顯示 ${Math.round(wideCvR.width)}px → 畫布 ${cv.width}px（預期 ${wantWideW}）`);
