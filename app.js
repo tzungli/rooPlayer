@@ -2671,6 +2671,107 @@ function renderRecentPlayedAlbums() {
   });
 }
 
+// ----------------- 你最常聽的藝人 Top Played Artists -----------------
+function getTopPlayedArtists(limit = 10) {
+  const stats = getPlayStats();
+  const history = getPlaybackHistory();
+  const artistCounts = new Map();
+
+  const artistMap = new Map();
+  (state.artists || []).forEach(art => {
+    if (art && art.name && !isUnknownArtist(art.name)) {
+      artistMap.set(art.name.toLowerCase().trim(), art);
+    }
+  });
+
+  // 1. 累計曲目播放統計
+  if (stats && stats.tracks) {
+    (state.tracks || []).forEach(t => {
+      if (!t || !t.artist || isUnknownArtist(t.artist)) return;
+      const key = t.id || `${t.title}___${t.artist}`;
+      const count = stats.tracks[key] || 0;
+      if (count > 0) {
+        const norm = t.artist.toLowerCase().trim();
+        const cur = artistCounts.get(norm) || { name: t.artist, count: 0 };
+        cur.count += count;
+        artistCounts.set(norm, cur);
+      }
+    });
+  }
+
+  // 2. 累計歷史播放紀錄
+  (history || []).forEach(h => {
+    if (!h || !h.artist || isUnknownArtist(h.artist)) return;
+    const norm = h.artist.toLowerCase().trim();
+    const cur = artistCounts.get(norm) || { name: h.artist, count: 0 };
+    cur.count += 1;
+    artistCounts.set(norm, cur);
+  });
+
+  // 3. 排序
+  const sorted = Array.from(artistCounts.values())
+    .sort((a, b) => b.count - a.count)
+    .map(item => {
+      const norm = item.name.toLowerCase().trim();
+      const existingArt = artistMap.get(norm);
+      return {
+        name: item.name,
+        playCount: item.count,
+        tracks: existingArt ? existingArt.tracks : [],
+        albums: existingArt ? existingArt.albums : [],
+        picture: existingArt ? existingArt.picture : null
+      };
+    });
+
+  // 4. 不足 10 位時，從曲庫中依曲目數自動補齊
+  if (sorted.length < limit) {
+    const existingNorms = new Set(sorted.map(s => s.name.toLowerCase().trim()));
+    const librarySorted = [...(state.artists || [])]
+      .filter(a => a && a.name && !isUnknownArtist(a.name) && !existingNorms.has(a.name.toLowerCase().trim()))
+      .sort((a, b) => ((b.tracks && b.tracks.length) || 0) - ((a.tracks && a.tracks.length) || 0));
+
+    for (const la of librarySorted) {
+      if (sorted.length >= limit) break;
+      sorted.push({
+        name: la.name,
+        playCount: 0,
+        tracks: la.tracks || [],
+        albums: la.albums || [],
+        picture: la.picture || null
+      });
+    }
+  }
+
+  return sorted.slice(0, limit);
+}
+
+function renderTopPlayedArtists() {
+  const container = document.getElementById('topArtistsGrid');
+  const section = document.getElementById('topArtistsSection');
+  if (!container || !section) return;
+
+  const topArtists = getTopPlayedArtists(10);
+  if (!topArtists || topArtists.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+  container.innerHTML = '';
+
+  const frag = document.createDocumentFragment();
+  topArtists.forEach(art => {
+    const customArt = { ...art };
+    if (art.playCount > 0) {
+      customArt.albumCount = `已播放 ${art.playCount} 次`;
+    }
+    const card = createArtistCard(customArt);
+    frag.appendChild(card);
+  });
+  container.appendChild(frag);
+
+  hydrateArtistAvatars(container);
+}
+
 // Render Overview
 function renderOverview() {
   // 1. Render Daily Recommendations (Top of Overview)
@@ -2699,6 +2800,9 @@ function renderOverview() {
   featured.forEach(alb => {
     overviewGrid.appendChild(createAlbumCard(alb));
   });
+
+  // 4.5. Render 你最常聽的藝人 Top Artists (最常聽的 10 個藝人頭像圖像)
+  renderTopPlayedArtists();
 
   // 5. 探索演出者: metadata-driven discovery (TIDAL-related artists first when logged in)
   renderDiscoverArtists();
@@ -12619,6 +12723,13 @@ function setupNavigation() {
   const btnSeeAllArtists = document.getElementById('btnSeeAllArtists');
   if (btnSeeAllArtists) {
     btnSeeAllArtists.addEventListener('click', () => {
+      document.querySelector('[data-view="artists"]').click();
+    });
+  }
+
+  const btnSeeAllTopArtists = document.getElementById('btnSeeAllTopArtists');
+  if (btnSeeAllTopArtists) {
+    btnSeeAllTopArtists.addEventListener('click', () => {
       document.querySelector('[data-view="artists"]').click();
     });
   }

@@ -63,6 +63,7 @@
     '🆕 最近新增專輯': '🆕 Recently Added Albums',
     '瀏覽全部專輯 ➔': 'Browse all albums ➔',
     '🌟 每日推薦 Daily Recommendation': '🌟 Daily Picks',
+    '🎙️ 你最常聽的藝人 Top Artists': '🎙️ Top Artists',
     '📖 藝人生活誌 Artist Spotlight': '📖 Artist Spotlight',
     '隨機換一位 ↻': 'Shuffle to another artist ↻',
     '隨機換一位藝人': 'Show a random artist',
