@@ -230,6 +230,14 @@ class DlnaManager extends EventEmitter {
               res.end('File not found');
               return;
             }
+            // 防禦性檢查：僅允許音訊白名單副檔名，防止透過 URL 參數讀取本機系統敏感檔案 (Path Traversal)
+            const audioExt = path.extname(filePath).toLowerCase();
+            const allowedAudioExts = new Set(['.flac', '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.aiff', '.dsf', '.dff', '.wma']);
+            if (!allowedAudioExts.has(audioExt)) {
+              res.writeHead(403);
+              res.end('Access denied');
+              return;
+            }
             this.handleLocalAudioStream(req, res, filePath, token);
           } else if (
             coverMatch ||
@@ -248,6 +256,12 @@ class DlnaManager extends EventEmitter {
             const effectiveToken = token || this.currentStreamToken;
             const track = (streamInfo && streamInfo.track) || this.currentTrack;
             const filePath = (track && track.filePath) || (streamInfo && streamInfo.filePath) || reqUrl.searchParams.get('file');
+            // 防禦性檢查：若指定了 filePath，限制為合法檔案
+            if (filePath && !fs.existsSync(filePath)) {
+              res.writeHead(404);
+              res.end('Cover not found');
+              return;
+            }
             this.handleCoverImage(req, res, filePath, track, effectiveToken).catch(err => {
               console.error('[DLNA] handleCoverImage error:', err);
               if (!res.headersSent) {

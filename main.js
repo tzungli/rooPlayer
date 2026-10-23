@@ -643,11 +643,22 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   app.on('web-contents-created', (event, contents) => {
-    if (contents.getType() === 'webview') {
-      contents.setWindowOpenHandler(({ url }) => {
-        return { action: 'allow' };
-      });
-    }
+    // 預設禁止非預期彈窗；外部 http/https 連結導向系統預設瀏覽器開啟
+    contents.setWindowOpenHandler(({ url }) => {
+      if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+        shell.openExternal(url);
+      }
+      return { action: 'deny' };
+    });
+    // 禁止未預期的全頁外部導航
+    contents.on('will-navigate', (navEvent, navUrl) => {
+      if (!navUrl.startsWith('file://')) {
+        navEvent.preventDefault();
+        if (navUrl.startsWith('http://') || navUrl.startsWith('https://')) {
+          shell.openExternal(navUrl);
+        }
+      }
+    });
   });
 
   // Handle local media streaming protocol
@@ -872,6 +883,15 @@ function startDsdStreamingServer() {
           return;
         }
 
+        // 防禦性白名單檢查：僅允許音訊檔案格式與卷積 IR 檔，防止本機串流服務被濫用於讀取系統檔案
+        const ext = path.extname(filePath).toLowerCase();
+        const allowedAudio = new Set(['.flac', '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.aiff', '.dsf', '.dff', '.wma']);
+        if (!allowedAudio.has(ext)) {
+          res.writeHead(403);
+          res.end('Access denied');
+          return;
+        }
+
         // Local Chromium playback always receives progressive 24-bit PCM WAV
         // (DSD rate modes are mapped to intermediate PCM rates by the renderer;
         //  dsd/order URL params are accepted for compatibility and ignored here)
@@ -918,6 +938,14 @@ function startDsdStreamingServer() {
         if (!filePath || !fs.existsSync(filePath)) {
           res.writeHead(404);
           res.end('File not found');
+          return;
+        }
+
+        // 防禦性檢查：原生 DSD 串流僅允許 .dsf / .dff 檔案
+        const dsdExt = path.extname(filePath).toLowerCase();
+        if (dsdExt !== '.dsf' && dsdExt !== '.dff') {
+          res.writeHead(403);
+          res.end('Access denied');
           return;
         }
 
